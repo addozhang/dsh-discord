@@ -101,3 +101,10 @@ ship automatically.
 - 第二次调用 ack POST 静默失败（无 workspace.list raw 日志、无 followUp）——需在 ack 后记 outcome 日志定位。
 - **修复方向**：删除 routeEvent 内对 interactions 的 routeInteraction 转发（compose.ts:91 附近 kind 分支），只保留 handleDispatch 直调路径（带 token）；ack/followUp 处补结果日志。
 - 注意：diagnostics console.error 已在 index.ts type-2 分支与 compose handleDispatch（见 15.10 快照 1、2）。
+
+## 15.10 调试快照 3（workspace.list 挂起）
+
+- 双调用已修复：现在单次 dispatch、token 正常携带、ack 成功（type 5 ephemeral）。
+- **新卡点**：`apiProxy.workspace.list({rpcId, payload:{}})` 在宿主进程内 await 后**永不返回**（无 reject），导致 followUp 永不发出。
+- **下一步**：1) 确认嵌入式宿主内 apiProxy.workspace.list 的正确调用姿势（RpcRequest 是否需完整 rpcId 品牌/或应改走 cordis service 注入的 workspace 注册表直读）；2) 给调用加超时+日志；3) 或改用 REST 端点（/api/... 经 loopback）。
+- 提醒：测试后 Reset bot token。
