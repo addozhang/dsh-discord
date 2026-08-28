@@ -159,6 +159,29 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     },
     intents: GATEWAY_INTENTS,
     bindings,
+    ensureGuildChannels: async (guildId) => {
+      const token = (await resolveDiscordBotToken(credentials)) ?? ''
+      if (token === '') return
+      const rest = createRestClient({ token })
+      const channels = await rest.request<Array<{ id: string; name: string; type: number; parent_id?: string }>>('GET', `/guilds/${guildId}/channels`)
+      if (channels.outcome !== 'completed') return
+      let category: { id: string; name: string; type: number; parent_id?: string } | undefined = channels.body.find((c) => c.type === 4 && c.name.toLowerCase() === 'dsh')
+      if (category === undefined) {
+        const made = await rest.request<{ id: string; name: string; type: number }>('POST', `/guilds/${guildId}/channels`, { name: 'DSH', type: 4 })
+        if (made.outcome !== 'completed') return
+        category = made.body
+      }
+      const hasControl = channels.body.some((c) => c.type === 0 && c.name.toLowerCase() === 'dsh' && c.parent_id === category?.id)
+      if (hasControl) return
+      // Reuse an existing #dsh channel (move it under the category) instead
+      // of creating a duplicate.
+      const existing = channels.body.find((c) => c.type === 0 && c.name.toLowerCase() === 'dsh')
+      if (existing !== undefined) {
+        await rest.request('PATCH', `/channels/${existing.id}`, { parent_id: category?.id })
+        return
+      }
+      await rest.request('POST', `/guilds/${guildId}/channels`, { name: 'dsh', type: 0, parent_id: category?.id })
+    },
     submitPrompt: {
       submit: async (request) => {
         const response = await apiProxy.sessions.prompt({

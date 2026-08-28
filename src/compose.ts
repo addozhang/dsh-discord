@@ -55,6 +55,10 @@ export interface CompositionDeps {
    * composition where the typed apiProxy respond face lives.
    */
   routeInteraction?: (event: NormalizedInboundEvent) => void
+  /** Idempotently ensure the category + control channel exist in a guild. */
+  ensureGuildChannels?: (guildId: string) => Promise<void>
+  /** Allowlist snapshot used to provision channels on READY. */
+  allowedGuildIds?: readonly string[] | undefined
   logger?: { warn(event: string, detail?: unknown): void }
 }
 
@@ -100,8 +104,20 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
   let startError: 'missing-token' | undefined
   let ingress: { accept(dispatch: GatewayDispatch): { accepted: boolean } } | undefined
 
+  // Kimaki-style provisioning: one category + one control channel per
+  // allowed guild, created idempotently on the first READY.
+  const provisioned = new Set<string>()
   function handleDispatch(dispatch: GatewayDispatch): void {
     ingress?.accept(dispatch)
+    if (dispatch.t === 'READY' && deps.ensureGuildChannels !== undefined) {
+      for (const guildId of deps.allowedGuildIds ?? []) {
+        if (provisioned.has(guildId)) continue
+        provisioned.add(guildId)
+        deps.ensureGuildChannels(guildId).catch((cause: unknown) => {
+          deps.logger?.warn('discord_channel_provision_failed', { guildId, cause: String(cause) })
+        })
+      }
+    }
   }
 
   void (async () => {

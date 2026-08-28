@@ -128,7 +128,7 @@ export interface ConnectionRpc {
 }
 
 type RpcAnswer =
-  | { ok: true; value: AdapterStatusView }
+  | { ok: true; value: AdapterStatusView | Record<string, unknown> }
   | { ok: false; error: { code: string; message: string } }
 
 /**
@@ -136,24 +136,63 @@ type RpcAnswer =
  * access to anything beyond the projection.
  */
 export function createAdapterStatusRpcHandler(tracker: AdapterStatusTracker) {
+  return createAdapterManagementHandler({ tracker })
+}
+
+/** Extra host faces the management channel can exercise. */
+export interface ManagementChannelDeps {
+  tracker: AdapterStatusTracker
+  /** Store the bot token into the writable credential layer. */
+  setToken?: ((value: string) => Promise<void>) | undefined
+  /** Re-run the adapter start chain (the card's Connect button). */
+  connect?: (() => void) | undefined
+  /** Guilds the bot is a member of, sanitized (id + name only). */
+  guilds?: (() => Promise<Array<{ id: string; name: string }>>) | undefined
+}
+
+/**
+ * The management channel's handler: status (with guild names when
+ * discoverable), credential write, and a connect trigger. Unknown endpoints
+ * fail as values; nothing here can read the token back.
+ */
+export function createAdapterManagementHandler(deps: ManagementChannelDeps) {
   return (
     endpoint: string,
-    _payload: unknown,
+    payload: unknown,
     signal: { aborted: boolean } | undefined,
   ): Promise<RpcAnswer> => {
     if (signal?.aborted) {
       return Promise.resolve({ ok: false, error: { code: 'cancelled', message: 'The request was cancelled.' } })
     }
-    if (endpoint !== STATUS_ENDPOINT) {
-      return Promise.resolve({ ok: false, error: { code: 'bad-request', message: `Unknown ${DISCORD_RPC_CHANNEL} endpoint.` } })
+    if (endpoint === STATUS_ENDPOINT) {
+      if (deps.guilds === undefined) return Promise.resolve({ ok: true, value: deps.tracker.project() })
+      return deps.guilds().then(
+        (guilds) => ({ ok: true as const, value: { ...deps.tracker.project(), guilds } }),
+        () => ({ ok: true as const, value: deps.tracker.project() }),
+      )
     }
-    return Promise.resolve({ ok: true, value: tracker.project() })
+    if (endpoint === 'adapter.connect' && deps.connect !== undefined) {
+      deps.connect()
+      return Promise.resolve({ ok: true, value: { connecting: true } })
+    }
+    if (endpoint === 'credentials.set' && deps.setToken !== undefined) {
+      const value = (payload as { value?: unknown } | undefined)?.value
+      const text = typeof value === 'string' ? value.trim() : ''
+      if (text === '') {
+        return Promise.resolve({ ok: false, error: { code: 'bad-request', message: 'empty token' } })
+      }
+      return deps.setToken(text).then(
+        () => ({ ok: true as const, value: { saved: true } }),
+        (cause: unknown) => ({ ok: false as const, error: { code: 'credential-rejected', message: String(cause) } }),
+      )
+    }
+    return Promise.resolve({ ok: false, error: { code: 'bad-request', message: `Unknown ${DISCORD_RPC_CHANNEL} endpoint.` } })
   }
 }
 
-/** Register the status channel; returns the connection service's disposer. */
+/** Register the management channel; returns the connection service's disposer. */
 export function installAdapterStatusRpc(connection: ConnectionRpc, tracker: AdapterStatusTracker): () => void {
-  return connection.rpc.handle(DISCORD_RPC_CHANNEL, createAdapterStatusRpcHandler(tracker), {
+  return connection.rpc.handle(DISCORD_RPC_CHANNEL, createAdapterManagementHandler({ tracker }), {
     authority: 'loopback',
   })
 }
