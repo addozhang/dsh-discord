@@ -44,16 +44,18 @@ interface PluginRpcFace {
 export function apply(ctx: ClientContext): void {
   const scope = ctx.settingsScope.bind<DiscordSettings>({ namespace: DISCORD_SETTINGS_NAMESPACE })
   const controller = new DiscordCardController(scope)
-  const dispose = ctx.slots.register({
-    name: 'settings.plugins.tab',
+  // Register under the settings UI's declared parent slot — a standalone
+  // slot name fails the loader's children-table check at runtime.
+  ctx.slots.inject('settings.section', () => ctx.slots.register({
+    name: 'settings.section',
     id: 'discord',
     order: 100,
     label: 'Discord',
     locale: 'settings.plugins',
     registrant: name,
     inject: () => controller.face(),
-  }, DiscordSettingsCard)
-  ctx.effect(() => dispose, 'discord settings card')
+  }, DiscordSettingsCard))
+  ctx.effect(() => () => {}, 'discord settings card')
 
   const call = (ctx as ClientContext & PluginRpcFace).connection?.rpc?.call
   if (typeof call !== 'function') return

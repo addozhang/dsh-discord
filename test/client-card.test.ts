@@ -57,11 +57,11 @@ describe('client entry', () => {
     const disposer = vi.fn()
     const ctx = {
       settingsScope: { bind: vi.fn(() => scope) },
-      slots: { register: vi.fn(() => disposer) },
+      slots: { register: vi.fn(() => disposer), inject: vi.fn((_name: string, factory: () => unknown) => factory()) },
       effect: vi.fn((execute: () => unknown) => { execute() }),
     } as unknown as ClientContext & {
       settingsScope: { bind: ReturnType<typeof vi.fn> }
-      slots: { register: ReturnType<typeof vi.fn> }
+      slots: { register: ReturnType<typeof vi.fn>; inject: ReturnType<typeof vi.fn> }
       effect: ReturnType<typeof vi.fn>
     }
 
@@ -72,7 +72,7 @@ describe('client entry', () => {
     expect(ctx.slots.register).toHaveBeenCalledTimes(1)
     const options = ctx.slots.register.mock.calls[0]?.[0] as Record<string, unknown>
     expect(options).toMatchObject({
-      name: 'settings.plugins.tab',
+      name: 'settings.section',
       id: 'discord',
       locale: 'settings.plugins',
     })

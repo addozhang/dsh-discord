@@ -8,7 +8,7 @@ import type {} from './slot-contract.js'
 
 /** Props the runtime binds for the Discord settings card. */
 export type DiscordSettingsCardProps =
-  PropsRuntime<'settings.plugins.tab'>
+  PropsRuntime<"settings.section">
   & PropsLocale<'settings.plugins'>
   & InjectFace<DiscordCardFace>
 
