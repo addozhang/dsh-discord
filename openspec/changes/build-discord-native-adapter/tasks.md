@@ -108,9 +108,9 @@
 
 ## 12. Image input
 
-- [ ] 12.1 RED: add tests for supported media types, Discord CDN host allowlisting, redirect rejection/revalidation, and malformed URLs; GREEN: implement the safe download boundary.
-- [ ] 12.2 RED: add tests for declared size, actual streamed size, aggregate limits, timeout, cancellation, and bounded memory use; GREEN: implement bounded image collection.
-- [ ] 12.3 RED: add fake-DSH tests for mixed text/images, unsupported model modality, Host rejection, and duplicate Discord delivery; GREEN: encode and submit images through `session.prompt` exactly once.
+- [x] 12.1 RED: add tests for supported media types, Discord CDN host allowlisting, redirect rejection/revalidation, and malformed URLs; GREEN: implement the safe download boundary.
+- [x] 12.2 RED: add tests for declared size, actual streamed size, aggregate limits, timeout, cancellation, and bounded memory use; GREEN: implement bounded image collection.
+- [x] 12.3 RED: add fake-DSH tests for mixed text/images, unsupported model modality, Host rejection, and duplicate Discord delivery; GREEN: encode and submit images through `session.prompt` exactly once.
 
 ## 13. Approval routing
 
