@@ -70,3 +70,18 @@ src/state/fail-closed.ts:64-76 只在 bind/release 前置 `guard()`；`get`（:6
 ## 覆盖声明
 
 逐行读过：policy×4、state×9、gateway×3、discord×6、stream×9、approval/question×8、image×3、reconcile×3、settings/credential/lifecycle/startup/index、turn-ownership、thread-routing、thread-creation、prompt-submission、card-form。约 20 个会话流小文件（session-adopt/resume/creation、controls、views、commands、selector、typing 等）经 checkpoint-c 集成测试与抽样覆盖，未逐行读。未重跑测试套件（15.8 记录为 502 green，本评审以代码事实为准）。密钥全库扫描 clean；无 TODO/FIXME/`any`。
+
+---
+
+## 处置记录（2026-08-28，commit 0924a6c）
+
+- **C1 已修复**：新增 `src/compose.ts` 组合根 + `test/compose.test.ts`（4 tests）。Gateway→授权入口→路由→apiProxy prompt 适配→状态跟踪→一键 dispose 全部接线；`src/index.ts apply()` 现在实际启动运行时。集成测试证明：授权提及→DSH prompt 提交、未授权/未绑定→零调用、缺 token→fail-closed 离线、dispose→Gateway 关闭。
+- **R1 已修复**：默认 idFactory 改 `crypto.randomUUID()`。
+- **R2 已修复**：finalizer 改用 `splitMarkdownAware`，长文不再劈开代码块。
+- **R3 已修复**：`liveSeen` 真正生效——命中事件跳过投递但推进水位。
+- **R4 已修复**：image-submission 独立 `conflict` 分支，与 prompt-submission 对齐。
+- **R5 已修复**：docblock 改为如实描述（单图峰值=整个 body，受 CDN 限制+聚合上限约束）。
+- **R6 已修复**：fail-closed `get` 读路径校验，corrupt 键返回 undefined（诊断走 `diagnose`）。
+- **N2/N4/N5/N6/N7/N8 已修复**：心跳定时器重 HELLO 前清理、代理对边界 rest 推进量同步、intents 措辞精确化、credential 探测失败记日志、过时 docblock 移除、冗余 `createIngressGate` 删除（测试移植到 authorized 入口）。
+- **N1/N3 有意保留**：per-key chain Map 残留量级小且生命周期内单调有限；`setTimeout` 重试链将在组合层 AbortSignal 贯穿时统一处理（15.9 profile 验证项）。
+- 修复后 gates：509 tests / 78 files 全绿，typecheck 0，lint 0，build 通过。
