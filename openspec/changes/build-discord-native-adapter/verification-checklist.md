@@ -225,3 +225,22 @@ Kimaki project↔channel 严格 1:1：
   主频道之外的绑定是额外映射。
 - **未采纳**：kimaki 在 autocomplete label 与回复中显示目录路径——违反本产品
   disclosure 策略（路径仅管理员 ephemeral）。
+  （**已反转**：同日用户裁定路径非敏感面，design §3/spec 已修订为 Kimaki 式路径
+  展示；`/project info` 路径对成员可见。）
+
+## 完全 Kimaki 化计划（用户批准方向，2026-08-29）
+
+Phase 0 ✅（commit 5760ac9）：bind=add-project 式主频道供给；general=纯命令面；
+list/info 去 ID 化；info 路径对成员可见；specs/design/tasks 16.x 已同步。
+**待实测**：`/project bind`（选 tmp）→ 确认 → `#tmp` 建出且回复只提名字；再绑一次 →
+「已存在于」；`#general` 不可再被绑定。
+
+- Phase 1（下一步）：会话主链路 — `session.create({workspaceId, sessionId 预分配})`
+  → `session.prompt`；源消息建 Thread + thread→session 绑定；Thread 内免 mention 续聊；
+  mux 流式渲染（head message + tool 行）；`/stop` `/steer` `/queue` + thread 守卫。
+- Phase 2：bindings/intents 落 storageDomain；READY reconcile 扫描。
+- Phase 3：approval/question mux 帧交互。
+- Phase 4：`/session new/resume`(autocomplete)、`/model`(交互式 select)、`/preset`、
+  `/skill run`、`/host status`。
+- Phase 5（可选）：`/last-sessions`、上下文用量、图片附件、verbosity。
+- 明确不做：3 秒中断重发（用户确认维持 queue+/steer）；voice/定时任务/worktree 远期。
