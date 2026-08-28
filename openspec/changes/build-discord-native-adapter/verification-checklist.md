@@ -79,3 +79,11 @@ Requirement → primary evidence:
 
 Any deviation found during 15.9–15.11 is a finding for human review — do not
 ship automatically.
+
+## 15.10 进行中状态（下次会话从这里继续）
+
+已完成：插件激活/卡片渲染/本地化/token 零泄露；allowlist 已配置（Agents Hub 1517134847850709032 + owner 983289424819417089）；9 命令已注册；管理通道端点（status/connect/guilds/credentials.set）host 侧就绪；斜杠 dispatch 骨架已接（deferred ack + ephemeral followup，/project list+bind）。
+
+**当前卡点**：/project list 无响应，诊断日志未触发——交互未到达 routeInteraction。Gateway TLS 连接存在但 identify 未验证。
+**下一步排查**：1) 确认 Discord 中 DSH 是否显示在线（区分 identify 失败 vs dispatch 断点）；2) 在 ingress.accept 前加 dispatch.t 日志定位；3) 检查 GATEWAY_INTENTS 位组合（33280=0x8200：guilds+guild_messages+message_content? 需核对 guild_members 1<<1 是否被开发者门户特权开关允许——4014 会静默断连）。
+**测试后**：Reset bot token（已在本会话暴露）。

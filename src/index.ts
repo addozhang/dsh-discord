@@ -202,6 +202,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       if (runtime === undefined) return
       // Slash commands (type 2): deferred ephemeral ack, then the feature
       // result as an ephemeral followup. /project list+bind close the loop.
+      console.error('[dsh-discord] slash dispatch:', ((event as { interactionId?: string }).interactionId), ((event as { commandName?: string }).commandName), 'token?', interactionToken !== undefined)
       if (event.kind === 'interaction' && event.interactionType === 2 && interactionToken !== undefined) {
         const rest = createRestClient({ token: (await resolveDiscordBotToken(credentials)) ?? '' })
         const ack = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 5, data: { flags: 64 } })
