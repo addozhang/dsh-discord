@@ -52,12 +52,12 @@
 
 ## 7. Workspace control vertical slice
 
-- [ ] 7.1 RED: add fake-DSH integration tests for listing all registered Workspaces, safe duplicate-title labels, opaque Workspace IDs, and selection paging; GREEN: implement `/project list` discovery.
-- [ ] 7.2 RED: add tests for Workspace administrator authorization, confirmation, stale Workspace removal, and cancelled selection; GREEN: implement `/project bind`.
-- [ ] 7.3 RED: add tests for independent bindings across channels and Guilds and for concurrent rebind; GREEN: persist Channel→Workspace mapping with revision fences.
-- [ ] 7.4 RED: add tests proving existing Threads retain their original Session/cwd after parent Channel rebind; GREEN: route only subsequently created Threads through the new Workspace.
-- [ ] 7.5 RED: add tests for unbound-channel mentions and reserved Workspace creation; GREEN: show an ephemeral bind affordance and report creation unavailable without filesystem mutation.
-- [ ] 7.6 RED: add tests for member versus Workspace-administrator `/project info`; GREEN: return title/opaque ID to members and canonical path only in an administrator's ephemeral response.
+- [x] 7.1 RED: add fake-DSH integration tests for listing all registered Workspaces, safe duplicate-title labels, opaque Workspace IDs, and selection paging; GREEN: implement `/project list` discovery.
+- [x] 7.2 RED: add tests for Workspace administrator authorization, confirmation, stale Workspace removal, and cancelled selection; GREEN: implement `/project bind`.
+- [x] 7.3 RED: add tests for independent bindings across channels and Guilds and for concurrent rebind; GREEN: persist Channel→Workspace mapping with revision fences.
+- [x] 7.4 RED: add tests proving existing Threads retain their original Session/cwd after parent Channel rebind; GREEN: route only subsequently created Threads through the new Workspace.
+- [x] 7.5 RED: add tests for unbound-channel mentions and reserved Workspace creation; GREEN: show an ephemeral bind affordance and report creation unavailable without filesystem mutation.
+- [x] 7.6 RED: add tests for member versus Workspace-administrator `/project info`; GREEN: return title/opaque ID to members and canonical path only in an administrator's ephemeral response.
 
 ## 8. Session creation and continuation
 

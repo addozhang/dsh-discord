@@ -10,6 +10,7 @@ export interface KvTableStub<V> {
   get(key: string): V | undefined
   put(key: string, value: V): Promise<void>
   delete(key: string): Promise<boolean>
+  keys(): Iterable<string>
 }
 
 export function createKvTableStub<V>(): KvTableStub<V> & { snapshot(): Map<string, V> } {
@@ -21,6 +22,7 @@ export function createKvTableStub<V>(): KvTableStub<V> & { snapshot(): Map<strin
       return Promise.resolve()
     },
     delete: key => Promise.resolve(map.delete(key)),
+    keys: () => map.keys(),
     snapshot: () => new Map(map),
   }
 }
@@ -31,5 +33,6 @@ export function spiedTable<V>(table: KvTableStub<V>): KvTableStub<V> {
     get: key => table.get(key),
     put: vi.fn((key: string, value: V) => table.put(key, value)),
     delete: vi.fn((key: string) => table.delete(key)),
+    keys: () => table.keys(),
   }
 }
