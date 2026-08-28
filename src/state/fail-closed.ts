@@ -62,7 +62,13 @@ export function createFailClosedBindingStore<V extends { revision: number }>(
   }
 
   return {
-    get: key => inner.get(key),
+    get(key) {
+      // Read-path integrity: a corrupt or newer-format record never reaches
+      // the business layer typed as a validated V. Callers that need the
+      // reason ask `diagnose(key)` explicitly.
+      if (guard(key) === 'state-corrupt') return undefined
+      return inner.get(key)
+    },
     diagnose,
     async bind(key, record, options) {
       if (guard(key) === 'state-corrupt') return { ok: false, error: 'state-corrupt' }

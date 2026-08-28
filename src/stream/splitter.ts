@@ -45,7 +45,14 @@ export function splitMessage(text: string, limit: number = DISCORD_MESSAGE_LIMIT
 
     const chunk = safeSlice(rest, 0, cut).trim()
     if (chunk !== '') chunks.push(chunk)
-    rest = rest.slice(cut === limit ? limit : cut + 1)
+    let advance = cut === limit ? limit : cut + 1
+    // safeSlice may have pulled the chunk boundary back one code unit to
+    // avoid splitting a surrogate pair; the next chunk must start at that
+    // pulled-back position, never at the dangling low surrogate.
+    const hi = rest.charCodeAt(advance - 1)
+    const lo = rest.charCodeAt(advance)
+    if (hi >= 0xD800 && hi <= 0xDBFF && lo >= 0xDC00 && lo <= 0xDFFF) advance -= 1
+    rest = rest.slice(advance)
   }
   const tail = rest.trim()
   if (tail !== '') chunks.push(tail)

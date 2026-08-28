@@ -73,3 +73,23 @@ describe('splitMessage', () => {
     }
   })
 })
+
+describe('surrogate integrity at hard cuts (N4)', () => {
+  it('never leaves a dangling low surrogate at a chunk start', () => {
+    // 'x' * (limit-1) then one astral character (surrogate pair) that the
+    // hard cut would split between its two code units.
+    const text = `${'x'.repeat(DISCORD_MESSAGE_LIMIT - 1)}\u{1F600}`
+    const chunks = splitMessage(text)
+    const rejoined = chunks.join('')
+    expect(rejoined).toBe(text)
+    for (const chunk of chunks) {
+      // A chunk ending on a HIGH surrogate dangles it; a chunk starting on a
+      // LOW surrogate dangles that. A complete astral character may start a
+      // chunk legitimately.
+      const last = chunk.charCodeAt(chunk.length - 1)
+      const first = chunk.charCodeAt(0)
+      expect(last >= 0xD800 && last <= 0xDBFF).toBe(false)
+      expect(first >= 0xDC00 && first <= 0xDFFF).toBe(false)
+    }
+  })
+})

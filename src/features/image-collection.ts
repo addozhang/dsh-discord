@@ -1,10 +1,12 @@
 /**
  * Bounded image collection (design.md §12, task 12.2). Every download is
  * bounded four ways: the DECLARED size is checked before any fetch, the
- * ACTUAL byte count is enforced during it, an aggregate cap spans the whole
- * message, and a timeout stops a hung transfer. Unbounded memory is
- * structurally impossible — bytes are counted against the caps as they
- * arrive, and refusals are plain values.
+ * ACTUAL byte count of the response body is checked against the aggregate
+ * cap before the image is accepted, an aggregate cap spans the whole
+ * message, and a timeout stops a hung transfer. The HTTP port hands back one
+ * complete body, so peak memory for a single image is that body's size —
+ * bounded in practice by Discord CDN attachment limits and the aggregate
+ * cap, not by streaming. Refusals are plain values.
  */
 
 import type { HttpFetchPort } from './image-download.js'

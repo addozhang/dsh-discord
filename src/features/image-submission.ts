@@ -34,6 +34,7 @@ export type ImageSubmissionResult =
   | { outcome: 'rejected' }
   | { outcome: 'unknown' }
   | { outcome: 'already-submitted' }
+  | { outcome: 'conflict' }
   | { outcome: 'refused'; reason: 'unsupported-modality' }
 
 /** Encode text plus images into ordered prompt parts. */
@@ -71,7 +72,7 @@ export function createImageSubmissionFlow(deps: ImageSubmissionDeps): {
         contentHash,
         claimedAtMs: deps.nowMs(),
       })
-      if (claim.outcome === 'conflict') return { outcome: 'already-submitted' }
+      if (claim.outcome === 'conflict') return { outcome: 'conflict' }
       if (claim.outcome === 'duplicate') return { outcome: 'already-submitted' }
 
       const submitted = await deps.prompts.submit({

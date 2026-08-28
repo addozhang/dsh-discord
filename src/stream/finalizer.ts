@@ -8,7 +8,8 @@
  * while the finalizer guarantees a single successful edit.
  */
 
-import { splitMessage } from './splitter.js'
+import { splitMarkdownAware } from './markdown.js'
+import { DISCORD_MESSAGE_LIMIT } from './splitter.js'
 
 export interface AnswerDeliveryPort {
   editHead(request: { messageId: string; content: string }): Promise<
@@ -41,7 +42,9 @@ export function createAnswerFinalizer(deps: {
     async finalize(fullText) {
       if (finalized) return { outcome: 'skipped', reason: 'already-finalized' }
 
-      const chunks = splitMessage(fullText)
+      // Fence-aware: a long answer never splits a ``` code block across
+      // messages; each continuation renders as well-formed Markdown alone.
+      const chunks = splitMarkdownAware(fullText, DISCORD_MESSAGE_LIMIT)
       if (chunks.length === 0) {
         finalized = true
         return { outcome: 'finalized', editedHead: false, continuations: 0 }

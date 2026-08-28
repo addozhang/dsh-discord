@@ -120,3 +120,50 @@ describe('image submission', () => {
     expect(submitMock).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('content divergence (R4)', () => {
+  it('reports conflict instead of already-submitted when the payload differs', async () => {
+    const { createImageSubmissionFlow } = await import('../src/features/image-submission.js')
+    const PNG_BASE64 = 'iVBORw0KGgo='
+    const submitMock = vi.fn(() => Promise.resolve({ outcome: 'accepted' as const }))
+    const rows = new Map<string, unknown>()
+    const intents = {
+      get: (key: string) => {
+        const record = rows.get(key)
+        return record === undefined ? undefined : { ...(record as object) }
+      },
+      claim: (request: { messageId: string; contentHash: string }) => {
+        const existing = rows.get(request.messageId) as { contentHash: string } | undefined
+        if (existing !== undefined) {
+          const outcome = existing.contentHash !== request.contentHash
+            ? { outcome: 'conflict' as const, record: existing }
+            : { outcome: 'duplicate' as const, record: existing }
+          return Promise.resolve(outcome)
+        }
+        rows.set(request.messageId, { contentHash: request.contentHash, state: 'claimed' })
+        return Promise.resolve({ outcome: 'claimed' as const })
+      },
+      resolve: () => Promise.resolve(),
+      annotate: () => Promise.resolve(),
+    }
+    const flow = createImageSubmissionFlow({
+      prompts: { submit: submitMock },
+      intents: intents as never,
+      modality: () => true,
+      nowMs: () => 0,
+    })
+
+    const first = await flow.submit({
+      requestId: 'm-2', sessionId: 'sess-1', text: 'look',
+      images: [{ mediaType: 'image/png', base64: PNG_BASE64 }],
+    })
+    expect(first).toEqual({ outcome: 'accepted' })
+
+    const divergent = await flow.submit({
+      requestId: 'm-2', sessionId: 'sess-1', text: 'DIFFERENT content',
+      images: [{ mediaType: 'image/png', base64: PNG_BASE64 }],
+    })
+    expect(divergent).toEqual({ outcome: 'conflict' })
+    expect(submitMock).toHaveBeenCalledTimes(1)
+  })
+})

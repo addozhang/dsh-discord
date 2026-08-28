@@ -81,7 +81,15 @@ export async function replayHistory(deps: ReplayDeps, input: ReplayInput): Promi
   }
 
   // Fold oldest-first, committing only after the bookkeeping resolves.
+  // Events already delivered live across the gap (their id is in liveSeen)
+  // skip the deliver call entirely but still advance the watermark: the
+  // live path owns their bookkeeping.
   for (const event of pending) {
+    if (input.liveSeen?.has(event.id) === true) {
+      await deps.watermarkStore.commit(input.sessionId, event.seq)
+      committedThrough = event.seq
+      continue
+    }
     const bookkeeping = await deps.deliver.deliver(event)
     if (bookkeeping === 'recorded') delivered.push(event.id)
     await deps.watermarkStore.commit(input.sessionId, event.seq)

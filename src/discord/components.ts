@@ -38,10 +38,11 @@ export function createComponentRegistry(options: RegistryOptions = {}): {
   purgeExpired(atMs: number): number
 } {
   const prefix = options.prefix ?? DEFAULT_PREFIX
-  let fallbackCounter = 0
   const nextId = options.idFactory ?? (() => {
-    fallbackCounter += 1
-    return `${Date.now().toString(36)}-${String(fallbackCounter)}`
+    // UnGuessable by default: custom_ids are bearer tokens for interaction
+    // routing, so the fallback must not be enumerable. Web crypto is global
+    // in Node 22+ and every browser target.
+    return globalThis.crypto.randomUUID()
   })
 
   const entries = new Map<string, RegisteredComponent>()

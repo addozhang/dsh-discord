@@ -28,8 +28,9 @@ export type Config = DiscordSettings
 export const Config: z<Config> = DiscordSettingsSchema
 
 /**
- * Mount the embedded Discord adapter configuration boundary.
- * Discord runtime effects are added by subsequent OpenSpec tasks.
+ * Mount the embedded Discord adapter. Composition of the runtime path
+ * (Gateway → ingress → command/mention dispatch → Discord REST, plus the
+ * reconciliation sweeps) lives in `src/compose.ts` and is started from here.
  */
 export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): void {
   validateHostCapabilities(name => ctx.get(name))
@@ -51,7 +52,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   installAdapterStatusRpc(ctx.get('connection') as ConnectionRpc, statusTracker)
   void describeDiscordCredential(ctx.get('credentials') as DiscordCredentialProvider)
     .then((view) => { statusTracker.setCredential(view) })
-    .catch(() => { statusTracker.setCredential({ configured: false }) })
+    .catch((cause: unknown) => {
+      ctx.logger.warn({ event: 'discord_credential_probe_failed', cause: String(cause) })
+      statusTracker.setCredential({ configured: false })
+    })
 }
 
 export {

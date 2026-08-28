@@ -127,3 +127,26 @@ describe('fail-closed state integrity', () => {
     expect(table.get(KEY)?.revision).toBe(1)
   })
 })
+
+describe('read-path integrity (R6)', () => {
+  it('reads of a corrupt key return undefined instead of a typed record', async () => {
+    const { createFailClosedBindingStore } = await import('../src/state/fail-closed.js')
+    const { ChannelBindingRecord } = await import('../src/state/records.js')
+    const rows = new Map<string, unknown>()
+    const inner = {
+      get: (key: string) => rows.get(key),
+      bind: (key: string, record: unknown) => {
+        rows.set(key, record)
+        return Promise.resolve({ ok: true as const, value: record })
+      },
+      release: () => Promise.resolve({ ok: true as const }),
+    }
+    const raw = { get: (key: string) => rows.get(key) }
+    const store = createFailClosedBindingStore(inner as never, ChannelBindingRecord as never, raw)
+    rows.set('ch-1', { workspaceId: 'ws', revision: 'not-a-number', boundBy: 1, boundAtMs: 'x' })
+
+    expect(store.get('ch-1')).toBeUndefined()
+    expect(store.diagnose('ch-1').state).toBe('corrupt')
+    expect(store.get('missing')).toBeUndefined()
+  })
+})

@@ -153,6 +153,9 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
         const interval = (hello as Record<string, unknown>)['heartbeat_interval']
         if (typeof interval !== 'number' || interval <= 0) return
         heartbeatAcked = true
+        // A resumed session re-receives HELLO: retire the old timer first so
+        // intervals never stack.
+        if (heartbeatTimer !== undefined) clearInterval(heartbeatTimer)
         heartbeatTimer = setInterval(() => {
           if (disposed || liveGeneration !== generation) return
           if (!heartbeatAcked) {
