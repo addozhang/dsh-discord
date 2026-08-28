@@ -171,3 +171,12 @@ bind 后 mention 流程会找不到绑定）。`createWorkspaceResolver` 带 5 �
 **实测路径**：`/project bind workspace:<从 list 复制>` → 按钮 → 确认 → `✅ 已绑定…`；
 再 `/project info` 与 `@bot` mention（预期先报 `discord_prompt_submit_rejected:
 session-not-found`，指向下一增量 session.create）。
+
+**✅ bind 实测通过 + 工作区频道自动供给（同会话）**：确认按钮后返回
+`✅ 已绑定…（修订 1）`。用户新增需求已实现：bind 成功后在 DeepSeek Harness
+category 下确保同名频道（标题 slug；非 ASCII 标题回退原名）并自动绑到该工作区；
+名字被其他工作区占用时建 `-2` 兄弟频道，绝不抢占（`planWorkspaceChannel` 纯函数
++ 测试）。成功 ephemeral 附 `<#频道>` 链接；供给失败不影响绑定本身。
+`ensureGuildChannels` 与工作区频道共用 `ensureCategory`。已部署并重启。
+**待实测**：重跑 `/project bind` 确认返回带频道链接、Discord 出现 `#tmp` 频道且
+mention 在其中生效（仍预期 session-not-found）。**Reset bot token**。
