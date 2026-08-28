@@ -94,3 +94,10 @@ ship automatically.
 - **卡点**：适配器 Gateway 连接后进入 4000（unknown error）close 循环，状态卡「连接中」；裸 Node 脚本（同 token+intents 33283）identify 可 READY——差异在 dsh 进程内的会话续接/identify 细节。
 - **下一步**：1) gateway.ts 加 HELLO/IDENTIFY/READY 诊断（已加 close:4000 日志于 /tmp/dsh-web-test.log）；2) 对比裸脚本与 gateway.ts 的 identify 载荷（properties/intents/token 来源）；3) 怀疑点：resume 会话过期→op9→4000 循环、tokenProvider 竞态返回旧值、socket 事件翻译遗漏。
 - 插件安装注意：pnpm 对同名同版本 tarball 跳过重装——必须 `pnpm remove` 后再 add（已多次踩坑）。
+
+## 15.10 调试快照 2（/project list 双调用 + ack 失败）
+
+- 实测：/project list 触发 routeInteraction 两次（同 interactionId）——① routeEvent→routeInteraction（无 token，被 token 检查拦下）② handleDispatch 直调（有 token）。
+- 第二次调用 ack POST 静默失败（无 workspace.list raw 日志、无 followUp）——需在 ack 后记 outcome 日志定位。
+- **修复方向**：删除 routeEvent 内对 interactions 的 routeInteraction 转发（compose.ts:91 附近 kind 分支），只保留 handleDispatch 直调路径（带 token）；ack/followUp 处补结果日志。
+- 注意：diagnostics console.error 已在 index.ts type-2 分支与 compose handleDispatch（见 15.10 快照 1、2）。
