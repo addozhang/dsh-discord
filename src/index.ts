@@ -30,6 +30,7 @@ import { createBindingStore } from './state/bindings.js'
 import type { ChannelBinding } from './state/records.js'
 import { evaluateAuthorization, type PolicyTable } from './policy/authorization.js'
 import { workspaceReference } from './policy/disclosure.js'
+import { planWorkspaceChannel, workspaceChannelName, type ChannelBindingState } from './features/workspace-channel.js'
 import type { GatewaySocket } from './gateway/gateway.js'
 
 /** Stable Cordis plugin name for diagnostics. */
@@ -135,10 +136,87 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   // The bind flow's two phases plan against the live catalog and commit
   // through the revision-fenced store; the Discord confirm button carries
   // only an opaque registry id between the phases.
+  const resolver = createWorkspaceResolver(apiProxy, { log: rpcLog })
   const bindFlow = createProjectBindFlow({
-    resolver: createWorkspaceResolver(apiProxy, { log: rpcLog }),
+    resolver,
     bindings: bindingStore,
   })
+
+  // Adapter-owned guild surfaces: the "DeepSeek Harness" category, the
+  // general control channel (both provisioned on READY), and — on bind —
+  // one channel per Workspace, named after its display title. Nothing
+  // outside the category is ever touched.
+  const CATEGORY_NAME = 'DeepSeek Harness'
+  type GuildChannel = { id: string; name: string; type: number; parent_id?: string }
+  const ensureCategory = async (
+    rest: ReturnType<typeof createRestClient>,
+    guildId: string,
+  ): Promise<{ channels: GuildChannel[]; categoryId: string } | undefined> => {
+    const listed = await rest.request<GuildChannel[]>('GET', `/guilds/${guildId}/channels`)
+    if (listed.outcome !== 'completed') return undefined
+    const channels = listed.body
+    let category = channels.find((c) => c.type === 4 && c.name.toLowerCase() === CATEGORY_NAME.toLowerCase())
+    if (category === undefined) {
+      const made = await rest.request<GuildChannel>('POST', `/guilds/${guildId}/channels`, { name: CATEGORY_NAME, type: 4 })
+      if (made.outcome !== 'completed') return undefined
+      category = made.body
+    }
+    return { channels, categoryId: category.id }
+  }
+  const withRest = async <T>(
+    run: (rest: ReturnType<typeof createRestClient>) => Promise<T>,
+  ): Promise<T | undefined> => {
+    const token = (await resolveDiscordBotToken(credentials)) ?? ''
+    if (token === '') return undefined
+    return run(createRestClient({ token }))
+  }
+  const bindChannelKey = (guildId: string, channelId: string): string =>
+    channelBindingKey({ applicationId: applicationIdRef.current, guildId, channelId })
+  /**
+   * Ensure the Workspace's home channel exists under the adapter category
+   * and serves this Workspace. Reuse never steals: a channel bound to
+   * another Workspace is left alone and a `-2` sibling is created instead.
+   */
+  const ensureWorkspaceChannel = async (options: {
+    guildId: string
+    workspaceId: string
+    title: string
+    actorId: string
+  }): Promise<string | undefined> => {
+    return withRest(async (rest) => {
+      const ensured = await ensureCategory(rest, options.guildId)
+      if (ensured === undefined) return undefined
+      const bindingOf = (channelId: string): ChannelBindingState => {
+        const bound = bindingStore.get(bindChannelKey(options.guildId, channelId))
+        if (bound === undefined) return 'unbound'
+        return bound.workspaceId === options.workspaceId ? 'this-workspace' : 'other-workspace'
+      }
+      const placement = planWorkspaceChannel({
+        channels: ensured.channels.map((c) => ({ id: c.id, name: c.name, parentId: c.parent_id })),
+        categoryId: ensured.categoryId,
+        desiredName: workspaceChannelName(options.title),
+        bindingOf,
+      })
+      const record = { workspaceId: options.workspaceId, boundBy: options.actorId, boundAtMs: Date.now() }
+      if (placement.outcome === 'reuse') {
+        if (placement.needsBind) {
+          await bindingStore.bind(bindChannelKey(options.guildId, placement.channelId), record)
+        }
+        return placement.channelId
+      }
+      const made = await rest.request<GuildChannel>('POST', `/guilds/${options.guildId}/channels`, {
+        name: placement.name,
+        type: 0,
+        parent_id: ensured.categoryId,
+      })
+      if (made.outcome !== 'completed') {
+        rpcLog('discord_workspace_channel_create_failed', made.outcome === 'rejected' ? `HTTP ${String(made.status)}` : made.reason)
+        return undefined
+      }
+      await bindingStore.bind(bindChannelKey(options.guildId, made.body.id), record)
+      return made.body.id
+    })
+  }
 
   const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
   // DSH approval respond face: the client-response echoes the ask's rpcId.
@@ -185,23 +263,14 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     allowedGuildIds: [...current.allowedGuildIds],
     bindings,
     ensureGuildChannels: async (guildId) => {
-      const token = (await resolveDiscordBotToken(credentials)) ?? ''
-      if (token === '') return
-      const rest = createRestClient({ token })
-      const channels = await rest.request<Array<{ id: string; name: string; type: number; parent_id?: string }>>('GET', `/guilds/${guildId}/channels`)
-      if (channels.outcome !== 'completed') return
-      const CATEGORY_NAME = 'DeepSeek Harness'
-      const CHANNEL_NAME = 'general'
-      let category: { id: string; name: string; type: number; parent_id?: string } | undefined = channels.body.find((c) => c.type === 4 && c.name.toLowerCase() === CATEGORY_NAME.toLowerCase())
-      if (category === undefined) {
-        const made = await rest.request<{ id: string; name: string; type: number }>('POST', `/guilds/${guildId}/channels`, { name: CATEGORY_NAME, type: 4 })
-        if (made.outcome !== 'completed') return
-        category = made.body
-      }
-      const hasControl = channels.body.some((c) => c.type === 0 && c.name.toLowerCase() === CHANNEL_NAME && c.parent_id === category.id)
-      if (hasControl) return
-      // Never touch channels outside our category: create our own only.
-      await rest.request('POST', `/guilds/${guildId}/channels`, { name: CHANNEL_NAME, type: 0, parent_id: category.id })
+      await withRest(async (rest) => {
+        const ensured = await ensureCategory(rest, guildId)
+        if (ensured === undefined) return
+        // Never touch channels outside our category: create our own only.
+        const hasControl = ensured.channels.some((c) => c.type === 0 && c.name.toLowerCase() === 'general' && c.parent_id === ensured.categoryId)
+        if (hasControl) return
+        await rest.request('POST', `/guilds/${guildId}/channels`, { name: 'general', type: 0, parent_id: ensured.categoryId })
+      })
     },
     submitPrompt: {
       submit: async (request) => {
@@ -292,8 +361,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
                 return
               }
               const expiresAtMs = Date.now() + 15 * 60 * 1000
-              const confirmId = runtime.registry.register({ kind: 'project-bind', action: 'confirm', plan, actorId: event.actorId, expiresAtMs })
-              const cancelId = runtime.registry.register({ kind: 'project-bind', action: 'cancel', plan, actorId: event.actorId, expiresAtMs })
+              const confirmId = runtime.registry.register({ kind: 'project-bind', action: 'confirm', plan, actorId: event.actorId, reference, expiresAtMs })
+              const cancelId = runtime.registry.register({ kind: 'project-bind', action: 'cancel', plan, actorId: event.actorId, reference, expiresAtMs })
               rpcLog('discord_project_bind_planned', { interactionId: event.interactionId, workspaceId: plan.workspaceId })
               await followUp(`将把当前频道绑定到工作区 \`${reference}\`？`, buttonRow(confirmId, cancelId))
               return
@@ -355,7 +424,26 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         const result = await bindFlow.commit(plan, { cancelled })
         rpcLog('discord_project_bind_commit', { action: bindContext['action'], outcome: result.outcome })
         if (result.outcome === 'bound') {
-          await followUpResult(`✅ 已绑定到工作区 \`${workspaceReference(result.binding.workspaceId)}\`（修订 ${String(result.binding.revision)}）。`)
+          // Provision (or reuse) the Workspace's home channel under the
+          // adapter category; a failure here never undoes the bind itself.
+          let channelNote = ''
+          const reference = typeof bindContext['reference'] === 'string' ? bindContext['reference'] : undefined
+          if (reference !== undefined) {
+            const resolvedWorkspace = await resolver.resolve(reference)
+            if (resolvedWorkspace.outcome === 'found') {
+              const channelId = await ensureWorkspaceChannel({
+                guildId: event.guildId,
+                workspaceId: result.binding.workspaceId,
+                title: resolvedWorkspace.workspace.title,
+                actorId: event.actorId,
+              }).catch((cause: unknown) => {
+                rpcLog('discord_workspace_channel_ensure_threw', String(cause))
+                return undefined
+              })
+              if (channelId !== undefined) channelNote = `\n频道：<#${channelId}> 已就绪（与当前频道同属此工作区）。`
+            }
+          }
+          await followUpResult(`✅ 已绑定到工作区 \`${workspaceReference(result.binding.workspaceId)}\`（修订 ${String(result.binding.revision)}）。${channelNote}`)
           return
         }
         await followUpResult(cancelled
