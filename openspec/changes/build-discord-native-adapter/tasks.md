@@ -114,10 +114,10 @@
 
 ## 13. Approval routing
 
-- [ ] 13.1 RED: add tests for rendering approval data into opaque component IDs without raw sensitive fields; GREEN: implement Allow once and Reject controls.
-- [ ] 13.2 RED: add tests for originating-user/Thread/Session/requestId/rpcId/approvalId ownership and unauthorized clicks by other members or administrators; GREEN: implement approval ownership validation.
-- [ ] 13.3 RED: add concurrent-click and already-resolved tests; GREEN: implement atomic pending→submitting resolution and idempotent stale-control handling.
-- [ ] 13.4 RED: add fake-clock tests for approval expiry and failed rejection; GREEN: reject before expiring controls and retain an explicit unresolved/error state when DSH does not confirm the response.
+- [x] 13.1 RED: add tests for rendering approval data into opaque component IDs without raw sensitive fields; GREEN: implement Allow once and Reject controls.
+- [x] 13.2 RED: add tests for originating-user/Thread/Session/requestId/rpcId/approvalId ownership and unauthorized clicks by other members or administrators; GREEN: implement approval ownership validation.
+- [x] 13.3 RED: add concurrent-click and already-resolved tests; GREEN: implement atomic pending→submitting resolution and idempotent stale-control handling.
+- [x] 13.4 RED: add fake-clock tests for approval expiry and failed rejection; GREEN: reject before expiring controls and retain an explicit unresolved/error state when DSH does not confirm the response.
 
 ## 14. Question routing
 

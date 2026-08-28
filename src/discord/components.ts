@@ -21,6 +21,9 @@ export type ComponentResolution =
   | { found: true; context: ComponentContext }
   | { found: false }
 
+/** The registry face shared by renderers (register) and click routing (resolve). */
+export type ComponentRegistry = ReturnType<typeof createComponentRegistry>
+
 interface RegisteredComponent {
   context: ComponentContext
   expiresAtMs: number

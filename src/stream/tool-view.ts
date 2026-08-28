@@ -29,6 +29,11 @@ const TOOL_LABELS: Readonly<Record<string, string>> = {
   web: 'Web',
 }
 
+/** The safe label for a tool name: allowlisted categories, generic fallback. */
+export function toolLabel(toolName: string): string {
+  return TOOL_LABELS[toolName] ?? 'Tool'
+}
+
 export interface ToolRecordInput {
   callId: string
   toolName: string
@@ -49,8 +54,7 @@ export function createToolActivitySurface(options: { verbosity: DiscordVerbosity
   return {
     record(input) {
       if (options.verbosity === 'text-only') return
-      const label = TOOL_LABELS[input.toolName] ?? 'Tool'
-      rows.set(input.callId, { callId: input.callId, label, state: input.state })
+      rows.set(input.callId, { callId: input.callId, label: toolLabel(input.toolName), state: input.state })
     },
     render: () => [...rows.values()],
   }
