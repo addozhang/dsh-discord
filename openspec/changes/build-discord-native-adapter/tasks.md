@@ -83,11 +83,11 @@
 
 ## 10. Preset, model, and Skill controls
 
-- [ ] 10.1 RED: add tests for channel Preset show/select/reset, missing/broken presets, and unchanged existing Sessions; GREEN: persist the project-channel default and pass it only to future `session.create` calls.
-- [ ] 10.2 RED: add tests for model/reasoning catalog failures, invalid effort, explicit Host-operator authorization, and denial of Guild-only administrators; GREEN: implement `/model show` and the guarded selection flow.
-- [ ] 10.3 RED: add tests for the DSH Host-default side-effect warning and partial failure where Session selection succeeds but default persistence does not; GREEN: present the actual DSH outcome without claiming more than the API proves.
-- [ ] 10.4 RED: add tests for Skill listing, unavailable catalog, user-only Skills, and canonical slash input; GREEN: implement `/skill run` through queued `session.prompt`.
-- [ ] 10.5 RED: add tests for Host connectivity/version reporting and process-management refusal; GREEN: implement `/host status` only.
+- [x] 10.1 RED: add tests for channel Preset show/select/reset, missing/broken presets, and unchanged existing Sessions; GREEN: persist the project-channel default and pass it only to future `session.create` calls.
+- [x] 10.2 RED: add tests for model/reasoning catalog failures, invalid effort, explicit Host-operator authorization, and denial of Guild-only administrators; GREEN: implement `/model show` and the guarded selection flow.
+- [x] 10.3 RED: add tests for the DSH Host-default side-effect warning and partial failure where Session selection succeeds but default persistence does not; GREEN: present the actual DSH outcome without claiming more than the API proves.
+- [x] 10.4 RED: add tests for Skill listing, unavailable catalog, user-only Skills, and canonical slash input; GREEN: implement `/skill run` through queued `session.prompt`.
+- [x] 10.5 RED: add tests for Host connectivity/version reporting and process-management refusal; GREEN: implement `/host status` only.
 
 ## 11. Stream renderer
 
