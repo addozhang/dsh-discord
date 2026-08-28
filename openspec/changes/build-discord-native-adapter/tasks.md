@@ -13,13 +13,13 @@
 
 ## 3. Discord ingress and Gateway lifecycle
 
-- [ ] 3.1 RED: add pure tests for Gateway message/interaction validation, identity normalization, mention stripping, unsupported event rejection, and self/bot filtering; GREEN: implement normalized inbound types and parsers.
-- [ ] 3.2 RED: add fake-clock tests for heartbeat acknowledgement, resumable reconnect, terminal close codes, bounded backoff, generation replacement, and disposal; GREEN: implement the Gateway state machine over an injected socket factory.
-- [ ] 3.3 RED: add tests proving DMs and events from unconfigured Guilds cause no DSH calls; GREEN: reject those events at the earliest normalized ingress boundary.
+- [x] 3.1 RED: add pure tests for Gateway message/interaction validation, identity normalization, mention stripping, unsupported event rejection, and self/bot filtering; GREEN: implement normalized inbound types and parsers.
+- [x] 3.2 RED: add fake-clock tests for heartbeat acknowledgement, resumable reconnect, terminal close codes, bounded backoff, generation replacement, and disposal; GREEN: implement the Gateway state machine over an injected socket factory.
+- [x] 3.3 RED: add tests proving DMs and events from unconfigured Guilds cause no DSH calls; GREEN: reject those events at the earliest normalized ingress boundary.
 
 ### Checkpoint A: Foundation and ingress
 
-- [ ] 3.4 Run the full tests, typecheck, lint, build, package verification, and dependency audit; inspect the bundle for secret leakage before starting feature work.
+- [x] 3.4 Run the full tests, typecheck, lint, build, package verification, and dependency audit; inspect the bundle for secret leakage before starting feature work. *(58 tests, all gates green, `npm pack` verified, secret scan clean — only the fixed credential reference name appears, no token values; `pnpm audit` clean. Disposable-profile activation from 1.2 remains a manual step.)*
 
 ## 4. Discord REST and native interaction transport
 
