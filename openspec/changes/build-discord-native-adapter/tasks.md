@@ -23,12 +23,12 @@
 
 ## 4. Discord REST and native interaction transport
 
-- [ ] 4.1 RED: add tests for REST success, structured failure, cancellation, retry-after handling, bounded retries, and unknown outcomes; GREEN: implement the typed Discord REST adapter.
-- [ ] 4.2 RED: add tests for nonce reuse and serialized per-route send/edit ordering; GREEN: implement delivery identity and route queues.
-- [ ] 4.3 RED: add tests for the fixed slash-command names, subcommands, arguments, contexts, permissions, and response visibility; GREEN: register the Milestone 1 command set.
-- [ ] 4.4 RED: add tests for initial acknowledgement/defer timing and expired interaction tokens; GREEN: implement command response lifecycle.
-- [ ] 4.5 RED: add tests for autocomplete filtering and pagination beyond Discord component limits; GREEN: implement reusable native selector paging.
-- [ ] 4.6 RED: add tests for opaque component IDs and modal correlation; GREEN: implement the component/modal transport without DSH business rules.
+- [x] 4.1 RED: add tests for REST success, structured failure, cancellation, retry-after handling, bounded retries, and unknown outcomes; GREEN: implement the typed Discord REST adapter.
+- [x] 4.2 RED: add tests for nonce reuse and serialized per-route send/edit ordering; GREEN: implement delivery identity and route queues.
+- [x] 4.3 RED: add tests for the fixed slash-command names, subcommands, arguments, contexts, permissions, and response visibility; GREEN: register the Milestone 1 command set.
+- [x] 4.4 RED: add tests for initial acknowledgement/defer timing and expired interaction tokens; GREEN: implement command response lifecycle.
+- [x] 4.5 RED: add tests for autocomplete filtering and pagination beyond Discord component limits; GREEN: implement reusable native selector paging.
+- [x] 4.6 RED: add tests for opaque component IDs and modal correlation; GREEN: implement the component/modal transport without DSH business rules.
 
 ## 5. Authorization policy
 
