@@ -207,3 +207,21 @@ mention 在其中生效（仍预期 session-not-found）。**Reset bot token**�
   会话 Thread 中使用」类明确拒绝（Kimaki /abort 的做法）。
 - 名字冲突安全：workspace 频道供给的「不抢占、建 -2 兄弟」策略与 Kimaki
   createProjectChannels 的 slug 规则同源。
+
+### Kimaki add-project 源码梳理（commit 3045e1d 已对齐）
+
+Kimaki project↔channel 严格 1:1：
+- `add-project.ts` 先 `findChannelsByDirectory`，已有频道回链不建
+  （"A channel already exists for this directory: <#id>"）。
+- `channel-management.ts createProjectChannels` 创建频道 + `setChannelDirectory`
+  是同一原子动作；频道名=basename slug；category=`Kimaki[ <botName>]`。
+- `/remove-project` 删频道+映射（目录不动）；autocomplete 排除已有频道的 project、
+  按最近排序、value=opaque id（label 含缩写路径——kimaki 泄路径，我们按 disclosure
+  策略不泄）。
+- **对齐落地**：`planWorkspaceChannel` 增加 `existingForWorkspace`——workspace 已绑
+  定的频道无条件复用（一个工作区一个频道），同名复用与 -2 兜底降为后备；确认回复
+  区分「已创建（✅ 已为工作区创建频道：<#id>）」与「已存在（该工作区的频道已存在于
+ ：<#id>）」两种 Kimaki 文案。当前频道绑定语义不变（design §13 channel-scoped），
+  主频道之外的绑定是额外映射。
+- **未采纳**：kimaki 在 autocomplete label 与回复中显示目录路径——违反本产品
+  disclosure 策略（路径仅管理员 ephemeral）。
