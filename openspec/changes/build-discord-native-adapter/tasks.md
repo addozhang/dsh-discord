@@ -91,20 +91,20 @@
 
 ## 11. Stream renderer
 
-- [ ] 11.1 RED: add pure tests for folding Turn/Step boundaries and multiple assistant messages; GREEN: implement the per-Thread render model keyed by Session, Turn, Step, message, and call IDs.
-- [ ] 11.2 RED: add tests for text-delta assembly, authoritative `assistant/message`, interrupted messages, and empty Turn completion; GREEN: implement logical answer-message state.
-- [ ] 11.3 RED: add fake-clock tests proving rapid chunks coalesce and only one edit is in flight; GREEN: implement the update scheduler.
-- [ ] 11.4 RED: add race tests proving late chunks cannot overwrite finalized output; GREEN: implement render-generation and terminal fences.
-- [ ] 11.5 RED: add Unicode/property tests for 2,000-character splitting, long unbreakable text, and empty output; GREEN: implement the base splitter.
-- [ ] 11.6 RED: add fixtures for balanced fenced code and table boundaries; GREEN: add Markdown-aware normalization and fence reopen/close behavior.
-- [ ] 11.7 RED: add tests for mention suppression in assistant, tool, title, and error content; GREEN: apply disabled mention parsing to every outbound path.
-- [ ] 11.8 RED: add tool-view tests for safe allowlisted labels, generic fallback, parallel `callId` correlation, raw-data suppression, and verbosity; GREEN: implement the bounded activity surface.
-- [ ] 11.9 RED: add fake-clock tests for typing start, keepalive, interaction pause, completion, cancellation, failure, and disposal; GREEN: implement typing lifecycle.
-- [ ] 11.10 RED: add integration tests for final answer overflow and Discord rate-limit responses; GREEN: finalize one edited head message plus ordered continuation messages exactly once.
+- [x] 11.1 RED: add pure tests for folding Turn/Step boundaries and multiple assistant messages; GREEN: implement the per-Thread render model keyed by Session, Turn, Step, message, and call IDs.
+- [x] 11.2 RED: add tests for text-delta assembly, authoritative `assistant/message`, interrupted messages, and empty Turn completion; GREEN: implement logical answer-message state.
+- [x] 11.3 RED: add fake-clock tests proving rapid chunks coalesce and only one edit is in flight; GREEN: implement the update scheduler.
+- [x] 11.4 RED: add race tests proving late chunks cannot overwrite finalized output; GREEN: implement render-generation and terminal fences.
+- [x] 11.5 RED: add Unicode/property tests for 2,000-character splitting, long unbreakable text, and empty output; GREEN: implement the base splitter.
+- [x] 11.6 RED: add fixtures for balanced fenced code and table boundaries; GREEN: add Markdown-aware normalization and fence reopen/close behavior.
+- [x] 11.7 RED: add tests for mention suppression in assistant, tool, title, and error content; GREEN: apply disabled mention parsing to every outbound path.
+- [x] 11.8 RED: add tool-view tests for safe allowlisted labels, generic fallback, parallel `callId` correlation, raw-data suppression, and verbosity; GREEN: implement the bounded activity surface.
+- [x] 11.9 RED: add fake-clock tests for typing start, keepalive, interaction pause, completion, cancellation, failure, and disposal; GREEN: implement typing lifecycle.
+- [x] 11.10 RED: add integration tests for final answer overflow and Discord rate-limit responses; GREEN: finalize one edited head message plus ordered continuation messages exactly once.
 
 ### Checkpoint D: Streaming quality
 
-- [ ] 11.11 Run unit, property, and fake-integration suites under bursty chunks, parallel tools, delayed REST responses, cancellation, and duplicate events; inspect rendered Discord fixtures manually.
+- [x] 11.11 Run unit, property, and fake-integration suites under bursty chunks, parallel tools, delayed REST responses, cancellation, and duplicate events; inspect rendered Discord fixtures manually.
 
 ## 12. Image input
 
