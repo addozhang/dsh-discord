@@ -142,3 +142,18 @@ web-test 实例已用新构建重启（token 经旧进程 env 静默交接，未
 2. `@bot <任务>` 提交后注意 `discord_prompt_submit_rejected` code——若 `session-not-found`
    属预期：提交流程还差 session.create 前置（design §149 预分配 Session ID），是下一里程碑。
 3. 测试后 **Reset bot token**（已多次跨会话暴露）。
+
+**✅ 已验证（同会话）**：`/project list` 在测试频道返回完整 ephemeral 工作区列表
+（5 个工作区，脱敏 `ws:<uuid>` 引用 + 消重标签）。日志序列与预期一致：
+`discord_slash_dispatch` → `discord_project_list_start`，无 reject、无 followup 失败。
+15.10 的 list 卡点关闭。
+
+**下一增量（按 15.10 E2E 顺序）**：
+1. **`/project bind` 实接**：`createProjectBindFlow`（两阶段 plan/commit + revision 围栏）
+   已就绪且有测试，routeInteraction 的 bind 桩需换成：options 取 `ws:` 引用 →
+   plan（AccessDecision + catalog resolve）→ 确认按钮（type 3 组件走 registry，
+   与 approval 点击同通道）→ commit 写 `bindingStore`。注意 bindings 目前是进程内
+   Map（重启即失，15.10 步骤 7 的 reconciliation 依赖持久化时再接 storageDomain）。
+2. **`@bot` 提交前置**：session.create（design §149 预分配 Session ID），否则
+   `session.prompt` 对未知 sessionId 一律 `session-not-found`。
+3. 测试后 **Reset bot token**。
