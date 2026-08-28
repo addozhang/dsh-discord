@@ -17,9 +17,10 @@ import {
 } from './features/adapter-status.js'
 import { describeDiscordCredential, resolveDiscordBotToken, type DiscordCredentialProvider } from './credential.js'
 import { createRestClient } from './discord/rest.js'
-import { startDiscordAdapter, type BindingsProbe } from './compose.js'
+import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
+import { handleApprovalClick, type DshApprovalRespondPort } from './features/approval-routing.js'
 import { createChannelBindingService } from './state/channel-bindings.js'
 import { createBindingStore } from './state/bindings.js'
 import type { ChannelBinding } from './state/records.js'
@@ -40,6 +41,17 @@ export const Config: z<Config> = DiscordSettingsSchema
 const GATEWAY_INTENTS = (1 << 0) | (1 << 1) | (1 << 9) | (1 << 15)
 
 /**
+ * Emit through the Host's logger service only when it is actually wired:
+ * bare or fake Cordis contexts must not turn an error path into an
+ * unhandled rejection.
+ */
+function emitLog(ctx: Context, level: 'debug' | 'warn', message: unknown): void {
+  const logger = ctx.logger as Partial<Record<'debug' | 'warn', unknown>> | undefined
+  const emit = logger?.[level]
+  if (typeof emit === 'function') (emit as (message: unknown) => void).call(logger, message)
+}
+
+/**
  * Mount the embedded Discord adapter. Composition of the runtime path
  * (Gateway → ingress → command/mention dispatch → Discord REST, plus the
  * reconciliation sweeps) lives in `src/compose.ts` and is started from here.
@@ -50,7 +62,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   let current = normalizeDiscordSettings(config)
   installDiscordSettings(ctx, current, (next) => {
     current = next
-    ctx.logger.debug({
+    emitLog(ctx, 'debug', {
       event: 'discord_settings_applied',
       enabled: current.enabled,
       allowedGuildCount: current.allowedGuildIds.length,
@@ -65,12 +77,13 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   void describeDiscordCredential(ctx.get('credentials') as DiscordCredentialProvider)
     .then((view) => { statusTracker.setCredential(view) })
     .catch((cause: unknown) => {
-      ctx.logger.warn({ event: 'discord_credential_probe_failed', cause: String(cause) })
+      emitLog(ctx, 'warn', { event: 'discord_credential_probe_failed', cause: String(cause) })
       statusTracker.setCredential({ configured: false })
     })
 
   const credentials = ctx.get('credentials') as DiscordCredentialProvider
   const apiProxy = ctx.get('apiProxy') as unknown as {
+    respond: (rpcId: string, payload: unknown) => Promise<unknown>
     sessions: {
       prompt(request: {
         rpcId: string
@@ -104,7 +117,17 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     sessionForThread: () => undefined,
   }
 
-  const runtime = startDiscordAdapter({
+  const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
+  // DSH approval respond face: the client-response echoes the ask's rpcId.
+  const approvalRespondPort: DshApprovalRespondPort = {
+    respond: async ({ rpcId, sessionId, approvalId, outcome }) => {
+      const answer = await (apiProxy.respond as (
+        rpcId: string, payload: { sessionId: string; approvalId: string; outcome: string },
+      ) => Promise<unknown>)(rpcId, { sessionId, approvalId, outcome })
+      return answer === undefined ? { outcome: 'unknown' } : { outcome: 'confirmed' }
+    },
+  }
+  runtimeRef.current = startDiscordAdapter({
     tokenProvider: async () => (await resolveDiscordBotToken(credentials)) ?? undefined,
     socketFactory: (url): GatewaySocket => {
       const socket = new WebSocket(url)
@@ -146,13 +169,34 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
     questions: createQuestionStore(),
     status: statusTracker,
+    routeInteraction: (event) => {
+      const runtime = runtimeRef.current
+      if (runtime === undefined) return
+      // Component clicks (type 3) carry the opaque custom_id; routing
+      // resolves it through the shared registry and submits via respond.
+      if (event.kind !== 'interaction' || event.interactionType !== 3) return
+      const customId = event.data['custom_id']
+      if (typeof customId !== 'string') return
+      const activeRuntime = runtime
+      void handleApprovalClick(
+        {
+          registry: activeRuntime.registry,
+          store: activeRuntime.approvals,
+          port: approvalRespondPort,
+          nowMs: () => Date.now(),
+        },
+        { customId, userId: event.actorId, threadId: event.channelId },
+      ).catch((cause: unknown) => {
+        emitLog(ctx, 'warn', { event: 'discord_approval_click_failed', cause: String(cause) })
+      })
+    },
     logger: {
       warn: (event, detail) => {
-        ctx.logger.warn({ event, detail: typeof detail === 'string' ? detail : JSON.stringify(detail ?? null) })
+        emitLog(ctx, 'warn', { event, detail: typeof detail === 'string' ? detail : JSON.stringify(detail ?? null) })
       },
     },
   })
-  ctx.effect(() => () => { runtime.dispose() }, 'dsh-discord composed runtime')
+  ctx.effect(() => () => { runtimeRef.current?.dispose() }, 'dsh-discord composed runtime')
 }
 
 export {

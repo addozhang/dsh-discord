@@ -60,6 +60,8 @@ export interface CompositionDeps {
 
 export interface DiscordAdapterRuntime {
   registry: ComponentRegistry
+  approvals: ApprovalStore
+  questions: QuestionStore
   started: boolean
   /** Why the runtime did not start (no token ⇒ fail-closed offline). */
   startError?: 'missing-token' | undefined
@@ -144,6 +146,8 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
 
   return {
     registry,
+    approvals: deps.approvals,
+    questions: deps.questions,
     get started() { return started },
     get startError() { return startError },
     dispose() {
