@@ -180,3 +180,30 @@ category 下确保同名频道（标题 slug；非 ASCII 标题回退原名）�
 `ensureGuildChannels` 与工作区频道共用 `ensureCategory`。已部署并重启。
 **待实测**：重跑 `/project bind` 确认返回带频道链接、Discord 出现 `#tmp` 频道且
 mention 在其中生效（仍预期 session-not-found）。**Reset bot token**。
+
+## Kimaki 命令设计借鉴（已落地 + 路线图）
+
+参考：kimaki `main` 分支（`cli/src/discord-command-registration.ts`、`cli/src/commands/*`、
+`website/src/docs/docs/reference/commands.mdx`）。核心模型 channel=project、thread=session
+与我们一致。
+
+**已落地（commit ad8e1c7）**：
+1. **Live autocomplete**（Kimaki `/resume`/`/add-project` 模式）：`bind workspace` 与
+   `list query` 注册 `autocomplete: true`，type 4 交互以 type 8 回 catalog 实时候选
+   （复用 /project list 的脱敏标签 + filterAutocomplete，≤25 条）——ID 从此不用复制粘贴。
+   发现仍受成员鉴权门控：非成员 0 候选。
+2. **`/project info`**：描述本频道绑定（脱敏身份 + 修订 + 绑定人）；canonical path 仅
+   对经验证的 workspace-administrator 渲染（`readWorkspaceDetail` 内存携带，disclosure
+   决定渲染）；未绑定/非成员给精确指引（Kimaki 式 context guards）。
+
+**路线图借鉴（下一里程碑起）**：
+- `/session resume session:` autocomplete ← `session.list`（需要 thread 上下文过滤）。
+- Kimaki 的 reply-affordance 按钮模式：mutating 命令的回复都带操作按钮（/queue 的
+  Remove、tasks 的 cancel）——我们 bind 已有；`/queue remove` 接上时同款。
+- `/last-sessions`（跨工作区最近 20 会话，带 thread 链接）← `session.list` + `session.search`。
+- Kimaki `/model` 无参数时弹交互式选择器——比长参数列表更贴合 Discord；`/model select`
+  接入时考虑 button/select 组件而非字符串参数。
+- 命令守卫精确化：`/steer` `/stop` 仅在 adapter-owned thread 内有效，否则给「此命令需在
+  会话 Thread 中使用」类明确拒绝（Kimaki /abort 的做法）。
+- 名字冲突安全：workspace 频道供给的「不抢占、建 -2 兄弟」策略与 Kimaki
+  createProjectChannels 的 slug 规则同源。
