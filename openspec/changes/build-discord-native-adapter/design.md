@@ -208,7 +208,7 @@ A bot mention carrying non-empty text or a supported image in a bound project ch
 ## Risks / Trade-offs
 
 - **Discord access grants local agent capability** → an explicit Guild allowlist is the outer gate; member and administrator policies apply only inside it; deny rules win.
-- **All registered Workspaces are selectable** → hide paths by default, keep binding/model mutation admin-only, show the broad authority during setup, and preserve an additive ACL seam.
+- **All registered Workspaces are selectable** → keep binding and model mutation admin-only, show paths only inside ephemeral adapter responses (§3), and preserve an additive ACL seam.
 - **DSH is pre-1.0** → pin exact compatible packages, validate capabilities at startup, and run contract tests against every supported version.
 - **`apiProxy` event streams are Host-global** → filter each frame by exact bound Session and never infer Discord ownership from Session ID alone.
 - **DSH Web may use the same Session** → Discord owns only a Turn whose durable user message carries its submitted request ID; running status alone grants no control.

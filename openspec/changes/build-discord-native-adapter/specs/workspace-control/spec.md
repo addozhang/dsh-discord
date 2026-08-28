@@ -26,6 +26,21 @@ The bind action SHALL NOT capture the channel it was typed in. Instead, Kimaki a
 - **WHEN** a same-name channel under the adapter category is bound to a different Workspace
 - **THEN** the adapter creates a `-2` sibling channel for the new Workspace and leaves the other Workspace's channel untouched
 
+### Requirement: Bind confirmation controls are single-owner and bounded
+Bind confirmation and cancellation buttons SHALL be bound to the administrator who invoked the command, SHALL carry only opaque registry ids on the Discord wire, and SHALL expire within the interaction-token lifetime. Only the owning administrator's click SHALL trigger the provisioning write; expired controls SHALL refuse writes idempotently.
+
+#### Scenario: Another member clicks the confirm button
+- **WHEN** a member other than the invoking administrator clicks confirm or cancel
+- **THEN** the adapter answers with an ephemeral denial and leaves the pending control unchanged
+
+#### Scenario: Confirmation after the control expired
+- **WHEN** the confirm button is clicked after its registry entry expired
+- **THEN** the adapter performs no provisioning and asks the user to rerun `/project bind`
+
+#### Scenario: Confirm clicked twice
+- **WHEN** the owning administrator confirms twice
+- **THEN** the first click provisions (or links) the Workspace home channel and the second resolves to the same idempotent already-exists answer without creating a duplicate
+
 ### Requirement: Workspace binding is administrative
 The adapter SHALL restrict binding and rebinding a project channel to principals with the configured Workspace-management permission.
 
