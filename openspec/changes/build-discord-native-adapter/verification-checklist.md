@@ -108,3 +108,37 @@ ship automatically.
 - **新卡点**：`apiProxy.workspace.list({rpcId, payload:{}})` 在宿主进程内 await 后**永不返回**（无 reject），导致 followUp 永不发出。
 - **下一步**：1) 确认嵌入式宿主内 apiProxy.workspace.list 的正确调用姿势（RpcRequest 是否需完整 rpcId 品牌/或应改走 cordis service 注入的 workspace 注册表直读）；2) 给调用加超时+日志；3) 或改用 REST 端点（/api/... 经 loopback）。
 - 提醒：测试后 Reset bot token。
+
+## 15.10 调试快照 4（快照 3 诊断修正 + 信封解析修复，已重新部署）
+
+**对快照 3 的修正**：`{rpcId, payload}` 调用姿势本来就是对的（`ctx.apiProxy` 即宿主直连
+ApiProxyService，web profile 的 `api-gateway` 行；`workspace.list` 是同步 resolve 的直连
+实现，不可能挂起）。「挂起」是从无日志反推的误诊——真正的问题是两处确定性缺陷：
+
+1. **信封解析形状错误**：直连返回 `RpcResponse`＝`{rpcId, result:{ok, value:{items}}}`，
+   代码却读 `listed?.payload?.workspaces`（永远 undefined）；`submitPrompt` 读
+   `response?.payload?.accepted` 同错（会导致所有 prompt 永远 `unknown`）。
+2. **followUp 静默失败**：REST 客户端对 4xx 是 **resolve（非 reject）**，`void
+   rest.request(...)` 会把 followUp 被拒（如 404）无声吞掉——与「挂起」的表象一致。
+
+**修复（commit: fix: parse apiProxy RpcResponse envelope…）**：
+- 新模块 `src/dsh/api-proxy-face.ts`：正确的 `result.ok/value` 解析；`withRpcTimeout`
+  有界窗口（catalog 5s / prompt 30s，超时→`unknown`，绝不让 handler 无声卡死）；
+  `createWorkspaceCatalogPort` 复用已测的 `createProjectListView`（脱敏标签/分页）；
+  `promptSession` 返回 sanitized 的 `rejected.code`（如 `session-not-found`）。
+- `routeInteraction`：每个阶段 rpcLog 到 stderr（`discord_slash_dispatch` /
+  `discord_project_list_start` / `discord_workspace_list_*` / `discord_followup_failed`）；
+  followUp 改为 await+记日志；handler try/catch 兜底，失败也回 ephemeral 错误提示（fail-visible）。
+
+**部署状态**：518 tests / 79 files、typecheck、strict lint 全绿；`pnpm build` + pack 后已按
+「先 remove 再 add」重装进 web-test profile（新版含 `discord_project_list_start` 诊断行）。
+web-test 实例已用新构建重启（token 经旧进程 env 静默交接，未在任何输出中暴露），
+日志 `/tmp/dsh-web-test.log`，启动干净。
+
+**下次会话从这里继续**：
+1. 在测试频道执行 `/project list`，预期日志序列：`discord_slash_dispatch` →
+   `discord_project_list_start` → （无 reject）→ Discord 出现 ephemeral 工作区列表。
+   若见 `discord_workspace_list_rejected`/`discord_followup_failed`，按 code 定位。
+2. `@bot <任务>` 提交后注意 `discord_prompt_submit_rejected` code——若 `session-not-found`
+   属预期：提交流程还差 session.create 前置（design §149 预分配 Session ID），是下一里程碑。
+3. 测试后 **Reset bot token**（已多次跨会话暴露）。
