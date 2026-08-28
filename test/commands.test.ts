@@ -83,11 +83,14 @@ describe('milestone one command set', () => {
     expect(options.map(option => option['type'])).toEqual([1, 1, 1])
     const bind = options.find(option => option['name'] === 'bind') as Record<string, unknown>
     const bindOptions = bind['options'] as Array<Record<string, unknown>>
+    // The workspace option autocompletes (type-4 interactions): live
+    // candidates while typing, so no id is ever copy-pasted.
     expect(bindOptions).toEqual([{
       type: 3,
       name: 'workspace',
       description: expect.any(String) as unknown,
       required: true,
+      autocomplete: true,
     }])
   })
 })

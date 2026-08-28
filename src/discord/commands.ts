@@ -10,6 +10,11 @@
 export interface CommandArgument {
   name: string
   required: boolean
+  /**
+   * Discord sends a type-4 autocomplete interaction while the user types;
+   * the adapter answers with live choices (Kimaki's /resume pattern).
+   */
+  autocomplete?: boolean
 }
 
 /** A subcommand of a top-level command. */
@@ -42,8 +47,8 @@ function grouped(name: string, description: string, subcommands: CommandSubcomma
 /** The complete Milestone 1 command set, in registration order. */
 export const MILESTONE_ONE_COMMANDS: readonly AdapterCommand[] = [
   grouped('project', 'Bind this channel to a DSH workspace', [
-    { name: 'list', options: [{ name: 'query', required: false }] },
-    { name: 'bind', options: [{ name: 'workspace', required: true }] },
+    { name: 'list', options: [{ name: 'query', required: false, autocomplete: true }] },
+    { name: 'bind', options: [{ name: 'workspace', required: true, autocomplete: true }] },
     { name: 'info' },
   ]),
   grouped('session', 'Start or resume a DSH session', [
@@ -85,6 +90,7 @@ function argumentToWire(option: CommandArgument): Record<string, unknown> {
     name: option.name,
     description: option.name,
     required: option.required,
+    ...(option.autocomplete === true ? { autocomplete: true } : {}),
   }
 }
 

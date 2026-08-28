@@ -20,6 +20,8 @@ import { parseWorkspaceReference } from '../policy/disclosure.js'
 export interface WorkspaceCatalogEntry {
   workspaceId: string
   title: string
+  /** Canonical directory; present in Host responses, rendered only to proven administrators. */
+  path?: string | undefined
 }
 
 /** The narrow slice of ApiProxy this module speaks. */
@@ -164,7 +166,61 @@ export function createWorkspaceCatalogPort(
         code: result.error.code,
         message: result.error.message,
       })
-      return { outcome: 'failed' }    },
+      return { outcome: 'failed' }
+    },
+  }
+}
+
+export type WorkspaceDetailOutcome =
+  | { outcome: 'found'; workspace: { id: string; title: string; path: string | undefined } }
+  | { outcome: 'stale' }
+  | { outcome: 'failed' }
+  | { outcome: 'unknown' }
+
+/**
+ * Read one Workspace's full view (title plus canonical path). The path is
+ * for the administrator-only ephemeral info response — the disclosure
+ * policy owns whether it ever renders; this face only carries it in memory.
+ */
+export async function readWorkspaceDetail(
+  dsh: DshApiProxyFace,
+  reference: string,
+  options: ApiProxyFaceOptions = {},
+): Promise<WorkspaceDetailOutcome> {
+  const timeoutMs = options.timeoutMs ?? CATALOG_TIMEOUT_MS
+  const log = options.log
+  let response: RpcResponseShape<{ items: WorkspaceCatalogEntry[] }>
+  try {
+    response = await withRpcTimeout(dsh.workspace.list(mintRequest({})), timeoutMs)
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      log?.('discord_workspace_detail_timeout', { timeoutMs })
+      return { outcome: 'unknown' }
+    }
+    log?.('discord_workspace_detail_threw', { cause: String(cause) })
+    return { outcome: 'failed' }
+  }
+  const result = (response as Partial<RpcResponseShape<{ items: WorkspaceCatalogEntry[] }>> | undefined)?.result
+  if (result === undefined) {
+    log?.('discord_workspace_detail_malformed')
+    return { outcome: 'failed' }
+  }
+  if (!result.ok) {
+    log?.('discord_workspace_detail_rejected', { code: result.error.code })
+    return { outcome: 'failed' }
+  }
+  const id = parseWorkspaceReference(reference)
+  const found = Array.isArray(result.value.items)
+    ? result.value.items.find(workspace => workspace.workspaceId === id)
+    : undefined
+  if (found === undefined) return { outcome: 'stale' }
+  return {
+    outcome: 'found',
+    workspace: {
+      id: found.workspaceId,
+      title: found.title,
+      path: typeof found.path === 'string' ? found.path : undefined,
+    },
   }
 }
 

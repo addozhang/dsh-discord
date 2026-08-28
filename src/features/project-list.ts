@@ -89,3 +89,32 @@ export async function createProjectListView(port: ProjectListPort, request: Proj
     navValues: page.navValues,
   }
 }
+
+/** One Discord autocomplete choice: display label plus the opaque value. */
+export interface AutocompleteChoice {
+  name: string
+  value: string
+}
+
+/**
+ * Build the autocomplete choices for a workspace reference option (the
+ * Kimaki `/resume` pattern: the option lists live candidates as you type,
+ * so no id is ever copy-pasted). Label work comes from the same sanitized
+ * labels as `/project list`; the query narrows via the shared filter.
+ */
+export function workspaceAutocompleteChoices(
+  catalog: ReadonlyArray<{ id: string; title: string }>,
+  query: string,
+): AutocompleteChoice[] {
+  const entries = catalog.map(workspace => ({
+    id: workspace.id,
+    title: safeTitle(workspace.title),
+  }))
+  const labeled = workspaceLabels(entries)
+  const selectable: SelectorOption[] = labeled.map(entry => ({
+    label: entry.label,
+    value: workspaceReference(entry.id),
+  }))
+  const matches = filterAutocomplete(selectable, query, Number.POSITIVE_INFINITY)
+  return matches.map(match => ({ name: match.label, value: match.value }))
+}

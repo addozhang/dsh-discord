@@ -19,8 +19,9 @@ import { describeDiscordCredential, resolveDiscordBotToken, type DiscordCredenti
 import { createRestClient } from './discord/rest.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
-import { createWorkspaceCatalogPort, createWorkspaceResolver, promptSession, type DshApiProxyFace } from './dsh/api-proxy-face.js'
-import { createProjectListView } from './features/project-list.js'
+import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, type DshApiProxyFace } from './dsh/api-proxy-face.js'
+import { createProjectListView, workspaceAutocompleteChoices } from './features/project-list.js'
+import { projectInfo } from './features/project-info.js'
 import { createProjectBindFlow, type ProjectBindPlan } from './features/project-bind.js'
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
@@ -292,6 +293,40 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         commandName: (event as { commandName?: string }).commandName,
         hasToken: interactionToken !== undefined,
       })
+      // Autocomplete (type 4, the Kimaki /resume pattern): live choices for
+      // workspace options so no id is ever copy-pasted. Discovery is gated
+      // by membership — non-members get zero choices.
+      if (event.kind === 'interaction' && event.interactionType === 4 && interactionToken !== undefined) {
+        if (event.commandName !== 'project') return
+        const decision = evaluateAuthorization(policy(), {
+          guildId: event.guildId,
+          userId: event.actorId,
+          roleIds: event.roleIds,
+          memberPermissions: event.memberPermissions,
+          isBot: event.isBot,
+        })
+        const choices: Array<{ name: string; value: string }> = []
+        if (decision.allowed) {
+          const wireOptions = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string; focused?: boolean }> }> | undefined
+          const sub = Array.isArray(wireOptions) ? wireOptions[0] : undefined
+          const focused = Array.isArray(sub?.options) ? sub.options.find(option => option.focused === true) : undefined
+          const query = typeof focused?.value === 'string' ? focused.value : ''
+          const catalog = await catalogPort.listWorkspaces()
+          if (catalog.outcome === 'completed') {
+            choices.push(...workspaceAutocompleteChoices(catalog.workspaces, query).slice(0, 25))
+          }
+        }
+        await withRest(async (rest) => {
+          const posted = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, {
+            type: 8,
+            data: { choices },
+          })
+          if (posted.outcome !== 'completed') {
+            rpcLog('discord_autocomplete_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
+          }
+        })
+        return
+      }
       if (event.kind === 'interaction' && event.interactionType === 2 && interactionToken !== undefined) {
         const rest = createRestClient({ token: (await resolveDiscordBotToken(credentials)) ?? '' })
         const ack = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 5, data: { flags: 64 } })
@@ -379,6 +414,52 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
               const rows = view.items.map(item => `• ${item.label} — \`${item.value}\``)
               const pager = view.pageCount > 1 ? `\n（第 ${String(view.pageIndex + 1)}/${String(view.pageCount)} 页）` : ''
               await followUp(rows.length === 0 ? '（没有已注册的工作区）' : ['**可用工作区**', ...rows].join('\n') + pager)
+              return
+            }
+            if (subName === 'info') {
+              // Info describes THIS channel's bound workspace. Members see
+              // the sanitized identity; the path renders only for proven
+              // workspace administrators (ephemeral either way).
+              const decision = evaluateAuthorization(policy(), {
+                guildId: event.guildId,
+                userId: event.actorId,
+                roleIds: event.roleIds,
+                memberPermissions: event.memberPermissions,
+                isBot: event.isBot,
+              })
+              const binding = bindingStore.get(bindChannelKey(event.guildId, event.channelId))
+              if (binding === undefined) {
+                await followUp(decision.allowed ? '此频道尚未绑定工作区；用 /project bind 选择。' : '⛔ 此频道未绑定工作区。')
+                return
+              }
+              const detail = await readWorkspaceDetail(apiProxy, workspaceReference(binding.workspaceId), { log: rpcLog })
+              if (!decision.allowed) {
+                // Refuse identity disclosure to non-members even when bound.
+                await followUp('⛔ 只有成员可以查看此频道的绑定。')
+                return
+              }
+              if (detail.outcome !== 'found') {
+                await followUp(detail.outcome === 'unknown'
+                  ? '⚠️ 工作区目录未在限时内确认（结果未知），请稍后重试。'
+                  : detail.outcome === 'stale'
+                    ? '⚠️ 绑定的工作区已不存在；请用 /project bind 重新选择。'
+                    : '⚠️ 无法读取工作区目录，请稍后重试。')
+                return
+              }
+              const view = projectInfo({
+                decision,
+                workspace: { id: detail.workspace.id, title: detail.workspace.title, path: detail.workspace.path },
+              })
+              if (view.outcome !== 'info') {
+                await followUp('⛔ 只有成员可以查看此频道的绑定。')
+                return
+              }
+              const lines = [
+                `**${view.workspace.label}** — \`${workspaceReference(view.workspace.id)}\``,
+                `修订 ${String(binding.revision)}（由 <@${binding.boundBy}> 绑定）`,
+              ]
+              if (view.workspace.path !== undefined) lines.push(`路径：\`${view.workspace.path}\``)
+              await followUp(lines.join('\n'))
               return
             }
             await followUp('未知子命令。')
