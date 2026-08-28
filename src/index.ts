@@ -19,6 +19,8 @@ import { describeDiscordCredential, resolveDiscordBotToken, type DiscordCredenti
 import { createRestClient } from './discord/rest.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
+import { createWorkspaceCatalogPort, promptSession, type DshApiProxyFace } from './dsh/api-proxy-face.js'
+import { createProjectListView } from './features/project-list.js'
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
 import { handleApprovalClick, type DshApprovalRespondPort } from './features/approval-routing.js'
@@ -86,16 +88,19 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     })
 
   const credentials = ctx.get('credentials') as DiscordCredentialProvider
-  const apiProxy = ctx.get('apiProxy') as unknown as {
-    workspace: { list(request: { rpcId: string; payload: Record<string, never> }): Promise<unknown> }
+  // The in-process apiProxy face: domain methods resolve RpcRequest →
+  // RpcResponse and never throw business errors; boundedness and outcome
+  // logging live in src/dsh/api-proxy-face.ts.
+  const apiProxy = ctx.get('apiProxy') as unknown as DshApiProxyFace & {
     respond: (rpcId: string, payload: unknown) => Promise<unknown>
-    sessions: {
-      prompt(request: {
-        rpcId: string
-        payload: { sessionId: string; mode: 'queue'; content: Array<{ type: 'text'; text: string }> }
-      }): Promise<unknown>
-    }
   }
+  // Every apiProxy outcome is visible on stderr: the live profile pass reads
+  // this channel, and a silent call can never again be misread as a hang.
+  const rpcLog = (event: string, detail?: unknown): void => {
+    console.error(`[dsh-discord] ${event}:`, typeof detail === 'string' ? detail : JSON.stringify(detail ?? null))
+    emitLog(ctx, 'debug', { event, detail: typeof detail === 'string' ? detail : JSON.stringify(detail ?? null) })
+  }
+  const catalogPort = createWorkspaceCatalogPort(apiProxy, { log: rpcLog })
   const policy = (): PolicyTable => ({
     allowedGuildIds: [...current.allowedGuildIds],
     memberUserIds: [...current.memberUserIds],
@@ -190,16 +195,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     },
     submitPrompt: {
       submit: async (request) => {
-        const response = await apiProxy.sessions.prompt({
-          rpcId: crypto.randomUUID(),
-          payload: {
-            sessionId: request.sessionId,
-            mode: 'queue',
-            content: [{ type: 'text', text: request.prompt }],
-          },
-        }) as { payload?: { accepted?: boolean } } | undefined
-        if (response?.payload?.accepted === true) return { outcome: 'accepted' }
-        return { outcome: 'unknown' }
+        // Definitive Host errors surface as rejections (the sanitized code);
+        // a timeout or transport throw is `unknown` — never auto-resubmitted.
+        return promptSession(apiProxy, request, { log: rpcLog })
       },
     },
     approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
@@ -210,24 +208,52 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       if (runtime === undefined) return
       // Slash commands (type 2): deferred ephemeral ack, then the feature
       // result as an ephemeral followup. /project list+bind close the loop.
-      console.error('[dsh-discord] slash dispatch:', ((event as { interactionId?: string }).interactionId), ((event as { commandName?: string }).commandName), 'token?', interactionToken !== undefined)
+      rpcLog('discord_slash_dispatch', {
+        interactionId: (event as { interactionId?: string }).interactionId,
+        commandName: (event as { commandName?: string }).commandName,
+        hasToken: interactionToken !== undefined,
+      })
       if (event.kind === 'interaction' && event.interactionType === 2 && interactionToken !== undefined) {
         const rest = createRestClient({ token: (await resolveDiscordBotToken(credentials)) ?? '' })
         const ack = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 5, data: { flags: 64 } })
-        if (ack.outcome !== 'completed') { console.error('[dsh-discord] ack failed:', ack.outcome); return }
-        const followUp = (content: string): void => {
-          void rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: 64 })
+        if (ack.outcome !== 'completed') { rpcLog('discord_ack_failed', ack.outcome); return }
+        // Deferred-ack followups must never fail silently: the REST client
+        // resolves (never rejects) 4xx outcomes, so a void'ed call would drop
+        // the failure without a trace.
+        const followUp = async (content: string): Promise<void> => {
+          const posted = await rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: 64 })
+          if (posted.outcome !== 'completed') {
+            rpcLog('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
+          }
         }
-        if (event.commandName === 'project') {
-          const options = event.data['options'] as Array<{ name: string; value?: string }> | undefined
-          const subName = Array.isArray(options) ? options[0]?.name : undefined
-          if (subName === 'bind') {
-            followUp('Bind: 选择器将在下个迭代提供；请先用 /project list 查看 ID。')
+        try {
+          if (event.commandName === 'project') {
+            const options = event.data['options'] as Array<{ name: string; value?: string }> | undefined
+            const subName = Array.isArray(options) ? options[0]?.name : undefined
+            if (subName === 'bind') {
+              await followUp('Bind: 选择器将在下个迭代提供；请先用 /project list 查看 ID。')
+              return
+            }
+            if (subName === 'list') {
+              rpcLog('discord_project_list_start', { interactionId: event.interactionId })
+              const view = await createProjectListView(catalogPort, { selectionId: event.interactionId })
+              if (view.outcome !== 'ok') {
+                await followUp(view.reason === 'workspace-catalog-unknown'
+                  ? '⚠️ 工作区目录未在限时内确认（结果未知），请稍后重试。'
+                  : '⚠️ 无法读取工作区目录，请稍后重试。')
+                return
+              }
+              const rows = view.items.map(item => `• ${item.label} — \`${item.value}\``)
+              const pager = view.pageCount > 1 ? `\n（第 ${String(view.pageIndex + 1)}/${String(view.pageCount)} 页）` : ''
+              await followUp(rows.length === 0 ? '（没有已注册的工作区）' : ['**可用工作区**', ...rows].join('\n') + pager)
+              return
+            }
+            await followUp('未知子命令。')
             return
           }
-          const listed = await apiProxy.workspace.list({ rpcId: crypto.randomUUID(), payload: {} }) as { payload?: { workspaces?: Array<{ workspaceId: string; title: string }> } } | undefined
-          const rows = (listed?.payload?.workspaces ?? []).map((w) => `• ${w.title} (${w.workspaceId.slice(0, 8)}…)`)
-          followUp(rows.length === 0 ? '（没有已注册的工作区）' : ['**可用工作区**', ...rows].join('\n'))
+        } catch (cause) {
+          console.error('[dsh-discord] slash handler failed:', cause)
+          await followUp('⚠️ 命令处理失败，请稍后重试。').catch(() => {})
         }
         return
       }
