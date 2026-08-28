@@ -13,6 +13,8 @@
  */
 
 import type { ProjectListPort } from '../features/project-list.js'
+import type { WorkspaceResolver } from '../features/project-bind.js'
+import { parseWorkspaceReference } from '../policy/disclosure.js'
 
 /** The workspace rows the catalog port needs (subset of WorkspaceView). */
 export interface WorkspaceCatalogEntry {
@@ -81,6 +83,34 @@ export interface ApiProxyFaceOptions {
 /** Mint a request envelope the way every client shape does. */
 function mintRequest<P>(payload: P): RpcRequestShape<P> {
   return { rpcId: crypto.randomUUID(), payload }
+}
+
+/**
+ * The bind flow's catalog verifier: resolves an opaque `ws:` reference
+ * against the live workspace list. A well-formed reference the catalog no
+ * longer knows — and any malformed one — resolve `stale` (fail-closed, no
+ * write can follow); a Host error is `failed`; a timeout is `unknown`.
+ */
+export function createWorkspaceResolver(
+  dsh: DshApiProxyFace,
+  options: ApiProxyFaceOptions = {},
+): WorkspaceResolver {
+  const port = createWorkspaceCatalogPort(dsh, options)
+  return {
+    async resolve(reference) {
+      const catalog = await port.listWorkspaces()
+      if (catalog.outcome !== 'completed') {
+        return catalog.outcome === 'unknown' ? { outcome: 'unknown' } : { outcome: 'failed' }
+      }
+      const id = parseWorkspaceReference(reference)
+      const found = id === undefined
+        ? undefined
+        : catalog.workspaces.find(workspace => workspace.id === id)
+      return found === undefined
+        ? { outcome: 'stale' }
+        : { outcome: 'found', workspace: { id: found.id, title: found.title } }
+    },
+  }
 }
 
 /**

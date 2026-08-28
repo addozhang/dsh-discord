@@ -114,6 +114,13 @@ export function workspaceReference(id: string): string {
   return `ws:${id}`
 }
 
+/** The inverse of workspaceReference; `undefined` for any other string. */
+export function parseWorkspaceReference(reference: string): string | undefined {
+  if (!reference.startsWith('ws:')) return undefined
+  const id = reference.slice(3)
+  return id === '' ? undefined : id
+}
+
 export interface WorkspaceDetail {
   id: string
   title: string

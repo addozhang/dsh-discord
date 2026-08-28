@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createWorkspaceCatalogPort,
+  createWorkspaceResolver,
   promptSession,
   RpcTimeoutError,
   withRpcTimeout,
@@ -82,6 +83,42 @@ describe('createWorkspaceCatalogPort', () => {
     })
     await expect(port.listWorkspaces()).resolves.toEqual({ outcome: 'failed' })
     expect(logged.some(([event]) => event === 'discord_workspace_list_malformed')).toBe(true)
+  })
+})
+
+describe('createWorkspaceResolver', () => {
+  const withCatalog = (items: Array<{ workspaceId: string; title: string }>): DshApiProxyFace =>
+    face(Promise.resolve(ok({ items })))
+
+  it('resolves a known ws: reference to the sanitized workspace pair', async () => {
+    const resolver = createWorkspaceResolver(withCatalog([
+      { workspaceId: 'ws-1', title: 'Alpha' },
+    ]))
+    await expect(resolver.resolve('ws:ws-1')).resolves.toEqual({
+      outcome: 'found',
+      workspace: { id: 'ws-1', title: 'Alpha' },
+    })
+  })
+
+  it('resolves a well-formed unknown reference as stale', async () => {
+    const resolver = createWorkspaceResolver(withCatalog([]))
+    await expect(resolver.resolve('ws:gone')).resolves.toEqual({ outcome: 'stale' })
+  })
+
+  it('resolves a malformed reference as stale without reading a workspace', async () => {
+    const resolver = createWorkspaceResolver(withCatalog([{ workspaceId: 'ws-1', title: 'Alpha' }]))
+    await expect(resolver.resolve('not-a-reference')).resolves.toEqual({ outcome: 'stale' })
+    await expect(resolver.resolve('ws:')).resolves.toEqual({ outcome: 'stale' })
+  })
+
+  it('propagates a hung catalog as unknown', async () => {
+    const resolver = createWorkspaceResolver(face(new Promise<never>(() => {})), { timeoutMs: 10 })
+    await expect(resolver.resolve('ws:ws-1')).resolves.toEqual({ outcome: 'unknown' })
+  })
+
+  it('propagates a definitive Host error as failed', async () => {
+    const resolver = createWorkspaceResolver(face(Promise.resolve(err('internal', 'boom'))))
+    await expect(resolver.resolve('ws:ws-1')).resolves.toEqual({ outcome: 'failed' })
   })
 })
 

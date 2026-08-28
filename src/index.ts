@@ -19,15 +19,17 @@ import { describeDiscordCredential, resolveDiscordBotToken, type DiscordCredenti
 import { createRestClient } from './discord/rest.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
-import { createWorkspaceCatalogPort, promptSession, type DshApiProxyFace } from './dsh/api-proxy-face.js'
+import { createWorkspaceCatalogPort, createWorkspaceResolver, promptSession, type DshApiProxyFace } from './dsh/api-proxy-face.js'
 import { createProjectListView } from './features/project-list.js'
+import { createProjectBindFlow, type ProjectBindPlan } from './features/project-bind.js'
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
 import { handleApprovalClick, type DshApprovalRespondPort } from './features/approval-routing.js'
 import { channelBindingKey } from './state/domain.js'
 import { createBindingStore } from './state/bindings.js'
 import type { ChannelBinding } from './state/records.js'
-import type { PolicyTable } from './policy/authorization.js'
+import { evaluateAuthorization, type PolicyTable } from './policy/authorization.js'
+import { workspaceReference } from './policy/disclosure.js'
 import type { GatewaySocket } from './gateway/gateway.js'
 
 /** Stable Cordis plugin name for diagnostics. */
@@ -123,12 +125,20 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     delete: key => Promise.resolve(rows.delete(key)),
   })
   const bindings: BindingsProbe = {
-    workspaceForChannel: channelId =>
+    workspaceForChannel: (guildId, channelId) =>
       bindingStore.get(channelBindingKey({
-        applicationId: applicationIdRef.current, guildId: '', channelId,
+        applicationId: applicationIdRef.current, guildId, channelId,
       }))?.workspaceId,
     sessionForThread: () => undefined,
   }
+
+  // The bind flow's two phases plan against the live catalog and commit
+  // through the revision-fenced store; the Discord confirm button carries
+  // only an opaque registry id between the phases.
+  const bindFlow = createProjectBindFlow({
+    resolver: createWorkspaceResolver(apiProxy, { log: rpcLog }),
+    bindings: bindingStore,
+  })
 
   const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
   // DSH approval respond face: the client-response echoes the ask's rpcId.
@@ -220,18 +230,72 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         // Deferred-ack followups must never fail silently: the REST client
         // resolves (never rejects) 4xx outcomes, so a void'ed call would drop
         // the failure without a trace.
-        const followUp = async (content: string): Promise<void> => {
-          const posted = await rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: 64 })
+        const followUp = async (
+          content: string,
+          components?: Array<unknown>,
+        ): Promise<void> => {
+          const posted = await rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, {
+            content,
+            flags: 64,
+            ...(components === undefined ? {} : { components }),
+          })
           if (posted.outcome !== 'completed') {
             rpcLog('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
           }
         }
+        const buttonRow = (confirmId: string, cancelId: string): Array<unknown> => [{
+          type: 1,
+          components: [
+            { type: 2, style: 3, label: '确认绑定', custom_id: confirmId },
+            { type: 2, style: 4, label: '取消', custom_id: cancelId },
+          ],
+        }]
         try {
           if (event.commandName === 'project') {
-            const options = event.data['options'] as Array<{ name: string; value?: string }> | undefined
-            const subName = Array.isArray(options) ? options[0]?.name : undefined
+            const options = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string }> }> | undefined
+            const subcommand = Array.isArray(options) ? options[0] : undefined
+            const subName = subcommand?.name
             if (subName === 'bind') {
-              await followUp('Bind: 选择器将在下个迭代提供；请先用 /project list 查看 ID。')
+              // `/project bind workspace:<ws:id>`: plan against the live
+              // catalog, then hand the decision to an ephemeral confirm
+              // button. Only the opaque registry id crosses the wire.
+              const wireOptions = Array.isArray(subcommand?.options) ? subcommand.options : []
+              const reference = wireOptions.find(option => option.name === 'workspace')?.value
+              if (typeof reference !== 'string' || reference === '') {
+                await followUp('用法：/project bind workspace:<从 /project list 复制的引用>')
+                return
+              }
+              const decision = evaluateAuthorization(policy(), {
+                guildId: event.guildId,
+                userId: event.actorId,
+                roleIds: event.roleIds,
+                memberPermissions: event.memberPermissions,
+                isBot: event.isBot,
+              })
+              const plan = await bindFlow.plan({
+                decision,
+                scope: {
+                  applicationId: applicationIdRef.current,
+                  guildId: event.guildId,
+                  channelId: event.channelId,
+                },
+                actorId: event.actorId,
+                reference,
+                confirmed: false,
+              })
+              if (plan.outcome !== 'planned') {
+                await followUp(plan.reason === 'not-authorized'
+                  ? '⛔ 只有工作区管理员可以绑定频道。'
+                  : plan.reason === 'workspace-no-longer-registered'
+                    ? '⚠️ 该工作区已不存在，请用 /project list 重新选择。'
+                    : '⚠️ 工作区目录暂时不可用，请稍后重试。')
+                return
+              }
+              const expiresAtMs = Date.now() + 15 * 60 * 1000
+              const confirmId = runtime.registry.register({ kind: 'project-bind', action: 'confirm', plan, actorId: event.actorId, expiresAtMs })
+              const cancelId = runtime.registry.register({ kind: 'project-bind', action: 'cancel', plan, actorId: event.actorId, expiresAtMs })
+              rpcLog('discord_project_bind_planned', { interactionId: event.interactionId, workspaceId: plan.workspaceId })
+              await followUp(`将把当前频道绑定到工作区 \`${reference}\`？`, buttonRow(confirmId, cancelId))
               return
             }
             if (subName === 'list') {
@@ -257,12 +321,48 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         }
         return
       }
-      // Component clicks (type 3) carry the opaque custom_id; routing
-      // resolves it through the shared registry and submits via respond.
+      // Component clicks (type 3) carry the opaque custom_id. Bind
+      // confirmations resolve first; everything else falls through to the
+      // approval routing, which owns its own registry contexts.
       if (event.kind !== 'interaction' || event.interactionType !== 3) return
       const customId = event.data['custom_id']
       if (typeof customId !== 'string') return
       const activeRuntime = runtime
+      const resolved = activeRuntime.registry.resolve(customId, Date.now())
+      const bindContext = resolved.found ? resolved.context : undefined
+      if (bindContext?.['kind'] === 'project-bind') {
+        if (interactionToken === undefined) return
+        const rest = createRestClient({ token: (await resolveDiscordBotToken(credentials)) ?? '' })
+        // Deferred update ack (type 6): keeps the ephemeral visible while the
+        // commit resolves; the result arrives as a fresh ephemeral followup.
+        const clicked = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
+        if (clicked.outcome !== 'completed') { rpcLog('discord_ack_failed', clicked.outcome); return }
+        const followUpResult = async (content: string): Promise<void> => {
+          const posted = await rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: 64 })
+          if (posted.outcome !== 'completed') {
+            rpcLog('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
+          }
+        }
+        const plan = bindContext['plan'] as ProjectBindPlan | undefined
+        const owner = bindContext['actorId']
+        if (plan === undefined || plan.outcome !== 'planned' || owner !== event.actorId) {
+          // Another member's button: deny ephemerally and leave the control
+          // pending for its rightful owner.
+          await followUpResult('⛔ 此确认不属于你。')
+          return
+        }
+        const cancelled = bindContext['action'] !== 'confirm'
+        const result = await bindFlow.commit(plan, { cancelled })
+        rpcLog('discord_project_bind_commit', { action: bindContext['action'], outcome: result.outcome })
+        if (result.outcome === 'bound') {
+          await followUpResult(`✅ 已绑定到工作区 \`${workspaceReference(result.binding.workspaceId)}\`（修订 ${String(result.binding.revision)}）。`)
+          return
+        }
+        await followUpResult(cancelled
+          ? '已取消，绑定未变更。'
+          : '⚠️ 绑定状态已变化，请重新执行 /project bind。')
+        return
+      }
       void handleApprovalClick(
         {
           registry: activeRuntime.registry,
