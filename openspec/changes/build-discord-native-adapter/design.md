@@ -68,11 +68,9 @@ A DSH Workspace ID is the authoritative logical target. Canonical path and title
 - Multi-bot support: deferred to avoid multiplying credential, connection, and lifecycle states before the core model is proven.
 - Direct messages: deferred because they have no Guild authorization context or project-channel/thread mapping and require a separate product model.
 
-### 3. All registered Workspaces are selectable, with least path disclosure
+### 3. All registered Workspaces are selectable, with Kimaki-style path display
 
-The current Host's complete Workspace registry is the Milestone 1 selection set. Authorization gates discovery, but no additional path allowlist filters registered entries. Native autocomplete/select menus use opaque Workspace IDs and display labels. Duplicate titles are disambiguated with a short Workspace-ID suffix, not a filesystem path. Absolute paths appear only in an explicit ephemeral administrator detail response and never in Discord channel metadata or public messages.
-
-This intentionally treats DSH registration as administrative admission for selection, not as proof that every user may see filesystem paths.
+The current Host's complete Workspace registry is the Milestone 1 selection set. Authorization gates discovery, but no additional path allowlist filters registered entries. Autocomplete/select options use opaque Workspace IDs as values and display labels; duplicate titles are disambiguated with a short Workspace-ID suffix. Following the deployment owner's explicit decision for this self-hosted, trusted-Guild product, filesystem paths are NOT treated as sensitive: they may appear in ephemeral responses (for example an abbreviated path in autocomplete labels, or the full path in `/project info`), available to every authorized member. Paths still never appear in channel names, topics, or other durable channel metadata.
 
 **Trade-off:** an authorized Session user can cause work in any registered Workspace. Deployment guidance must require a dedicated trusted Discord server or tightly scoped roles. A future Workspace ACL can narrow this without changing mapping identity.
 
@@ -81,6 +79,12 @@ This intentionally treats DSH registration as administrative admission for selec
 An authorized message in a bound project channel creates work only when it explicitly mentions the bot. The adapter creates or deterministically recovers one Thread for that source message, creates one DSH Session in the bound Workspace, commits the binding, and submits the prompt with at-most-once preference. Messages in adapter-owned Threads continue the bound Session without a mention.
 
 Rebinding a project Channel from Workspace A to Workspace B affects only future Threads. Existing Threads remain bound to their original Sessions and immutable Workspace A `cwd`.
+
+### 4.1 Channel provisioning is the bind action (Kimaki add-project alignment)
+
+`/project bind <workspace>` does not capture the channel it was typed in. Confirming a bind provisions — or reuses — the Workspace's home channel: a text channel named after the Workspace title's Discord-safe slug, under the adapter's own category, and binds that channel to the Workspace. The model is strictly one Workspace, one channel per Guild: a Workspace that already has a bound channel is answered with a link to it, never duplicated. A same-name channel is reused only when it is unbound; a channel serving another Workspace is never stolen (a `-2` sibling is created instead).
+
+The category's `general` control channel is the Kimaki `#kimaki-opencode` analog — the surface for running commands — and can never become a Workspace home. Ephemeral confirm/cancel buttons gate the write; the custom_ids are opaque registry ids, so no DSH identifier ever reaches the Discord wire. Workspace references are selected through live autocomplete; ids are never copy-pasted.
 
 ### 5. Default queue, explicit steer and stop
 
@@ -182,9 +186,9 @@ The public Discord command surface is:
 
 | Command | Context | Permission | Response |
 |---|---|---|---|
-| `/project list [query]` | allowed Guild | member | ephemeral paginated/selectable Workspace titles |
-| `/project bind <workspace>` | guild text channel | Workspace administrator | ephemeral confirmation, then durable bind |
-| `/project info` | bound guild channel or its Thread | member; path requires Workspace administrator | ephemeral |
+| `/project list [query]` | allowed Guild | member | ephemeral paginated Workspace titles (names only; ids ride autocomplete values) |
+| `/project bind <workspace>` | allowed Guild | Workspace administrator | live autocomplete → ephemeral confirm button → Workspace home channel provisioned/reused and durably bound (Kimaki add-project; the typed-in channel is never captured) |
+| `/project info` | bound guild channel or its Thread | member | ephemeral; includes the canonical path (see §3) |
 | `/session new <prompt>` | bound project channel | member | creates a Thread and Session |
 | `/session resume <session>` | bound project channel | member | creates a new writable Thread unless Session is already Discord-owned |
 | `/queue list` | bound Session Thread | member | ephemeral queue view |

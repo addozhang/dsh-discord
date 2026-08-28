@@ -39,16 +39,16 @@ The adapter SHALL make every Workspace returned by the current DSH Host's `works
 - **WHEN** an authorized Guild member opens the Workspace selector
 - **THEN** every matching Workspace currently registered on that DSH Host is eligible for selection
 
-### Requirement: Least path disclosure
-The adapter SHALL show Workspace titles and opaque Workspace IDs by default. It SHALL reveal an absolute Host path only to an authorized Workspace administrator through an explicit ephemeral detail action and SHALL NOT persist a path in a Discord channel topic, name, or public message.
+### Requirement: Kimaki-style path display in ephemeral surfaces
+The adapter SHALL show Workspace titles and opaque Workspace IDs as selection values. Absolute Host paths MAY appear in the adapter's responses to authorized members — all adapter responses are ephemeral — including abbreviated paths in autocomplete labels and full paths in detail responses. The adapter SHALL NOT persist a path in a Discord channel topic, name, or other durable channel metadata.
 
-#### Scenario: Regular authorized member lists projects
-- **WHEN** a member may use the adapter but lacks Workspace-management permission
-- **THEN** the response contains safe display titles and opaque Workspace IDs but no absolute filesystem paths
+#### Scenario: Authorized member reads Workspace details
+- **WHEN** an authorized member requests Workspace details or hovers autocomplete candidates
+- **THEN** the response may include the canonical path (full or abbreviated) alongside safe display titles
 
-#### Scenario: Workspace administrator requests details
-- **WHEN** an authorized Workspace administrator explicitly requests details for a selected Workspace
-- **THEN** the adapter may show that Workspace's canonical path only in an ephemeral response
+#### Scenario: Channel metadata never carries paths
+- **WHEN** the adapter provisions or renames a Discord channel
+- **THEN** the channel name derives from the Workspace display title, never from the canonical path, and no path is written into the channel topic
 
 ### Requirement: Safe Discord output
 The adapter SHALL suppress automatic Discord mentions in all content derived from users, DSH events, model output, Workspace titles, Session titles, and tool presentation views.

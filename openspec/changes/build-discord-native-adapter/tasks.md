@@ -143,3 +143,9 @@
 - [ ] 15.10 Run the manual/release-blocking E2E suite in a dedicated non-production Discord Guild using dedicated credentials: bind Workspace → mention bot → create Thread/Session → stream text/tool progress → queue → steer/stop → question/approval → plugin restart → reconciliation without duplicate output.
 - [ ] 15.11 Verify a second allowed Guild is isolated and an unconfigured Guild, DM sender, unauthorized member, and unauthorized bot cannot invoke DSH or observe Workspace/Session data.
 - [ ] 15.12 Review the implementation against every OpenSpec scenario and prepare it for human review; do not ship automatically.
+
+## 16. Kimaki alignment amendments (user-directed, 2026-08-29)
+
+- [ ] 16.1 RED: relax path disclosure per amended design §3/access-policy — `/project info` shows the canonical path to any authorized member; add abbreviated-path labels to bind autocomplete candidates (Kimaki `abbreviatePath` style); GREEN: update project-info/autocomplete tests.
+- [x] 16.2 Amend design §4.1 + workspace-control spec: bind provisions the Workspace home channel (one Workspace, one channel per Guild; control channel excluded; `-2` sibling fallback; typed-in channel never captured); remove the current-channel rebind scenario.
+- [x] 16.3 Record the Kimaki command-design adoption (autocomplete, confirm-button writes, /project info context guards) and the explicit non-adoption of the three-second abort-and-resubmit behavior (design §5 stands).
