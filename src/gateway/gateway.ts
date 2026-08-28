@@ -168,7 +168,13 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
         if (sessionId !== undefined) {
           send(socket, OPCODE_RESUME, { token, session_id: sessionId, seq: lastSeq })
         } else {
-          send(socket, OPCODE_IDENTIFY, { token, intents: options.intents })
+          // Discord rejects an IDENTIFY without the properties block (op 9
+          // invalid session → close 4000): os/browser/device are required.
+          send(socket, OPCODE_IDENTIFY, {
+            token,
+            intents: options.intents,
+            properties: { os: 'linux', browser: 'dsh-discord', device: 'dsh-discord' },
+          })
         }
         return
       }
