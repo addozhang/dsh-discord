@@ -152,3 +152,4 @@
 - [x] 16.4 RED: add single-owner and bounded-expiry tests for bind confirm/cancel controls (other-member denial, expired rerun prompt, idempotent double confirm); GREEN: registry-owner checks and idempotent provisioning already satisfy them.
 - [ ] 16.5 Decide and implement the unbound-channel mention behavior required by session-control ("New task in an unbound channel" scenario): a minimal public bind-affordance notice (spec-as-written) versus silent ignore (current implementation); align the spec or the code accordingly.
 - [ ] 16.6 Implement or explicitly defer the Guild-forget operation required by binding-state ("Bounded retained state"); record the milestone decision either way.
+- [x] 16.7 Decisions: 16.5 implement the spec-as-written public bind-affordance notice; Guild-forget scheduled into the persistence milestone (Phase 2) as a Host-operator command with confirm controls.
