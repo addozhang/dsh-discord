@@ -61,8 +61,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   validateHostCapabilities(name => ctx.get(name))
   installCancellationRoot(ctx)
   let current = normalizeDiscordSettings(config)
+  const onGuildsChanged = (): void => { void registerCommands() }
   installDiscordSettings(ctx, current, (next) => {
+    const guildsChanged = next.allowedGuildIds.join(',') !== current.allowedGuildIds.join(',')
     current = next
+    if (guildsChanged) onGuildsChanged()
     emitLog(ctx, 'debug', {
       event: 'discord_settings_applied',
       enabled: current.enabled,
@@ -202,21 +205,31 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   })
   // Register the Milestone 1 command set per allowed Guild (instant
   // propagation, unlike global commands) once the bot identity is known.
-  void (async () => {
-    const token = (await resolveDiscordBotToken(credentials)) ?? ''
-    if (token === '') return
-    const rest = createRestClient({ token })
-    const me = await rest.request<{ id: string }>('GET', '/users/@me')
-    if (me.outcome !== 'completed') return
-    applicationIdRef.current = me.body.id
-    const registrations = buildCommandRegistrations()
-    for (const guildId of current.allowedGuildIds) {
-      const result = await rest.request('PUT', `/applications//guilds//commands`, registrations)
-      if (result.outcome !== 'completed') {
-        emitLog(ctx, 'warn', { event: 'discord_command_register_failed', guildId })
+  // Re-runs whenever the allowlist changes — apply-time settings may still
+  // be loading, so the first non-empty list wins.
+  let registering = false
+  const registerCommands = async (): Promise<void> => {
+    if (registering || current.allowedGuildIds.length === 0) return
+    registering = true
+    try {
+      const token = (await resolveDiscordBotToken(credentials)) ?? ''
+      if (token === '') return
+      const rest = createRestClient({ token })
+      const me = await rest.request<{ id: string }>('GET', '/users/@me')
+      if (me.outcome !== 'completed') return
+      applicationIdRef.current = me.body.id
+      const registrations = buildCommandRegistrations()
+      for (const guildId of current.allowedGuildIds) {
+        const result = await rest.request('PUT', `/applications/${me.body.id}/guilds/${guildId}/commands`, registrations)
+        if (result.outcome !== 'completed') {
+          emitLog(ctx, 'warn', { event: 'discord_command_register_failed', guildId })
+        }
       }
+    } finally {
+      registering = false
     }
-  })().catch((cause: unknown) => {
+  }
+  void registerCommands().catch((cause: unknown) => {
     emitLog(ctx, 'warn', { event: 'discord_command_register_failed', cause: String(cause) })
   })
 
