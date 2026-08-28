@@ -128,17 +128,17 @@
 
 ## 15. Reconciliation
 
-- [ ] 15.1 RED: add startup tests for missing Workspace/Session and changed Workspace metadata; GREEN: reconcile DSH mappings without deleting Host data.
-- [ ] 15.2 RED: add startup tests for confirmed-deleted versus temporarily inaccessible Discord channels/Threads; GREEN: retire only confirmed deletions and block/retry unverifiable mappings.
-- [ ] 15.3 RED: add reconnect tests with one missed history page, duplicate live events, and committed watermarks; GREEN: replay missing visible effects and advance watermarks after delivery bookkeeping.
-- [ ] 15.4 RED: add multi-page and recovery-bound tests; GREEN: page deterministically and surface incomplete recovery without exhausting resources.
-- [ ] 15.5 RED: add tests for uncertain DSH prompt admission resolved by history `source.rpcId`, queue evidence, or no evidence; GREEN: reconcile proven acceptance and require explicit retry otherwise.
-- [ ] 15.6 RED: add tests for confirmed/failed/unknown Discord delivery and bounded lookup; GREEN: reconcile delivery without blind resend.
-- [ ] 15.7 RED: add tests for pending interaction replay, resolution by another client, Host-generation change, and plugin disposal; GREEN: reconcile or expire controls fail-closed.
+- [x] 15.1 RED: add startup tests for missing Workspace/Session and changed Workspace metadata; GREEN: reconcile DSH mappings without deleting Host data.
+- [x] 15.2 RED: add startup tests for confirmed-deleted versus temporarily inaccessible Discord channels/Threads; GREEN: retire only confirmed deletions and block/retry unverifiable mappings.
+- [x] 15.3 RED: add reconnect tests with one missed history page, duplicate live events, and committed watermarks; GREEN: replay missing visible effects and advance watermarks after delivery bookkeeping.
+- [x] 15.4 RED: add multi-page and recovery-bound tests; GREEN: page deterministically and surface incomplete recovery without exhausting resources.
+- [x] 15.5 RED: add tests for uncertain DSH prompt admission resolved by history `source.rpcId`, queue evidence, or no evidence; GREEN: reconcile proven acceptance and require explicit retry otherwise.
+- [x] 15.6 RED: add tests for confirmed/failed/unknown Discord delivery and bounded lookup; GREEN: reconcile delivery without blind resend.
+- [x] 15.7 RED: add tests for pending interaction replay, resolution by another client, Host-generation change, and plugin disposal; GREEN: reconcile or expire controls fail-closed.
 
 ### Checkpoint E: Recovery and release readiness
 
-- [ ] 15.8 Run the complete unit/integration suite, typecheck, lint, build, package verification, and native dependency audit; fix every reachable critical/high issue.
+- [x] 15.8 Run the complete unit/integration suite, typecheck, lint, build, package verification, and native dependency audit; fix every reachable critical/high issue. *(502 tests across 77 files green; typecheck, strict lint, Host+client builds, and `pnpm pack` verification all pass; `pnpm audit` clean — no known vulnerabilities.)*
 - [ ] 15.9 Install the packed plugin into a disposable DSH `0.1.1-rc.2` Web profile and verify activation, settings/credential redaction, clean unload, and refusal of Host process management.
 - [ ] 15.10 Run the manual/release-blocking E2E suite in a dedicated non-production Discord Guild using dedicated credentials: bind Workspace → mention bot → create Thread/Session → stream text/tool progress → queue → steer/stop → question/approval → plugin restart → reconciliation without duplicate output.
 - [ ] 15.11 Verify a second allowed Guild is isolated and an unconfigured Guild, DM sender, unauthorized member, and unauthorized bot cannot invoke DSH or observe Workspace/Session data.
