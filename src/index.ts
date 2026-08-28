@@ -274,6 +274,19 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     intents: GATEWAY_INTENTS,
     allowedGuildIds: [...current.allowedGuildIds],
     bindings,
+    unboundNotice: (request) => {
+      const content = request.audience === 'administrator'
+        ? '此频道未绑定工作区。工作区管理员可运行 `/project bind` 创建并绑定项目频道。'
+        : '此频道未绑定工作区；请工作区管理员运行 `/project bind`。'
+      void withRest(async (rest) => {
+        const sent = await rest.request('POST', `/channels/${request.channelId}/messages`, { content })
+        if (sent.outcome !== 'completed') {
+          rpcLog('discord_unbound_notice_send_failed', sent.outcome === 'rejected' ? `HTTP ${String(sent.status)}` : sent.reason)
+        }
+      }).catch((cause: unknown) => {
+        rpcLog('discord_unbound_notice_threw', String(cause))
+      })
+    },
     ensureGuildChannels: async (guildId) => {
       await withRest(async (rest) => {
         const ensured = await ensureCategory(rest, guildId)

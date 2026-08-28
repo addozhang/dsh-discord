@@ -30,7 +30,11 @@ function makeSocket(url = 'wss://gateway.discord.gg/?v=10&encoding=json') {
   }
 }
 
-function setup(token: string | undefined, bindings: { workspaceForChannel: (id: string) => string | undefined; sessionForThread: (id: string) => string | undefined } | undefined) {
+function setup(
+  token: string | undefined,
+  bindings: { workspaceForChannel: (id: string) => string | undefined; sessionForThread: (id: string) => string | undefined } | undefined,
+  hooks: { unboundNotice?: CompositionDeps['unboundNotice'] } = {},
+) {
   const socket = makeSocket()
   const submit = vi.fn((_request: { requestId: string; sessionId: string; prompt: string }): Promise<{ outcome: 'accepted' }> => {
     return Promise.resolve({ outcome: 'accepted' })
@@ -64,6 +68,7 @@ function setup(token: string | undefined, bindings: { workspaceForChannel: (id: 
     approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
     questions: createQuestionStore(),
     status,
+    ...(hooks.unboundNotice === undefined ? {} : { unboundNotice: hooks.unboundNotice }),
   }
   const runtime = startDiscordAdapter(deps)
   return { runtime, submit, status, socket, gatewaySocketRef }
@@ -118,6 +123,28 @@ describe('composed adapter runtime', () => {
 
     // Foreign guild: dropped at the allowlist before business routing.
     gatewaySocketRef.current?.onmessage?.(JSON.stringify({ op: 0, t: 'MESSAGE_CREATE', s: 4, d: dispatchMessage({ guild_id: '999999999999999999' }).d }))
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('answers an unbound-channel mention with a public bind affordance, never DSH', async () => {
+    const unboundNotice = vi.fn((_request: { guildId: string; channelId: string; actorId: string; audience: 'administrator' | 'member' }) => {})
+    const { submit, gatewaySocketRef } = setup('token-abc', {
+      workspaceForChannel: () => undefined,
+      sessionForThread: () => undefined,
+    }, { unboundNotice })
+    await vi.waitFor(() => { expect(gatewaySocketRef.current).toBeDefined() })
+    gatewaySocketRef.current?.onopen?.()
+
+    // Authorized member mentions the bot in an unbound channel: one public
+    // bind affordance (member audience), zero DSH calls.
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({ op: 0, t: 'MESSAGE_CREATE', s: 3, d: dispatchMessage().d }))
+    await vi.waitFor(() => { expect(unboundNotice).toHaveBeenCalledTimes(1) })
+    expect(unboundNotice.mock.calls[0]?.[0]).toMatchObject({ channelId: '444444444444444444', audience: 'member' })
+    expect(submit).not.toHaveBeenCalled()
+
+    // A non-mention in the same unbound channel stays fully silent.
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({ op: 0, t: 'MESSAGE_CREATE', s: 4, d: dispatchMessage({ content: 'plain chatter' }).d }))
+    expect(unboundNotice).toHaveBeenCalledTimes(1)
     expect(submit).not.toHaveBeenCalled()
   })
 

@@ -11,8 +11,9 @@
 
 import { startGateway, type GatewayDispatch, type GatewayHandle, type GatewaySocketFactory } from './gateway/gateway.js'
 import { createAuthorizedIngress } from './policy/guard.js'
-import type { PolicyTable } from './policy/authorization.js'
+import type { AccessDecision, PolicyTable } from './policy/authorization.js'
 import type { NormalizedInboundEvent } from './gateway/ingress.js'
+import { planUnboundMention } from './features/unbound-mention.js'
 import { createComponentRegistry, type ComponentRegistry } from './discord/components.js'
 import type { AdapterStatusTracker } from './features/adapter-status.js'
 import type { ApprovalStore } from './features/approval-store.js'
@@ -55,6 +56,18 @@ export interface CompositionDeps {
    * composition where the typed apiProxy respond face lives.
    */
   routeInteraction?: (event: NormalizedInboundEvent, interactionToken?: string) => void | Promise<void>
+  /**
+   * Public (non-ephemeral — ordinary messages have no ephemeral channel)
+   * bind affordance for an authorized mention in an unbound channel
+   * (session-control spec, "New task in an unbound channel"). Absent, the
+   * mention is ignored as before.
+   */
+  unboundNotice?: (request: {
+    guildId: string
+    channelId: string
+    actorId: string
+    audience: 'administrator' | 'member'
+  }) => void | Promise<void>
   /** Idempotently ensure the category + control channel exist in a guild. */
   ensureGuildChannels?: (guildId: string) => Promise<void>
   /** Allowlist snapshot used to provision channels on READY. */
@@ -73,11 +86,28 @@ export interface DiscordAdapterRuntime {
 }
 
 /** Business routing over one normalized, already-authorized event. */
-export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent): void {
+export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent, decision: AccessDecision): void {
   if (event.kind === 'message') {
     // Mention-gated prompt flow: bindings decide admit vs ignore.
     const workspaceId = deps.bindings.workspaceForChannel(event.guildId, event.channelId)
-    if (workspaceId === undefined || !event.mentionedBot) return
+    if (!event.mentionedBot) return
+    if (workspaceId === undefined) {
+      // Unbound channel: one public bind affordance for authorized members,
+      // silent for everyone the guard already refused (spec-as-written,
+      // task 16.5). No DSH call ever follows.
+      const plan = planUnboundMention({ decision, isBound: false })
+      if (plan.outcome === 'bind-affordance') {
+        void Promise.resolve(deps.unboundNotice?.({
+          guildId: event.guildId,
+          channelId: event.channelId,
+          actorId: event.authorId,
+          audience: plan.audience,
+        })).catch((cause: unknown) => {
+          deps.logger?.warn('discord_unbound_notice_failed', { cause: String(cause) })
+        })
+      }
+      return
+    }
     const prompt = event.content.trim()
     if (prompt === '') return
     const requestId = `discord:${event.messageId}`
@@ -143,7 +173,7 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
     ingress = createAuthorizedIngress({
       selfUserId,
       policy: deps.policy,
-      onEvent: (event) => { routeEvent(deps, event) },
+      onEvent: (event, decision) => { routeEvent(deps, event, decision) },
     })
 
     gateway = startGateway({
