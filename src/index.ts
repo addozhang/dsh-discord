@@ -214,7 +214,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       if (event.kind === 'interaction' && event.interactionType === 2 && interactionToken !== undefined) {
         const rest = createRestClient({ token: (await resolveDiscordBotToken(credentials)) ?? '' })
         const ack = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 5, data: { flags: 64 } })
-        if (ack.outcome !== 'completed') return
+        if (ack.outcome !== 'completed') { console.error('[dsh-discord] ack failed:', ack.outcome); return }
         const followUp = (content: string): void => {
           void rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: 64 })
         }

@@ -88,7 +88,8 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent)
       })
     return
   }
-  deps.routeInteraction?.(event)
+  // Interactions are dispatched ONLY from handleDispatch (which owns the
+  // interaction token); no token-less forwarding here (double-call bug).
 }
 
 /**
