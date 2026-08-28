@@ -15,7 +15,7 @@ function validServices(): Record<string, unknown> {
     credentials: { resolve: () => {}, describe: () => {}, set: () => {}, unset: () => {} },
     settings: { register: () => {} },
     storageDomain: { open: () => {} },
-    connection: {},
+    connection: { rpc: { handle: () => () => {} } },
   }
 }
 

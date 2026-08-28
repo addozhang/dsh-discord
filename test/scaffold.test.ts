@@ -11,7 +11,7 @@ function fakeHostContext() {
       credentials: { resolve: () => {}, describe: () => {}, set: () => {}, unset: () => {} },
       settings: { register: () => {} },
       storageDomain: { open: () => {} },
-      connection: {},
+      connection: { rpc: { handle: () => () => {} } },
     })[serviceName],
     effect: vi.fn(),
   }

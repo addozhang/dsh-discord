@@ -52,6 +52,12 @@ export function DiscordSettingsCard(props: DiscordSettingsCardProps) {
       onSave={props.save}
       onDiscard={props.discard}
     >
+      {state.status !== undefined && (
+        <p data-discord-status>
+          {t(state.status.connectionKey)}
+          {state.status.hintKey !== undefined ? ` — ${t(state.status.hintKey)}` : ''}
+        </p>
+      )}
       {ID_FIELDS.map(([field, labelKey, hintKey]) => (
         <ValueField
           key={field}

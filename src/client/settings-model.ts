@@ -1,3 +1,4 @@
+import type { AdapterStatusView, ConnectionCondition, StatusHint } from '../features/adapter-status.js'
 import type { DiscordSettings } from '../settings.js'
 
 export interface DiscordSettingsDraft {
@@ -67,5 +68,59 @@ export function presentCredentialStatus(info: {
     label: info.configured ? 'Configured' : 'Not configured',
     writable: info.writable,
     ...(info.source === undefined ? {} : { source: info.source }),
+  }
+}
+
+/** The card status line's presentation: locale keys plus an action flag. */
+export interface AdapterStatusPresentation {
+  connectionKey: DiscordStatusConnectionKey
+  hintKey?: DiscordStatusHintKey | undefined
+  actionable: boolean
+}
+
+/** Locale keys the card renders for each connection condition. */
+export type DiscordStatusConnectionKey =
+  | 'discordStatusConnected'
+  | 'discordStatusConnecting'
+  | 'discordStatusDisconnected'
+  | 'discordStatusInvalidToken'
+  | 'discordStatusIntentsBlocked'
+  | 'discordStatusPermissionsBlocked'
+
+/** Locale keys for each actionable hint the Host can send. */
+export type DiscordStatusHintKey =
+  | 'discordHintConfigureToken'
+  | 'discordHintTokenRejected'
+  | 'discordHintEnableIntents'
+  | 'discordHintGatewayClosed'
+  | 'discordHintChannelPermissions'
+
+const CONNECTION_KEYS: Readonly<Record<ConnectionCondition, DiscordStatusConnectionKey>> = {
+  connected: 'discordStatusConnected',
+  connecting: 'discordStatusConnecting',
+  disconnected: 'discordStatusDisconnected',
+  'invalid-token': 'discordStatusInvalidToken',
+  'intents-blocked': 'discordStatusIntentsBlocked',
+  'permissions-blocked': 'discordStatusPermissionsBlocked',
+}
+
+const HINT_KEYS: Readonly<Record<StatusHint, DiscordStatusHintKey>> = {
+  'configure-token': 'discordHintConfigureToken',
+  'token-rejected': 'discordHintTokenRejected',
+  'enable-intents': 'discordHintEnableIntents',
+  'gateway-closed': 'discordHintGatewayClosed',
+  'channel-permissions': 'discordHintChannelPermissions',
+}
+
+/**
+ * Distill the Host's sanitized status view into the card's copy keys. The
+ * projection never carries secrets; this mapping adds none either — only
+ * stable locale keys and whether the condition demands user action.
+ */
+export function presentAdapterStatus(view: AdapterStatusView): AdapterStatusPresentation {
+  return {
+    connectionKey: CONNECTION_KEYS[view.connection],
+    ...(view.hint === undefined ? {} : { hintKey: HINT_KEYS[view.hint] }),
+    actionable: view.hint !== undefined,
   }
 }

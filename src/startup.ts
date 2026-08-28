@@ -27,7 +27,7 @@ const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
   credentials: ['resolve', 'describe', 'set', 'unset'],
   settings: ['register'],
   storageDomain: ['open'],
-  connection: [],
+  connection: ['rpc'],
 }
 
 /** Actionable remediation hint appended to every activation failure. */

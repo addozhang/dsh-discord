@@ -8,8 +8,10 @@
  */
 
 import type { SettingsScope, SettingsScopeSnapshot, SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import type { AdapterStatusView } from '../features/adapter-status.js'
 import type { DiscordSettings } from '../settings.js'
 import { createLocalSnapshotStore } from './snapshot-store.js'
+import { presentAdapterStatus, type AdapterStatusPresentation } from './settings-model.js'
 
 /** One staged edit over a single field. */
 interface StagedEdit {
@@ -57,7 +59,10 @@ export const DISCORD_ID_FIELDS = [
 export type DiscordCardField = typeof DISCORD_ID_FIELDS[number]
 
 /** What the Discord card renders. */
-export type DiscordCardState = CardShell & Record<DiscordCardField, CardFieldState>
+export type DiscordCardState = CardShell & Record<DiscordCardField, CardFieldState> & {
+  /** The Host's sanitized connection status, once reported. */
+  status: AdapterStatusPresentation | undefined
+}
 
 /** The registration-side face the Discord card's slot entry injects. */
 export interface DiscordCardFace extends CardActions {
@@ -88,9 +93,19 @@ export class DiscordCardForm {
   private readonly listeners = new Set<() => void>()
   private saving = false
   private failed = false
+  private status: AdapterStatusPresentation | undefined = undefined
 
   constructor(private readonly scope: SettingsScope<DiscordSettings>) {
     this.scope.subscribe(() => { this.publish() })
+  }
+
+  /**
+   * Publish the Host's sanitized status view. Edits, saves, and failures
+   * never touch it — connection state is the Host's report, not form state.
+   */
+  setStatus(view: AdapterStatusView | undefined): void {
+    this.status = view === undefined ? undefined : presentAdapterStatus(view)
+    this.publish()
   }
 
   /** Publish the card state the renderer reads through its bound selector. */
@@ -138,6 +153,7 @@ export class DiscordCardForm {
       invalid: plan.some(item => item.write === undefined),
       saving: this.saving,
       failed: this.failed,
+      status: this.status,
     }
   }
 

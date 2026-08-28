@@ -35,6 +35,17 @@ interface DiscordPluginsLocale {
   discordHostOperatorUserIds: string
   discordHostOperatorUserIdsHint: string
   discordInvalidIds: string
+  discordStatusConnected: string
+  discordStatusConnecting: string
+  discordStatusDisconnected: string
+  discordStatusInvalidToken: string
+  discordStatusIntentsBlocked: string
+  discordStatusPermissionsBlocked: string
+  discordHintConfigureToken: string
+  discordHintTokenRejected: string
+  discordHintEnableIntents: string
+  discordHintGatewayClosed: string
+  discordHintChannelPermissions: string
   reset: string
   expand: string
   collapse: string

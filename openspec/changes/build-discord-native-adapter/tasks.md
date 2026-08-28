@@ -9,7 +9,7 @@
 
 - [x] 2.1 RED: add settings-schema tests for one bot, allowed Guild IDs, user/role allow and deny rules, Workspace administrator rules, Host-operator user IDs, verbosity, and bounded timing/retry values; GREEN: register the plugin settings namespace with live updates and last-known-good validation.
 - [x] 2.2 RED: add tests for credential presence, token redaction, per-connection resolution, rotation, and deletion; GREEN: implement one fixed plugin-owned Discord token reference without copying its value into settings or state.
-- [ ] 2.3 RED: add client tests for redacted settings, revision conflicts, invalid token/intents status, and save feedback; GREEN: implement the minimal Web settings card. *(Redaction, save feedback, controller/entry wiring, and the card itself are done and green; invalid token/intents status lands with the Gateway state surface in section 3.)*
+- [x] 2.3 RED: add client tests for redacted settings, revision conflicts, invalid token/intents status, and save feedback; GREEN: implement the minimal Web settings card. *(Card, redaction, save feedback, and the invalid token/intents status surface are done: the Host projects credential presence plus Gateway terminal closes (4004/4013/4014) into a sanitized actionable view served over the plugin RPC channel, and the card renders it. Feeding live Gateway observations into the tracker lands with the adapter composition in section 15.)*
 
 ## 3. Discord ingress and Gateway lifecycle
 

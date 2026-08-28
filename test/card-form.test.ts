@@ -155,3 +155,54 @@ describe('DiscordCardForm', () => {
     expect(state.allowedGuildIds.text).toBe('123456789012345678')
   })
 })
+
+describe('DiscordCardForm status surface (2.3)', () => {
+  const INVALID_TOKEN_VIEW = {
+    token: 'configured',
+    connection: 'invalid-token',
+    hint: 'token-rejected',
+  } as const
+
+  it('shows a published status and republishes when it changes', () => {
+    const host = fakeScope()
+    const form = new DiscordCardForm(host.scope)
+    const store = form.bind()
+
+    expect(store.getSnapshot().status).toBeUndefined()
+
+    form.setStatus(INVALID_TOKEN_VIEW)
+    let state = store.getSnapshot()
+    expect(state.status).toEqual({
+      connectionKey: 'discordStatusInvalidToken',
+      hintKey: 'discordHintTokenRejected',
+      actionable: true,
+    })
+
+    form.setStatus({ token: 'configured', connection: 'connected' })
+    state = store.getSnapshot()
+    expect(state.status?.connectionKey).toBe('discordStatusConnected')
+    expect(state.status?.actionable).toBe(false)
+  })
+
+  it('keeps the status through saves, failures, and discards', async () => {
+    const host = fakeScope()
+    const form = new DiscordCardForm(host.scope)
+    const store = form.bind()
+    const actions = form.actions()
+
+    form.setStatus(INVALID_TOKEN_VIEW)
+    actions.edit('allowedGuildIds', '123456789012345678')
+    actions.save()
+    await vi.waitFor(() => {
+      const state = store.getSnapshot()
+      expect(state.saving).toBe(false)
+    })
+
+    const state = store.getSnapshot()
+    expect(state.status?.connectionKey).toBe('discordStatusInvalidToken')
+    expect(state.failed).toBe(false)
+
+    actions.discard()
+    expect(store.getSnapshot().status?.connectionKey).toBe('discordStatusInvalidToken')
+  })
+})

@@ -98,7 +98,7 @@ describe('cordis-owned disposal', () => {
         credentials: { resolve: () => {}, describe: () => {}, set: () => {}, unset: () => {} },
         settings: { register: () => {} },
         storageDomain: { open: () => {} },
-        connection: {},
+        connection: { rpc: { handle: () => () => {} } },
       })[serviceName],
       inject: vi.fn(),
       logger: { debug: vi.fn() },
