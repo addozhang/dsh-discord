@@ -17,11 +17,12 @@ import {
 } from './features/adapter-status.js'
 import { describeDiscordCredential, resolveDiscordBotToken, type DiscordCredentialProvider } from './credential.js'
 import { createRestClient } from './discord/rest.js'
+import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
 import { handleApprovalClick, type DshApprovalRespondPort } from './features/approval-routing.js'
-import { createChannelBindingService } from './state/channel-bindings.js'
+import { channelBindingKey } from './state/domain.js'
 import { createBindingStore } from './state/bindings.js'
 import type { ChannelBinding } from './state/records.js'
 import type { PolicyTable } from './policy/authorization.js'
@@ -104,16 +105,19 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
 
   // Channel→Workspace bindings. M1 keeps the store process-local; the
   // durable domain table backing is exercised in the 15.9 profile pass.
+  // The Discord application id equals the bot user id, resolved at start.
+  const applicationIdRef: { current: string } = { current: 'dsh-discord' }
   const rows = new Map<string, ChannelBinding>()
   const bindingStore = createBindingStore<ChannelBinding>({
     get: key => rows.get(key),
     put: (key, record) => { rows.set(key, record); return Promise.resolve() },
     delete: key => Promise.resolve(rows.delete(key)),
   })
-  const channelBindings = createChannelBindingService({ store: bindingStore, applicationId: 'dsh-discord' })
   const bindings: BindingsProbe = {
     workspaceForChannel: channelId =>
-      channelBindings.resolve({ applicationId: 'dsh-discord', guildId: '', channelId })?.workspaceId,
+      bindingStore.get(channelBindingKey({
+        applicationId: applicationIdRef.current, guildId: '', channelId,
+      }))?.workspaceId,
     sessionForThread: () => undefined,
   }
 
@@ -196,6 +200,26 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       },
     },
   })
+  // Register the Milestone 1 command set per allowed Guild (instant
+  // propagation, unlike global commands) once the bot identity is known.
+  void (async () => {
+    const token = (await resolveDiscordBotToken(credentials)) ?? ''
+    if (token === '') return
+    const rest = createRestClient({ token })
+    const me = await rest.request<{ id: string }>('GET', '/users/@me')
+    if (me.outcome !== 'completed') return
+    applicationIdRef.current = me.body.id
+    const registrations = buildCommandRegistrations()
+    for (const guildId of current.allowedGuildIds) {
+      const result = await rest.request('PUT', `/applications//guilds//commands`, registrations)
+      if (result.outcome !== 'completed') {
+        emitLog(ctx, 'warn', { event: 'discord_command_register_failed', guildId })
+      }
+    }
+  })().catch((cause: unknown) => {
+    emitLog(ctx, 'warn', { event: 'discord_command_register_failed', cause: String(cause) })
+  })
+
   ctx.effect(() => () => { runtimeRef.current?.dispose() }, 'dsh-discord composed runtime')
 }
 
