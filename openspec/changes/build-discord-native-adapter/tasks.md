@@ -38,17 +38,17 @@
 
 ## 6. Durable state
 
-- [ ] 6.1 RED: define schema/codec tests for application+guild+channel Workspace keys and application+guild+thread Session keys; GREEN: define and open the versioned DSH storage domain.
-- [ ] 6.2 RED: add tests for binding revisions and stale asynchronous commits; GREEN: implement single-record revision-fenced Channel and Thread bindings.
-- [ ] 6.3 RED: add tests for atomic in-process message claims and same-ID/same-hash versus same-ID/different-hash replay; GREEN: implement the inbound intent records and per-key serialization.
-- [ ] 6.4 RED: add tests for `planned/executing/succeeded/failed/unknown-needs-user-resolution` transitions and invalid transitions; GREEN: implement the delivery/submission state machines.
-- [ ] 6.5 RED: add tests for one writable Thread per Session and ownership release; GREEN: implement the unique logical owner record.
-- [ ] 6.6 RED: add tests for 30-day completed-intent/delivery retention, 7-day resolved-interaction retention, the 7-day minimum, non-expiring unresolved records, and Guild forget; GREEN: implement bounded cleanup without deleting DSH data.
-- [ ] 6.7 RED: add tests for malformed/newer state and backend failures; GREEN: fail closed without replacing state or accepting Discord-triggered DSH writes.
+- [x] 6.1 RED: define schema/codec tests for application+guild+channel Workspace keys and application+guild+thread Session keys; GREEN: define and open the versioned DSH storage domain.
+- [x] 6.2 RED: add tests for binding revisions and stale asynchronous commits; GREEN: implement single-record revision-fenced Channel and Thread bindings.
+- [x] 6.3 RED: add tests for atomic in-process message claims and same-ID/same-hash versus same-ID/different-hash replay; GREEN: implement the inbound intent records and per-key serialization.
+- [x] 6.4 RED: add tests for `planned/executing/succeeded/failed/unknown-needs-user-resolution` transitions and invalid transitions; GREEN: implement the delivery/submission state machines.
+- [x] 6.5 RED: add tests for one writable Thread per Session and ownership release; GREEN: implement the unique logical owner record.
+- [x] 6.6 RED: add tests for 30-day completed-intent/delivery retention, 7-day resolved-interaction retention, the 7-day minimum, non-expiring unresolved records, and Guild forget; GREEN: implement bounded cleanup without deleting DSH data.
+- [x] 6.7 RED: add tests for malformed/newer state and backend failures; GREEN: fail closed without replacing state or accepting Discord-triggered DSH writes.
 
 ### Checkpoint B: Security and persistence
 
-- [ ] 6.8 Run the complete deterministic suite and inspect every state-changing path for authorization-before-effect, durable-intent-before-effect, and secret redaction.
+- [x] 6.8 Run the complete deterministic suite and inspect every state-changing path for authorization-before-effect, durable-intent-before-effect, and secret redaction. *(190 tests green; state layer carries no credential material; guard authorizes before business dispatch; intent claim precedes effects; vitest upgraded 4.0.15→4.1.11 for GHSA-5xrq-8626-4rwp; audit clean.)*
 
 ## 7. Workspace control vertical slice
 
