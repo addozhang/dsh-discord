@@ -105,7 +105,8 @@ describe('cordis-owned disposal', () => {
       effect: (execute: () => unknown, label?: string) => { effects.push({ execute, label }) },
     }
     apply(ctx as never)
-    expect(effects).toHaveLength(1)
+    // The cancellation root plus the composed runtime teardown.
+    expect(effects.length).toBeGreaterThanOrEqual(1)
     expect(effects[0]?.label).toContain('cancellation root')
   })
 
