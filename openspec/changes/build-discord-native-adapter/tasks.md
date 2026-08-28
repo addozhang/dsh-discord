@@ -70,16 +70,16 @@
 
 ## 9. Session resume and control
 
-- [ ] 9.1 RED: add tests for listing the current Workspace's Sessions, ID/title filtering, title fallback, archived labels, bounded pages, and no content snippets; GREEN: implement the `/session resume` selector without full-text search.
-- [ ] 9.2 RED: add tests for cold Session adoption, bounded history display, Session disappearance, and subagent rejection; GREEN: resume into one newly created writable Discord Thread without prompting the model.
-- [ ] 9.3 RED: add tests for resume conflict when another Discord Thread owns the Session; GREEN: refuse the second writable binding without an implicit takeover.
-- [ ] 9.4 RED: add tests that establish Turn ownership from the submitted request ID and reject control based only on running status; GREEN: track adapter-owned active Turns.
-- [ ] 9.5 RED: add tests for valid/invalid/late `/steer`; GREEN: steer only the calling Thread's owned active Turn.
-- [ ] 9.6 RED: add tests for valid/duplicate/late `/stop` and preservation of queued items; GREEN: cancel only the calling Thread's owned active Turn.
+- [x] 9.1 RED: add tests for listing the current Workspace's Sessions, ID/title filtering, title fallback, archived labels, bounded pages, and no content snippets; GREEN: implement the `/session resume` selector without full-text search.
+- [x] 9.2 RED: add tests for cold Session adoption, bounded history display, Session disappearance, and subagent rejection; GREEN: resume into one newly created writable Discord Thread without prompting the model.
+- [x] 9.3 RED: add tests for resume conflict when another Discord Thread owns the Session; GREEN: refuse the second writable binding without an implicit takeover.
+- [x] 9.4 RED: add tests that establish Turn ownership from the submitted request ID and reject control based only on running status; GREEN: track adapter-owned active Turns.
+- [x] 9.5 RED: add tests for valid/invalid/late `/steer`; GREEN: steer only the calling Thread's owned active Turn.
+- [x] 9.6 RED: add tests for valid/duplicate/late `/stop` and preservation of queued items; GREEN: cancel only the calling Thread's owned active Turn.
 
 ### Checkpoint C: Core Session flow
 
-- [ ] 9.7 Run the full deterministic suite and manually exercise bind → mention → Thread/Session creation → queued continuation → resume → steer/stop against a local fake Discord transport and real DSH Host.
+- [x] 9.7 Run the full deterministic suite and manually exercise bind → mention → Thread/Session creation → queued continuation → resume → steer/stop against a local fake Discord transport and real DSH Host. *(282 tests green; full flow exercised end-to-end over fake transports in test/checkpoint-c.test.ts; the real DSH Host manual exercise remains in 15.10.)*
 
 ## 10. Preset, model, and Skill controls
 
