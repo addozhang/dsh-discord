@@ -157,3 +157,17 @@ web-test 实例已用新构建重启（token 经旧进程 env 静默交接，未
 2. **`@bot` 提交前置**：session.create（design §149 预分配 Session ID），否则
    `session.prompt` 对未知 sessionId 一律 `session-not-found`。
 3. 测试后 **Reset bot token**。
+
+**✅ bind 已实接（同会话，commit 4d804ed，待 Discord 实测）**：
+`/project bind workspace:<ws:id>` → 鉴权（evaluateAuthorization）→ plan（catalog
+resolve，畸形/未知引用一律 `stale` fail-closed）→ ephemeral 确认/取消按钮（custom_id
+为不透明 registry id，plan 存 registry context，不上线材）→ type 3 点击先查 bind
+context：type 6 deferred ack 保牌、非本人点击 ephemeral 拒绝且按钮保持 pending、
+commit 走 revision 围栏（stale-revision 提示重跑）。
+`workspaceForChannel` 同时修正为按真实 guildId 建 key（旧代码用空 guildId，
+bind 后 mention 流程会找不到绑定）。`createWorkspaceResolver` 带 5 个新测试；
+全量 523 tests / lint / typecheck 绿；已重新 pack + remove/add 部署并重启（日志同
+/tmp/dsh-web-test.log）。
+**实测路径**：`/project bind workspace:<从 list 复制>` → 按钮 → 确认 → `✅ 已绑定…`；
+再 `/project info` 与 `@bot` mention（预期先报 `discord_prompt_submit_rejected:
+session-not-found`，指向下一增量 session.create）。
