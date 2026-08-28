@@ -121,10 +121,10 @@
 
 ## 14. Question routing
 
-- [ ] 14.1 RED: add tests for single-select, multi-select, option limits, multiple questions, and complete answer encoding; GREEN: implement native select-menu collection.
-- [ ] 14.2 RED: add tests for custom text, modal expiry, invalid labels, wrong actor, and incomplete answers; GREEN: implement modal/controlled reply handling.
-- [ ] 14.3 RED: add concurrent-answer and remote-resolution tests; GREEN: atomically submit one complete response and disable stale controls.
-- [ ] 14.4 RED: add fake-clock tests for question timeout and cancellation races; GREEN: cancel the owned Turn before expiring controls, without synthesizing an answer.
+- [x] 14.1 RED: add tests for single-select, multi-select, option limits, multiple questions, and complete answer encoding; GREEN: implement native select-menu collection.
+- [x] 14.2 RED: add tests for custom text, modal expiry, invalid labels, wrong actor, and incomplete answers; GREEN: implement modal/controlled reply handling.
+- [x] 14.3 RED: add concurrent-answer and remote-resolution tests; GREEN: atomically submit one complete response and disable stale controls.
+- [x] 14.4 RED: add fake-clock tests for question timeout and cancellation races; GREEN: cancel the owned Turn before expiring controls, without synthesizing an answer.
 
 ## 15. Reconciliation
 
