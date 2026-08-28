@@ -7,3 +7,5 @@ coverage/
 !.env.example
 *.log
 .DS_Store
+.agents/
+.opencode/
