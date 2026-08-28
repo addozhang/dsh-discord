@@ -31,6 +31,8 @@ export interface InboundIntentRecord {
   state: IntentState
   claimedAtMs: number
   resolvedAtMs?: number | undefined
+  /** Correlation: the Discord thread created for this source message. */
+  threadId?: string | undefined
 }
 
 export interface ClaimRequest {
@@ -58,6 +60,8 @@ export interface IntentStore {
   get(messageId: string): InboundIntentRecord | undefined
   claim(request: ClaimRequest): Promise<ClaimOutcome>
   resolve(messageId: string, outcome: ResolveOutcome, atMs: number): Promise<void>
+  /** Record the correlation thread for this intent, serialized. */
+  annotate(messageId: string, correlation: { threadId: string }): Promise<void>
 }
 
 const noBeforeClaim = (): void => {}
@@ -100,6 +104,13 @@ export function createIntentStore(table: IntentTable): IntentStore {
         const existing = table.get(messageId)
         if (existing === undefined) return
         await table.put(messageId, { ...existing, state: outcome, resolvedAtMs: atMs })
+      })
+    },
+    annotate(messageId, correlation) {
+      return enqueue(messageId, async () => {
+        const existing = table.get(messageId)
+        if (existing === undefined) return
+        await table.put(messageId, { ...existing, threadId: correlation.threadId })
       })
     },
   }

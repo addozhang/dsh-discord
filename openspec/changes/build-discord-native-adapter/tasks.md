@@ -61,12 +61,12 @@
 
 ## 8. Session creation and continuation
 
-- [ ] 8.1 RED: add tests for mention-gated parent-channel input, empty mentions, unbound channels, and unauthorized senders; GREEN: implement the new-task admission flow.
-- [ ] 8.2 RED: add tests for duplicate source messages and concurrent Thread-create attempts; GREEN: create or recover one Discord Thread using the source message as the stable intent.
-- [ ] 8.3 RED: add tests for Session-create success, rejection, and unknown outcome after Thread creation; GREEN: create or reconcile one DSH Session and persist the Thread binding.
-- [ ] 8.4 RED: add tests for initial-prompt success, duplicate delivery, and unknown admission; GREEN: submit once with a persisted request ID, reconcile against history and queue state, and require explicit retry after irreducible uncertainty.
-- [ ] 8.5 RED: add tests for ordinary Thread continuation while idle and busy; GREEN: submit every normal Thread message through `session.prompt` with `mode: queue`.
-- [ ] 8.6 RED: add tests for queue snapshots and removal of one owned pending item; GREEN: implement `/queue list` and `/queue remove`.
+- [x] 8.1 RED: add tests for mention-gated parent-channel input, empty mentions, unbound channels, and unauthorized senders; GREEN: implement the new-task admission flow.
+- [x] 8.2 RED: add tests for duplicate source messages and concurrent Thread-create attempts; GREEN: create or recover one Discord Thread using the source message as the stable intent.
+- [x] 8.3 RED: add tests for Session-create success, rejection, and unknown outcome after Thread creation; GREEN: create or reconcile one DSH Session and persist the Thread binding.
+- [x] 8.4 RED: add tests for initial-prompt success, duplicate delivery, and unknown admission; GREEN: submit once with a persisted request ID, reconcile against history and queue state, and require explicit retry after irreducible uncertainty.
+- [x] 8.5 RED: add tests for ordinary Thread continuation while idle and busy; GREEN: submit every normal Thread message through `session.prompt` with `mode: queue`.
+- [x] 8.6 RED: add tests for queue snapshots and removal of one owned pending item; GREEN: implement `/queue list` and `/queue remove`.
 
 ## 9. Session resume and control
 
