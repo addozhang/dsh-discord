@@ -36,17 +36,24 @@ export interface WorkspaceChannelCandidate {
 }
 
 /**
- * Decide create-vs-reuse for the workspace channel. Reuse requires a
- * same-name channel under the adapter's category that is unbound (the
- * caller binds it) or already bound to this Workspace; a channel serving
- * another Workspace is left untouched and a `-2` sibling is created instead.
+ * Decide create-vs-reuse for the workspace channel, Kimaki-add-project
+ * style. The Workspace's existing home channel (any channel of this guild
+ * already bound to this Workspace) wins outright: reuse without rebinding —
+ * one Workspace, one channel. Otherwise a same-name channel under the
+ * category is reused only when unbound; a channel serving another Workspace
+ * is never stolen, and a `-2` sibling is created instead.
  */
 export function planWorkspaceChannel(options: {
   channels: ReadonlyArray<WorkspaceChannelCandidate>
   categoryId: string
   desiredName: string
   bindingOf: (channelId: string) => ChannelBindingState
+  /** A channel of this guild already bound to this Workspace, when known. */
+  existingForWorkspace?: string | undefined
 }): WorkspaceChannelPlacement {
+  if (options.existingForWorkspace !== undefined) {
+    return { outcome: 'reuse', channelId: options.existingForWorkspace, needsBind: false }
+  }
   const sameName = options.channels.filter(
     channel => channel.parentId === options.categoryId && channel.name === options.desiredName,
   )

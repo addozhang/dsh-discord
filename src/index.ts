@@ -26,7 +26,7 @@ import { createProjectBindFlow, type ProjectBindPlan } from './features/project-
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
 import { handleApprovalClick, type DshApprovalRespondPort } from './features/approval-routing.js'
-import { channelBindingKey } from './state/domain.js'
+import { channelBindingKey, parseChannelBindingKey } from './state/domain.js'
 import { createBindingStore } from './state/bindings.js'
 import type { ChannelBinding } from './state/records.js'
 import { evaluateAuthorization, type PolicyTable } from './policy/authorization.js'
@@ -173,17 +173,28 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   }
   const bindChannelKey = (guildId: string, channelId: string): string =>
     channelBindingKey({ applicationId: applicationIdRef.current, guildId, channelId })
+  /** The guild channel already serving this Workspace, if any (Kimaki's one-project-one-channel lookup). */
+  const findBoundChannelFor = (guildId: string, workspaceId: string): string | undefined => {
+    for (const [key, binding] of rows) {
+      if (binding.workspaceId !== workspaceId) continue
+      const scope = parseChannelBindingKey(key)
+      if (scope?.guildId === guildId) return scope.channelId
+    }
+    return undefined
+  }
   /**
    * Ensure the Workspace's home channel exists under the adapter category
-   * and serves this Workspace. Reuse never steals: a channel bound to
-   * another Workspace is left alone and a `-2` sibling is created instead.
+   * and serves this Workspace (Kimaki one-project-one-channel: the
+   * Workspace's existing bound channel wins outright). A same-name channel
+   * is reused only when unbound; a channel serving another Workspace is
+   * never stolen — a `-2` sibling is created instead.
    */
   const ensureWorkspaceChannel = async (options: {
     guildId: string
     workspaceId: string
     title: string
     actorId: string
-  }): Promise<string | undefined> => {
+  }): Promise<{ channelId: string; created: boolean } | undefined> => {
     return withRest(async (rest) => {
       const ensured = await ensureCategory(rest, options.guildId)
       if (ensured === undefined) return undefined
@@ -192,18 +203,20 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (bound === undefined) return 'unbound'
         return bound.workspaceId === options.workspaceId ? 'this-workspace' : 'other-workspace'
       }
+      const existing = findBoundChannelFor(options.guildId, options.workspaceId)
+      const record = { workspaceId: options.workspaceId, boundBy: options.actorId, boundAtMs: Date.now() }
       const placement = planWorkspaceChannel({
         channels: ensured.channels.map((c) => ({ id: c.id, name: c.name, parentId: c.parent_id })),
         categoryId: ensured.categoryId,
         desiredName: workspaceChannelName(options.title),
         bindingOf,
+        existingForWorkspace: existing,
       })
-      const record = { workspaceId: options.workspaceId, boundBy: options.actorId, boundAtMs: Date.now() }
       if (placement.outcome === 'reuse') {
         if (placement.needsBind) {
           await bindingStore.bind(bindChannelKey(options.guildId, placement.channelId), record)
         }
-        return placement.channelId
+        return { channelId: placement.channelId, created: false }
       }
       const made = await rest.request<GuildChannel>('POST', `/guilds/${options.guildId}/channels`, {
         name: placement.name,
@@ -215,7 +228,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         return undefined
       }
       await bindingStore.bind(bindChannelKey(options.guildId, made.body.id), record)
-      return made.body.id
+      return { channelId: made.body.id, created: true }
     })
   }
 
@@ -512,7 +525,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           if (reference !== undefined) {
             const resolvedWorkspace = await resolver.resolve(reference)
             if (resolvedWorkspace.outcome === 'found') {
-              const channelId = await ensureWorkspaceChannel({
+              const ensuredChannel = await ensureWorkspaceChannel({
                 guildId: event.guildId,
                 workspaceId: result.binding.workspaceId,
                 title: resolvedWorkspace.workspace.title,
@@ -521,7 +534,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
                 rpcLog('discord_workspace_channel_ensure_threw', String(cause))
                 return undefined
               })
-              if (channelId !== undefined) channelNote = `\n频道：<#${channelId}> 已就绪（与当前频道同属此工作区）。`
+              if (ensuredChannel !== undefined) {
+                channelNote = ensuredChannel.created
+                  ? `\n✅ 已为工作区创建频道：<#${ensuredChannel.channelId}>`
+                  : `\n该工作区的频道已存在于：<#${ensuredChannel.channelId}>`
+              }
             }
           }
           await followUpResult(`✅ 已绑定到工作区 \`${workspaceReference(result.binding.workspaceId)}\`（修订 ${String(result.binding.revision)}）。${channelNote}`)

@@ -89,4 +89,29 @@ describe('planWorkspaceChannel', () => {
     })
     expect(plan).toEqual({ outcome: 'create', name: 'tmp' })
   })
+
+  it('the existing home channel wins outright \u2014 one workspace, one channel', () => {
+    // Even when another same-name channel is free and would match by name,
+    // the channel already serving this workspace is reused without rebinding
+    // (Kimaki: "A channel already exists for this directory").
+    const plan = planWorkspaceChannel({
+      channels,
+      categoryId: 'cat',
+      desiredName: 'tmp',
+      bindingOf,
+      existingForWorkspace: 'ch-ours',
+    })
+    expect(plan).toEqual({ outcome: 'reuse', channelId: 'ch-ours', needsBind: false })
+  })
+
+  it('the existing home channel wins even when it sits outside the category', () => {
+    const plan = planWorkspaceChannel({
+      channels: [],
+      categoryId: 'cat',
+      desiredName: 'tmp',
+      bindingOf,
+      existingForWorkspace: 'ch-anywhere',
+    })
+    expect(plan).toEqual({ outcome: 'reuse', channelId: 'ch-anywhere', needsBind: false })
+  })
 })
