@@ -1,7 +1,8 @@
 /**
- * `/project info` disclosure tests (7.6): members receive the workspace title
- * and opaque id only; the canonical path appears exclusively in a
- * Workspace-administrator's ephemeral response. Every response is ephemeral.
+ * `/project info` disclosure tests (7.6, amended by design §3): every
+ * authorized member sees the Workspace identity and its canonical path —
+ * paths are not sensitive for this trusted-Guild product — and every
+ * response is ephemeral. Denied actors are refused outright.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -14,17 +15,17 @@ const OPERATOR = { allowed: true, level: 'host-operator' } as const
 const MEMBER = { allowed: true, level: 'member' } as const
 
 describe('/project info', () => {
-  it('shows title and opaque id to members without the path', () => {
+  it('shows the title and canonical path to an authorized member', () => {
     const view = projectInfo({ decision: MEMBER, workspace: WORKSPACE })
     expect(view.outcome).toBe('info')
     if (view.outcome !== 'info') return
     expect(view.workspace.title).toBe('App')
     expect(view.workspace.id).toBe('aaaaaaaa-1234')
-    expect(JSON.stringify(view)).not.toContain('/srv')
+    expect(view.workspace.path).toBe('/srv/secret/app')
     expect(view.response).toBe('ephemeral')
   })
 
-  it('discloses the canonical path in the administrator response', () => {
+  it('shows the path at administrator authority', () => {
     const view = projectInfo({ decision: ADMIN, workspace: WORKSPACE })
     expect(view.outcome).toBe('info')
     if (view.outcome !== 'info') return

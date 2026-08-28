@@ -1,11 +1,11 @@
 /**
- * `/project info` (design.md §13). Members get the workspace title and its
- * opaque id; the canonical path is disclosed only when the caller carries
- * Workspace-administrator authority, and even then the response stays
- * ephemeral — a path never lands in channel metadata or public messages.
+ * `/project info` (design.md §3, §13). Any authorized member sees the
+ * Workspace identity and its canonical path — paths are not treated as
+ * sensitive for this self-hosted, trusted-Guild product — and the response
+ * is always ephemeral. A path never lands in durable channel metadata.
  */
 
-import { levelAtLeast, type AccessDecision } from '../policy/authorization.js'
+import type { AccessDecision } from '../policy/authorization.js'
 import { describeWorkspace, type WorkspaceDetail, type WorkspaceEntry } from '../policy/disclosure.js'
 
 export type ProjectInfoView =
@@ -13,19 +13,17 @@ export type ProjectInfoView =
   | { outcome: 'refused'; reason: 'not-authorized' }
 
 /**
- * Build the info view for one workspace. The path's presence is decided by
- * the caller's ranked authority, and the disclosure policy owns the exact
- * shape — this module only proves the authority and marks the response
- * ephemeral.
+ * Build the info view for one workspace. Authorization proves membership;
+ * the disclosure policy owns the exact rendered shape, and the response is
+ * always ephemeral.
  */
 export function projectInfo(input: { decision: AccessDecision; workspace: WorkspaceEntry }): ProjectInfoView {
   if (!input.decision.allowed) {
     return { outcome: 'refused', reason: 'not-authorized' }
   }
-  const includePath = levelAtLeast(input.decision.level, 'workspace-administrator')
   return {
     outcome: 'info',
-    workspace: describeWorkspace(input.workspace, { includePath }),
+    workspace: describeWorkspace(input.workspace, { includePath: true }),
     response: 'ephemeral',
   }
 }

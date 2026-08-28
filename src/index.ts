@@ -22,15 +22,13 @@ import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } f
 import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, type DshApiProxyFace } from './dsh/api-proxy-face.js'
 import { createProjectListView, workspaceAutocompleteChoices } from './features/project-list.js'
 import { projectInfo } from './features/project-info.js'
-import { createProjectBindFlow, type ProjectBindPlan } from './features/project-bind.js'
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
 import { handleApprovalClick, type DshApprovalRespondPort } from './features/approval-routing.js'
 import { channelBindingKey, parseChannelBindingKey } from './state/domain.js'
 import { createBindingStore } from './state/bindings.js'
 import type { ChannelBinding } from './state/records.js'
-import { evaluateAuthorization, type PolicyTable } from './policy/authorization.js'
-import { workspaceReference } from './policy/disclosure.js'
+import { evaluateAuthorization, levelAtLeast, type PolicyTable } from './policy/authorization.js'
 import { planWorkspaceChannel, workspaceChannelName, type ChannelBindingState } from './features/workspace-channel.js'
 import type { GatewaySocket } from './gateway/gateway.js'
 
@@ -134,14 +132,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     sessionForThread: () => undefined,
   }
 
-  // The bind flow's two phases plan against the live catalog and commit
-  // through the revision-fenced store; the Discord confirm button carries
-  // only an opaque registry id between the phases.
+  // Bind provision resolves the selection against the live catalog; the
+  // Discord confirm button carries only opaque registry ids between the
+  // command and the write.
   const resolver = createWorkspaceResolver(apiProxy, { log: rpcLog })
-  const bindFlow = createProjectBindFlow({
-    resolver,
-    bindings: bindingStore,
-  })
 
   // Adapter-owned guild surfaces: the "DeepSeek Harness" category, the
   // general control channel (both provisioned on READY), and — on bind —
@@ -198,7 +192,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     return withRest(async (rest) => {
       const ensured = await ensureCategory(rest, options.guildId)
       if (ensured === undefined) return undefined
+      // The control channel (general, the Kimaki #kimaki-opencode analog) is
+      // the command surface — it must never become a Workspace home.
+      const controlChannelId = ensured.channels.find((c) => c.type === 0 && c.name.toLowerCase() === 'general' && c.parent_id === ensured.categoryId)?.id
       const bindingOf = (channelId: string): ChannelBindingState => {
+        if (channelId === controlChannelId) return 'other-workspace'
         const bound = bindingStore.get(bindChannelKey(options.guildId, channelId))
         if (bound === undefined) return 'unbound'
         return bound.workspaceId === options.workspaceId ? 'this-workspace' : 'other-workspace'
@@ -373,15 +371,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             const subcommand = Array.isArray(options) ? options[0] : undefined
             const subName = subcommand?.name
             if (subName === 'bind') {
-              // `/project bind workspace:<ws:id>`: plan against the live
-              // catalog, then hand the decision to an ephemeral confirm
-              // button. Only the opaque registry id crosses the wire.
-              const wireOptions = Array.isArray(subcommand?.options) ? subcommand.options : []
-              const reference = wireOptions.find(option => option.name === 'workspace')?.value
-              if (typeof reference !== 'string' || reference === '') {
-                await followUp('用法：/project bind workspace:<从 /project list 复制的引用>')
-                return
-              }
+              // Kimaki add-project semantics: bind provisions (or reuses)
+              // the Workspace's home channel under the adapter category.
+              // The current channel — e.g. the control channel — is never
+              // captured; only the opaque ws: reference crosses the wire.
               const decision = evaluateAuthorization(policy(), {
                 guildId: event.guildId,
                 userId: event.actorId,
@@ -389,30 +382,37 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
                 memberPermissions: event.memberPermissions,
                 isBot: event.isBot,
               })
-              const plan = await bindFlow.plan({
-                decision,
-                scope: {
-                  applicationId: applicationIdRef.current,
-                  guildId: event.guildId,
-                  channelId: event.channelId,
-                },
-                actorId: event.actorId,
-                reference,
-                confirmed: false,
-              })
-              if (plan.outcome !== 'planned') {
-                await followUp(plan.reason === 'not-authorized'
-                  ? '⛔ 只有工作区管理员可以绑定频道。'
-                  : plan.reason === 'workspace-no-longer-registered'
-                    ? '⚠️ 该工作区已不存在，请用 /project list 重新选择。'
+              if (!decision.allowed || !levelAtLeast(decision.level, 'workspace-administrator')) {
+                await followUp('⛔ 只有工作区管理员可以绑定频道。')
+                return
+              }
+              const wireOptions = Array.isArray(subcommand?.options) ? subcommand.options : []
+              const reference = wireOptions.find(option => option.name === 'workspace')?.value
+              if (typeof reference !== 'string' || reference === '') {
+                await followUp('用法：/project bind workspace:<从候选中选择>')
+                return
+              }
+              const resolvedWorkspace = await resolver.resolve(reference)
+              if (resolvedWorkspace.outcome !== 'found') {
+                await followUp(resolvedWorkspace.outcome === 'stale'
+                  ? '⚠️ 该工作区已不存在，请用 /project bind 的候选重新选择。'
+                  : resolvedWorkspace.outcome === 'unknown'
+                    ? '⚠️ 工作区目录未在限时内确认（结果未知），请稍后重试。'
                     : '⚠️ 工作区目录暂时不可用，请稍后重试。')
                 return
               }
+              const { id: workspaceId, title } = resolvedWorkspace.workspace
+              const existing = findBoundChannelFor(event.guildId, workspaceId)
+              if (existing !== undefined) {
+                // Idempotent, Kimaki-style: one workspace, one channel.
+                await followUp(`工作区「${title}」的频道已存在于：<#${existing}>`)
+                return
+              }
               const expiresAtMs = Date.now() + 15 * 60 * 1000
-              const confirmId = runtime.registry.register({ kind: 'project-bind', action: 'confirm', plan, actorId: event.actorId, reference, expiresAtMs })
-              const cancelId = runtime.registry.register({ kind: 'project-bind', action: 'cancel', plan, actorId: event.actorId, reference, expiresAtMs })
-              rpcLog('discord_project_bind_planned', { interactionId: event.interactionId, workspaceId: plan.workspaceId })
-              await followUp(`将把当前频道绑定到工作区 \`${reference}\`？`, buttonRow(confirmId, cancelId))
+              const confirmId = runtime.registry.register({ kind: 'project-bind', action: 'confirm', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
+              const cancelId = runtime.registry.register({ kind: 'project-bind', action: 'cancel', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
+              rpcLog('discord_project_bind_planned', { interactionId: event.interactionId, workspaceId })
+              await followUp(`将为工作区「${title}」创建专属频道（DeepSeek Harness 分类下）？`, buttonRow(confirmId, cancelId))
               return
             }
             if (subName === 'list') {
@@ -424,7 +424,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
                   : '⚠️ 无法读取工作区目录，请稍后重试。')
                 return
               }
-              const rows = view.items.map(item => `• ${item.label} — \`${item.value}\``)
+              // Names only: the bind option autocompletes live candidates,
+              // so ids never need to be read, copied, or typed.
+              const rows = view.items.map(item => `• ${item.label}`)
               const pager = view.pageCount > 1 ? `\n（第 ${String(view.pageIndex + 1)}/${String(view.pageCount)} 页）` : ''
               await followUp(rows.length === 0 ? '（没有已注册的工作区）' : ['**可用工作区**', ...rows].join('\n') + pager)
               return
@@ -442,10 +444,14 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
               })
               const binding = bindingStore.get(bindChannelKey(event.guildId, event.channelId))
               if (binding === undefined) {
-                await followUp(decision.allowed ? '此频道尚未绑定工作区；用 /project bind 选择。' : '⛔ 此频道未绑定工作区。')
+                // Bind provisions the Workspace's home channel — most
+                // channels, including the control channel, are unbound.
+                await followUp(decision.allowed
+                  ? '此频道未绑定工作区；请到工作区的专属频道中使用（/project bind 可创建）。'
+                  : '⛔ 此频道未绑定工作区。')
                 return
               }
-              const detail = await readWorkspaceDetail(apiProxy, workspaceReference(binding.workspaceId), { log: rpcLog })
+              const detail = await readWorkspaceDetail(apiProxy, binding.workspaceId, { log: rpcLog })
               if (!decision.allowed) {
                 // Refuse identity disclosure to non-members even when bound.
                 await followUp('⛔ 只有成员可以查看此频道的绑定。')
@@ -468,7 +474,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
                 return
               }
               const lines = [
-                `**${view.workspace.label}** — \`${workspaceReference(view.workspace.id)}\``,
+                `**${view.workspace.label}**`,
                 `修订 ${String(binding.revision)}（由 <@${binding.boundBy}> 绑定）`,
               ]
               if (view.workspace.path !== undefined) lines.push(`路径：\`${view.workspace.path}\``)
@@ -506,47 +512,45 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             rpcLog('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
           }
         }
-        const plan = bindContext['plan'] as ProjectBindPlan | undefined
         const owner = bindContext['actorId']
-        if (plan === undefined || plan.outcome !== 'planned' || owner !== event.actorId) {
-          // Another member's button: deny ephemerally and leave the control
-          // pending for its rightful owner.
+        const workspaceId = bindContext['workspaceId']
+        const workspaceTitle = bindContext['workspaceTitle']
+        const boundGuildId = bindContext['guildId']
+        if (
+          owner !== event.actorId
+          || typeof workspaceId !== 'string'
+          || typeof workspaceTitle !== 'string'
+          || typeof boundGuildId !== 'string'
+        ) {
+          // Another member's button (or a malformed context): deny
+          // ephemerally and leave the control pending for its rightful owner.
           await followUpResult('⛔ 此确认不属于你。')
           return
         }
-        const cancelled = bindContext['action'] !== 'confirm'
-        const result = await bindFlow.commit(plan, { cancelled })
-        rpcLog('discord_project_bind_commit', { action: bindContext['action'], outcome: result.outcome })
-        if (result.outcome === 'bound') {
-          // Provision (or reuse) the Workspace's home channel under the
-          // adapter category; a failure here never undoes the bind itself.
-          let channelNote = ''
-          const reference = typeof bindContext['reference'] === 'string' ? bindContext['reference'] : undefined
-          if (reference !== undefined) {
-            const resolvedWorkspace = await resolver.resolve(reference)
-            if (resolvedWorkspace.outcome === 'found') {
-              const ensuredChannel = await ensureWorkspaceChannel({
-                guildId: event.guildId,
-                workspaceId: result.binding.workspaceId,
-                title: resolvedWorkspace.workspace.title,
-                actorId: event.actorId,
-              }).catch((cause: unknown) => {
-                rpcLog('discord_workspace_channel_ensure_threw', String(cause))
-                return undefined
-              })
-              if (ensuredChannel !== undefined) {
-                channelNote = ensuredChannel.created
-                  ? `\n✅ 已为工作区创建频道：<#${ensuredChannel.channelId}>`
-                  : `\n该工作区的频道已存在于：<#${ensuredChannel.channelId}>`
-              }
-            }
-          }
-          await followUpResult(`✅ 已绑定到工作区 \`${workspaceReference(result.binding.workspaceId)}\`（修订 ${String(result.binding.revision)}）。${channelNote}`)
+        if (bindContext['action'] !== 'confirm') {
+          await followUpResult('已取消，未创建频道。')
           return
         }
-        await followUpResult(cancelled
-          ? '已取消，绑定未变更。'
-          : '⚠️ 绑定状态已变化，请重新执行 /project bind。')
+        // The write happens only now, on explicit confirmation: provision
+        // (or reuse) the Workspace's home channel and bind it — the channel
+        // the command was typed in is never captured.
+        const ensuredChannel = await ensureWorkspaceChannel({
+          guildId: boundGuildId,
+          workspaceId,
+          title: workspaceTitle,
+          actorId: event.actorId,
+        }).catch((cause: unknown) => {
+          rpcLog('discord_workspace_channel_ensure_threw', String(cause))
+          return undefined
+        })
+        if (ensuredChannel === undefined) {
+          await followUpResult('⚠️ 频道创建失败，请稍后重试。')
+          return
+        }
+        rpcLog('discord_project_bind_commit', { workspaceId, channelId: ensuredChannel.channelId, created: ensuredChannel.created })
+        await followUpResult(ensuredChannel.created
+          ? `✅ 已为工作区「${workspaceTitle}」创建频道：<#${ensuredChannel.channelId}>`
+          : `工作区「${workspaceTitle}」的频道已存在于：<#${ensuredChannel.channelId}>`)
         return
       }
       void handleApprovalClick(

@@ -209,7 +209,7 @@ export async function readWorkspaceDetail(
     log?.('discord_workspace_detail_rejected', { code: result.error.code })
     return { outcome: 'failed' }
   }
-  const id = parseWorkspaceReference(reference)
+  const id = parseWorkspaceReference(reference) ?? (reference === '' ? undefined : reference)
   const found = Array.isArray(result.value.items)
     ? result.value.items.find(workspace => workspace.workspaceId === id)
     : undefined
