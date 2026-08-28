@@ -138,17 +138,25 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   runtimeRef.current = startDiscordAdapter({
     tokenProvider: async () => (await resolveDiscordBotToken(credentials)) ?? undefined,
     socketFactory: (url): GatewaySocket => {
-      const socket = new WebSocket(url)
-      return {
+      const ws = new WebSocket(url)
+      // Translate the browser-style WebSocket event API (undici) into the
+      // adapter's plain-callback contract. onclose MUST pass the numeric
+      // close code: terminal codes drive the fail-closed status surface.
+      const socket: GatewaySocket = {
         url,
         onopen: null,
         onmessage: null,
         onclose: null,
         onerror: null,
-        close: (code?: number) => { socket.close(code ?? 1000) },
-        terminate: () => { socket.close(1000) },
-        send: (data: string) => { socket.send(data) },
+        close: (code?: number) => { ws.close(code ?? 1000) },
+        terminate: () => { ws.close(1000) },
+        send: (data: string) => { ws.send(data) },
       }
+      ws.onopen = () => { socket.onopen?.() }
+      ws.onmessage = (ev) => { socket.onmessage?.(typeof ev.data === 'string' ? ev.data : String(ev.data)) }
+      ws.onclose = (ev) => { socket.onclose?.(ev.code) }
+      ws.onerror = () => { socket.onerror?.(new Error('socket error')) }
+      return socket
     },
     policy,
     selfUserIdProvider: async () => {
