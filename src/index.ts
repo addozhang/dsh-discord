@@ -158,6 +158,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       return me.body.id
     },
     intents: GATEWAY_INTENTS,
+    allowedGuildIds: [...current.allowedGuildIds],
     bindings,
     ensureGuildChannels: async (guildId) => {
       const token = (await resolveDiscordBotToken(credentials)) ?? ''
@@ -175,13 +176,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       }
       const hasControl = channels.body.some((c) => c.type === 0 && c.name.toLowerCase() === CHANNEL_NAME && c.parent_id === category.id)
       if (hasControl) return
-      // Reuse an existing #general channel (move it under the category)
-      // instead of creating a duplicate.
-      const existing = channels.body.find((c) => c.type === 0 && c.name.toLowerCase() === CHANNEL_NAME)
-      if (existing !== undefined) {
-        await rest.request('PATCH', `/channels/${existing.id}`, { parent_id: category.id })
-        return
-      }
+      // Never touch channels outside our category: create our own only.
       await rest.request('POST', `/guilds/${guildId}/channels`, { name: CHANNEL_NAME, type: 0, parent_id: category.id })
     },
     submitPrompt: {
