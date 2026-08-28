@@ -19,8 +19,8 @@ import type {} from './slot-contract.js'
 /** Stable Cordis plugin name for diagnostics. */
 export const name = 'dsh-discord-client'
 
-/** Client services the card needs: settings transport, slot registry, and the plugin RPC channel. */
-export const inject = ['settingsScope', 'slots', 'connection']
+/** Client services the card needs: settings transport, slot registry, plugin RPC channel, and locale. */
+export const inject = ['settingsScope', 'slots', 'connection', 'locale']
 
 /** The status poll cadence; the Host is the only authority on connection state. */
 const STATUS_POLL_MS = 30_000
@@ -44,14 +44,21 @@ interface PluginRpcFace {
 export function apply(ctx: ClientContext): void {
   const scope = ctx.settingsScope.bind<DiscordSettings>({ namespace: DISCORD_SETTINGS_NAMESPACE })
   const controller = new DiscordCardController(scope)
-  // Register under the settings UI's declared parent slot — a standalone
-  // slot name fails the loader's children-table check at runtime.
+  // Register the card's copy dictionary, then the card under the settings
+  // UI's declared parent slot — a standalone slot name fails the loader's
+  // children-table check at runtime.
+  ;(ctx as ClientContext & {
+    locale: { register(namespace: string, dictionary: Record<string, Record<string, string>>): unknown }
+  }).locale.register('dsh-discord', {
+    en: DISCORD_CARD_LOCALE_EN,
+    zh: DISCORD_CARD_LOCALE_ZH,
+  })
   ctx.slots.inject('settings.section', () => ctx.slots.register({
     name: 'settings.section',
     id: 'discord',
     order: 100,
     label: 'Discord',
-    locale: 'settings.plugins',
+    locale: 'dsh-discord',
     registrant: name,
     inject: () => controller.face(),
   }, DiscordSettingsCard))
@@ -74,4 +81,55 @@ export function apply(ctx: ClientContext): void {
   poll()
   const timer = setInterval(poll, STATUS_POLL_MS)
   ctx.effect(() => () => { clearInterval(timer) }, 'discord status poll')
+}
+
+/** Card copy: every key the slot contract declares, both dictionaries. */
+const DISCORD_CARD_LOCALE_EN = {
+  discordTitle: 'Discord',
+  discordDescription: 'Bind channels to Workspaces and authorize who may use the bot.',
+  discordAllowedGuildIds: 'Allowed Guilds', discordAllowedGuildIdsHint: 'One Guild snowflake per line',
+  discordMemberUserIds: 'Member Users', discordMemberUserIdsHint: 'One user snowflake per line',
+  discordMemberRoleIds: 'Member Roles', discordMemberRoleIdsHint: 'One role snowflake per line',
+  discordAdminUserIds: 'Administrators (Users)', discordAdminUserIdsHint: 'One user snowflake per line',
+  discordAdminRoleIds: 'Administrators (Roles)', discordAdminRoleIdsHint: 'One role snowflake per line',
+  discordDeniedUserIds: 'Denied Users', discordDeniedUserIdsHint: 'One user snowflake per line',
+  discordDeniedRoleIds: 'Denied Roles', discordDeniedRoleIdsHint: 'One role snowflake per line',
+  discordHostOperatorUserIds: 'Host Operators', discordHostOperatorUserIdsHint: 'One user snowflake per line',
+  discordInvalidIds: 'IDs must be 17–20 digit snowflakes, one per line',
+  discordStatusConnected: 'Connected', discordStatusConnecting: 'Connecting…',
+  discordStatusDisconnected: 'Disconnected', discordStatusInvalidToken: 'Token rejected',
+  discordStatusIntentsBlocked: 'Gateway intents blocked', discordStatusPermissionsBlocked: 'Missing channel permissions',
+  discordHintConfigureToken: 'Configure the bot token in credentials',
+  discordHintTokenRejected: 'Discord rejected the token — update it',
+  discordHintEnableIntents: 'Enable privileged intents in the Developer Portal',
+  discordHintGatewayClosed: 'Gateway closed unexpectedly',
+  discordHintChannelPermissions: 'The bot lacks permissions in this channel',
+  reset: 'Reset', expand: 'Expand', collapse: 'Collapse', unsaved: 'Unsaved changes',
+  readOnly: 'Read-only', saveFailed: 'Save failed', discard: 'Discard', save: 'Save', saving: 'Saving…',
+  overridden: 'Overridden',
+}
+
+const DISCORD_CARD_LOCALE_ZH = {
+  discordTitle: 'Discord',
+  discordDescription: '将频道绑定到工作区，并授权可使用机器人的成员。',
+  discordAllowedGuildIds: '允许的 Guild', discordAllowedGuildIdsHint: '每行一个 Guild 雪花 ID',
+  discordMemberUserIds: '成员用户', discordMemberUserIdsHint: '每行一个用户雪花 ID',
+  discordMemberRoleIds: '成员角色', discordMemberRoleIdsHint: '每行一个角色雪花 ID',
+  discordAdminUserIds: '管理员（用户）', discordAdminUserIdsHint: '每行一个用户雪花 ID',
+  discordAdminRoleIds: '管理员（角色）', discordAdminRoleIdsHint: '每行一个角色雪花 ID',
+  discordDeniedUserIds: '拒绝的用户', discordDeniedUserIdsHint: '每行一个用户雪花 ID',
+  discordDeniedRoleIds: '拒绝的角色', discordDeniedRoleIdsHint: '每行一个角色雪花 ID',
+  discordHostOperatorUserIds: 'Host 操作员', discordHostOperatorUserIdsHint: '每行一个用户雪花 ID',
+  discordInvalidIds: 'ID 必须是 17–20 位雪花数字，每行一个',
+  discordStatusConnected: '已连接', discordStatusConnecting: '连接中…',
+  discordStatusDisconnected: '未连接', discordStatusInvalidToken: 'Token 被拒绝',
+  discordStatusIntentsBlocked: 'Gateway intents 被拒', discordStatusPermissionsBlocked: '缺少频道权限',
+  discordHintConfigureToken: '请在凭据中配置 Bot Token',
+  discordHintTokenRejected: 'Discord 拒绝了该 Token，请更新',
+  discordHintEnableIntents: '请在开发者门户开启特权 intents',
+  discordHintGatewayClosed: 'Gateway 连接异常关闭',
+  discordHintChannelPermissions: 'Bot 在该频道缺少权限',
+  reset: '重置', expand: '展开', collapse: '收起', unsaved: '有未保存修改',
+  readOnly: '只读', saveFailed: '保存失败', discard: '放弃', save: '保存', saving: '保存中…',
+  overridden: '已覆盖',
 }

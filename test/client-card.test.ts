@@ -58,6 +58,7 @@ describe('client entry', () => {
     const ctx = {
       settingsScope: { bind: vi.fn(() => scope) },
       slots: { register: vi.fn(() => disposer), inject: vi.fn((_name: string, factory: () => unknown) => factory()) },
+      locale: { register: vi.fn() },
       effect: vi.fn((execute: () => unknown) => { execute() }),
     } as unknown as ClientContext & {
       settingsScope: { bind: ReturnType<typeof vi.fn> }
@@ -74,7 +75,7 @@ describe('client entry', () => {
     expect(options).toMatchObject({
       name: 'settings.section',
       id: 'discord',
-      locale: 'settings.plugins',
+      locale: 'dsh-discord',
     })
     expect(typeof options.inject).toBe('function')
     expect(ctx.effect).toHaveBeenCalledTimes(1)

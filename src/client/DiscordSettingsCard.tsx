@@ -9,7 +9,7 @@ import type {} from './slot-contract.js'
 /** Props the runtime binds for the Discord settings card. */
 export type DiscordSettingsCardProps =
   PropsRuntime<"settings.section">
-  & PropsLocale<'settings.plugins'>
+  & PropsLocale<'dsh-discord'>
   & InjectFace<DiscordCardFace>
 
 const ID_FIELDS = [
