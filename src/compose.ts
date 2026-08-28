@@ -108,6 +108,7 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
   // allowed guild, created idempotently on the first READY.
   const provisioned = new Set<string>()
   function handleDispatch(dispatch: GatewayDispatch): void {
+    if (dispatch.t === 'READY') status.setGateway('connected')
     const accepted = ingress?.accept(dispatch)
     if (accepted?.accepted === true && accepted.event !== undefined && accepted.event.kind === 'interaction') {
       const d = dispatch.d as Record<string, unknown> | undefined

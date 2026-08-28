@@ -87,3 +87,10 @@ ship automatically.
 **当前卡点**：/project list 无响应，诊断日志未触发——交互未到达 routeInteraction。Gateway TLS 连接存在但 identify 未验证。
 **下一步排查**：1) 确认 Discord 中 DSH 是否显示在线（区分 identify 失败 vs dispatch 断点）；2) 在 ingress.accept 前加 dispatch.t 日志定位；3) 检查 GATEWAY_INTENTS 位组合（33280=0x8200：guilds+guild_messages+message_content? 需核对 guild_members 1<<1 是否被开发者门户特权开关允许——4014 会静默断连）。
 **测试后**：Reset bot token（已在本会话暴露）。
+
+## 15.10 调试快照（会话截止时）
+
+- 部署链路全通：插件激活/卡片/本地化/token 零泄露 ✓；intents 门户开关已开；allowlist 已持久化；命令注册 PUT 重放 200（9 命令已在 Guild）。
+- **卡点**：适配器 Gateway 连接后进入 4000（unknown error）close 循环，状态卡「连接中」；裸 Node 脚本（同 token+intents 33283）identify 可 READY——差异在 dsh 进程内的会话续接/identify 细节。
+- **下一步**：1) gateway.ts 加 HELLO/IDENTIFY/READY 诊断（已加 close:4000 日志于 /tmp/dsh-web-test.log）；2) 对比裸脚本与 gateway.ts 的 identify 载荷（properties/intents/token 来源）；3) 怀疑点：resume 会话过期→op9→4000 循环、tokenProvider 竞态返回旧值、socket 事件翻译遗漏。
+- 插件安装注意：pnpm 对同名同版本 tarball 跳过重装——必须 `pnpm remove` 后再 add（已多次踩坑）。

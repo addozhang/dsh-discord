@@ -214,6 +214,7 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
   }
 
   function handleClose(code: number): void {
+    console.error('[dsh-discord] gateway close:', code)
     clearTimers()
     if (disposed) return
     if (TERMINAL_CLOSE_CODES.includes(code)) {
