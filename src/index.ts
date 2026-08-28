@@ -87,6 +87,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
 
   const credentials = ctx.get('credentials') as DiscordCredentialProvider
   const apiProxy = ctx.get('apiProxy') as unknown as {
+    workspace: { list(request: { rpcId: string; payload: Record<string, never> }): Promise<unknown> }
     respond: (rpcId: string, payload: unknown) => Promise<unknown>
     sessions: {
       prompt(request: {
@@ -196,9 +197,31 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
     questions: createQuestionStore(),
     status: statusTracker,
-    routeInteraction: (event) => {
+    routeInteraction: async (event, interactionToken) => {
       const runtime = runtimeRef.current
       if (runtime === undefined) return
+      // Slash commands (type 2): deferred ephemeral ack, then the feature
+      // result as an ephemeral followup. /project list+bind close the loop.
+      if (event.kind === 'interaction' && event.interactionType === 2 && interactionToken !== undefined) {
+        const rest = createRestClient({ token: (await resolveDiscordBotToken(credentials)) ?? '' })
+        const ack = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 5, data: { flags: 64 } })
+        if (ack.outcome !== 'completed') return
+        const followUp = (content: string): void => {
+          void rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: 64 })
+        }
+        if (event.commandName === 'project') {
+          const options = event.data['options'] as Array<{ name: string; value?: string }> | undefined
+          const subName = Array.isArray(options) ? options[0]?.name : undefined
+          if (subName === 'bind') {
+            followUp('Bind: 选择器将在下个迭代提供；请先用 /project list 查看 ID。')
+            return
+          }
+          const listed = await apiProxy.workspace.list({ rpcId: crypto.randomUUID(), payload: {} }) as { payload?: { workspaces?: Array<{ workspaceId: string; title: string }> } } | undefined
+          const rows = (listed?.payload?.workspaces ?? []).map((w) => `• ${w.title} (${w.workspaceId.slice(0, 8)}…)`)
+          followUp(rows.length === 0 ? '（没有已注册的工作区）' : ['**可用工作区**', ...rows].join('\n'))
+        }
+        return
+      }
       // Component clicks (type 3) carry the opaque custom_id; routing
       // resolves it through the shared registry and submits via respond.
       if (event.kind !== 'interaction' || event.interactionType !== 3) return

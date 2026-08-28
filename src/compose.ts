@@ -54,7 +54,7 @@ export interface CompositionDeps {
    * Interaction (commands/components/modals) routing, wired by the Host
    * composition where the typed apiProxy respond face lives.
    */
-  routeInteraction?: (event: NormalizedInboundEvent) => void
+  routeInteraction?: (event: NormalizedInboundEvent, interactionToken?: string) => void
   /** Idempotently ensure the category + control channel exist in a guild. */
   ensureGuildChannels?: (guildId: string) => Promise<void>
   /** Allowlist snapshot used to provision channels on READY. */
@@ -102,13 +102,18 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
   let gateway: GatewayHandle | undefined
   let started = false
   let startError: 'missing-token' | undefined
-  let ingress: { accept(dispatch: GatewayDispatch): { accepted: boolean } } | undefined
+  let ingress: { accept(dispatch: GatewayDispatch): { accepted: boolean; event?: NormalizedInboundEvent } } | undefined
 
   // Kimaki-style provisioning: one category + one control channel per
   // allowed guild, created idempotently on the first READY.
   const provisioned = new Set<string>()
   function handleDispatch(dispatch: GatewayDispatch): void {
-    ingress?.accept(dispatch)
+    const accepted = ingress?.accept(dispatch)
+    if (accepted?.accepted === true && accepted.event !== undefined && accepted.event.kind === 'interaction') {
+      const d = dispatch.d as Record<string, unknown> | undefined
+      const token = typeof d?.['token'] === 'string' ? d['token'] : undefined
+      deps.routeInteraction?.(accepted.event, token)
+    }
     if (dispatch.t === 'READY' && deps.ensureGuildChannels !== undefined) {
       for (const guildId of deps.allowedGuildIds ?? []) {
         if (provisioned.has(guildId)) continue
