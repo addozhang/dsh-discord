@@ -1,0 +1,9 @@
+node_modules/
+.pnpm-store/
+lib/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
