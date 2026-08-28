@@ -12,7 +12,9 @@
     "noUnusedParameters": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "eslint.config.js"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "eslint.config.js"]
 }

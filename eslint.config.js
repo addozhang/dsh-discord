@@ -5,10 +5,10 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
-    ignores: ['lib/**', 'coverage/**', '.agents/**', 'eslint.config.js'],
+    ignores: ['lib/**', 'coverage/**', '.agents/**', 'scripts/**', 'eslint.config.js'],
   },
   {
-    files: ['src/**/*.ts', 'test/**/*.ts'],
+    files: ['src/**/*.ts', 'src/**/*.tsx', 'test/**/*.ts', 'test/**/*.tsx'],
     languageOptions: {
       parserOptions: {
         projectService: true,

@@ -1,0 +1,14 @@
+# The dsh-discord bundle patch: mounts the embedded Discord adapter into the
+# Web profile's Host plugin tree. The row injects every required DSH service,
+# so activation waits until the Host provides them; the plugin's own startup
+# validation (task 1.3) fails loud when a dependency is present but
+# incompatible.
+#
+# The browser half is declared through this package's `dsh.client` manifest,
+# so the modules node half scans it into the browser roster automatically and
+# no client row is needed here.
+
+- insert:
+    - id: dsh-discord
+      name: '@addozhang/dsh-discord'
+      inject: [apiProxy, credentials, settings, storageDomain, connection]

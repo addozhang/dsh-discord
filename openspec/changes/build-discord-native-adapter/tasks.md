@@ -1,15 +1,15 @@
 ## 1. Package foundation
 
 - [x] 1.1 Scaffold the Node 22+ ESM package `@addozhang/dsh-discord` with pnpm, TypeScript, Vitest, lint/typecheck/build scripts, and exact DSH peer versions; verify the empty package with `pnpm test`, `pnpm typecheck`, `pnpm lint`, and `pnpm build`.
-- [ ] 1.2 Add the `dsh.bundle` manifest, Host entry, Client entry, and bundle patch; verify a packed artifact installs and activates in a disposable Web profile.
-- [ ] 1.3 RED: add contract tests for missing/incompatible `apiProxy`, credentials, settings, storage, and connection capabilities; GREEN: implement fail-loud startup validation; REFACTOR with focused tests green.
-- [ ] 1.4 RED: add lifecycle tests with open timers, listeners, and fake connections; GREEN: implement one cancellation root and Cordis-owned cleanup; REFACTOR with no post-disposal work.
+- [ ] 1.2 Add the `dsh.bundle` manifest, Host entry, Client entry, and bundle patch; verify a packed artifact installs and activates in a disposable Web profile. *(Manifest, `cordis.patch.yml`, `./client` entry, esbuild bundle, and `npm pack` verification done; disposable-profile activation still requires the `dsh` CLI.)*
+- [x] 1.3 RED: add contract tests for missing/incompatible `apiProxy`, credentials, settings, storage, and connection capabilities; GREEN: implement fail-loud startup validation; REFACTOR with focused tests green.
+- [x] 1.4 RED: add lifecycle tests with open timers, listeners, and fake connections; GREEN: implement one cancellation root and Cordis-owned cleanup; REFACTOR with no post-disposal work.
 
 ## 2. Settings and credentials
 
-- [ ] 2.1 RED: add settings-schema tests for one bot, allowed Guild IDs, user/role allow and deny rules, Workspace administrator rules, Host-operator user IDs, verbosity, and bounded timing/retry values; GREEN: register the plugin settings namespace with live updates and last-known-good validation.
-- [ ] 2.2 RED: add tests for credential presence, token redaction, per-connection resolution, rotation, and deletion; GREEN: implement one fixed plugin-owned Discord token reference without copying its value into settings or state.
-- [ ] 2.3 RED: add client tests for redacted settings, revision conflicts, invalid token/intents status, and save feedback; GREEN: implement the minimal Web settings card.
+- [x] 2.1 RED: add settings-schema tests for one bot, allowed Guild IDs, user/role allow and deny rules, Workspace administrator rules, Host-operator user IDs, verbosity, and bounded timing/retry values; GREEN: register the plugin settings namespace with live updates and last-known-good validation.
+- [x] 2.2 RED: add tests for credential presence, token redaction, per-connection resolution, rotation, and deletion; GREEN: implement one fixed plugin-owned Discord token reference without copying its value into settings or state.
+- [ ] 2.3 RED: add client tests for redacted settings, revision conflicts, invalid token/intents status, and save feedback; GREEN: implement the minimal Web settings card. *(Redaction, save feedback, controller/entry wiring, and the card itself are done and green; invalid token/intents status lands with the Gateway state surface in section 3.)*
 
 ## 3. Discord ingress and Gateway lifecycle
 

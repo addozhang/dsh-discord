@@ -3,11 +3,12 @@
   "compilerOptions": {
     "declaration": true,
     "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "noEmit": false,
     "outDir": "lib",
     "rootDir": "src",
     "sourceMap": false,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/client"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }
