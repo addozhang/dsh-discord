@@ -35,7 +35,6 @@ export type IngestRejectReason = 'unsupported-event' | 'malformed-payload' | 'bo
 export type IngestResult =
   | { accepted: true; event: NormalizedMessage | NormalizedInteraction }
   | { accepted: false; reason: IngestRejectReason }
-
 /** A validated guild message with its mention-stripped content. */
 export interface NormalizedMessage {
   kind: 'message'
@@ -43,6 +42,8 @@ export interface NormalizedMessage {
   guildId: DiscordSnowflake
   channelId: DiscordSnowflake
   authorId: DiscordSnowflake
+  /** Role ids the wire attached to the member (empty when absent). */
+  roleIds: string[]
   /** Content after stripping every bot-mention token and trimming. */
   content: string
   /** Whether the message explicitly mentioned the adapter's bot user. */
@@ -60,6 +61,11 @@ export interface NormalizedInteraction {
   guildId: DiscordSnowflake
   channelId: DiscordSnowflake
   actorId: DiscordSnowflake
+  roleIds: string[]
+  /** Permission bitmask string from the member, when the wire carried one. */
+  memberPermissions: string | undefined
+  /** Whether the invoking user is itself a bot; such invocations are denied. */
+  isBot: boolean
   /** Slash-command name for command/autocomplete interactions, when present. */
   commandName: string | undefined
   /** The opaque interaction data table, normalized for downstream routing. */
@@ -83,6 +89,13 @@ export function extractBotMention(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Extract the member's role ids; server-provided, so lenient when absent. */
+function extractRoleIds(payload: Record<string, unknown>): string[] {
+  const member = payload['member']
+  if (!isRecord(member) || !Array.isArray(member['roles'])) return []
+  return member['roles'].filter((role): role is string => typeof role === 'string')
 }
 
 function asSnowflake(value: unknown): DiscordSnowflake | undefined {
@@ -130,6 +143,7 @@ function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowf
       guildId,
       channelId,
       authorId,
+      roleIds: extractRoleIds(payload),
       content: stripped.text,
       mentionedBot: stripped.mentioned,
       repliedToId,
@@ -167,6 +181,12 @@ function parseInteraction(payload: Record<string, unknown>): IngestResult {
     return { accepted: false, reason: 'malformed-payload' }
   }
 
+  const memberUser = isRecord(member) && isRecord(member['user']) ? member['user'] : undefined
+  const wireUser = isRecord(user) ? user : undefined
+  const rawPermissions = isRecord(member) && typeof member['permissions'] === 'string'
+    ? member['permissions']
+    : undefined
+
   return {
     accepted: true,
     event: {
@@ -176,6 +196,9 @@ function parseInteraction(payload: Record<string, unknown>): IngestResult {
       guildId,
       channelId,
       actorId: authorId,
+      roleIds: extractRoleIds(payload),
+      memberPermissions: rawPermissions,
+      isBot: (memberUser?.['bot'] ?? wireUser?.['bot']) === true,
       commandName,
       data: table ?? {},
     },

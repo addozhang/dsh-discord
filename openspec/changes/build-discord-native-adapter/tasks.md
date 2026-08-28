@@ -32,9 +32,9 @@
 
 ## 5. Authorization policy
 
-- [ ] 5.1 RED: add a decision-table test for Guild allowlist, allowed users/roles, optional owner/Admin/Manage Guild policy, deny-user/deny-role precedence, Host-operator user IDs, and unauthorized bots; GREEN: implement the pure authorization evaluator.
-- [ ] 5.2 RED: add boundary tests showing messages, slash commands, autocomplete, buttons, selects, and modals are authorized before DSH access; GREEN: install authorization middleware at every Discord ingress path.
-- [ ] 5.3 RED: add disclosure tests for Workspace lists, duplicate titles, opaque IDs, administrator-only path details, and disabled mention parsing; GREEN: implement safe labels and output policy.
+- [x] 5.1 RED: add a decision-table test for Guild allowlist, allowed users/roles, optional owner/Admin/Manage Guild policy, deny-user/deny-role precedence, Host-operator user IDs, and unauthorized bots; GREEN: implement the pure authorization evaluator.
+- [x] 5.2 RED: add boundary tests showing messages, slash commands, autocomplete, buttons, selects, and modals are authorized before DSH access; GREEN: install authorization middleware at every Discord ingress path.
+- [x] 5.3 RED: add disclosure tests for Workspace lists, duplicate titles, opaque IDs, administrator-only path details, and disabled mention parsing; GREEN: implement safe labels and output policy.
 
 ## 6. Durable state
 
