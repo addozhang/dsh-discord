@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createRestClient, type FetchLike, type FetchRequest } from '../src/discord/rest.js'
+import { createRestClient, createSharedRestClient, type FetchLike, type FetchRequest } from '../src/discord/rest.js'
 
 type ScriptedResponse =
   | { status: number; body?: unknown; headers?: Record<string, string> }
@@ -139,5 +139,109 @@ describe('discord rest client', () => {
     const result = await vi.runAllTimersAsync().then(() => pending)
     expect(result).toEqual({ outcome: 'unknown', reason: 'aborted' })
     expect(h.calls).toHaveLength(1)
+  })
+})
+
+describe('per-route serialized rest', () => {
+  interface Deferred {
+    resolve: (response: Response) => void
+    reject: (cause: unknown) => void
+  }
+
+  function createGatedHarness(options: { maxRetries?: number } = {}) {
+    const calls: FetchRequest[] = []
+    const gates: Deferred[] = []
+    const fetchLike: FetchLike = (request) => {
+      calls.push(request)
+      return new Promise<Response>((resolve, reject) => { gates.push({ resolve, reject }) })
+    }
+    const client = createSharedRestClient({ token: 'rest-token' }, { maxRetries: 0, ...options }, fetchLike)
+    const gate = (index: number): Deferred => {
+      const pending = gates[index]
+      if (pending === undefined) throw new Error(`test bug: gate ${String(index)} not open`)
+      return pending
+    }
+    return {
+      calls,
+      gates,
+      client,
+      resolveGate: (index: number, response: Response) => { gate(index).resolve(response) },
+      rejectGate: (index: number, cause: unknown) => { gate(index).reject(cause) },
+    }
+  }
+
+  /** One macrotask: lets the bucket chain invoke the next gated fetch. */
+  const tick = (): Promise<void> => new Promise(resolve => { setTimeout(resolve, 0) })
+
+  it('serializes writes to the same route bucket', async () => {
+    vi.useRealTimers()
+    const h = createGatedHarness()
+
+    const first = h.client.request('POST', '/channels/42/messages', { content: 'a' })
+    const second = h.client.request('POST', '/channels/42/messages', { content: 'b' })
+    await Promise.resolve()
+    expect(h.calls).toHaveLength(1)
+
+    h.resolveGate(0, new Response(JSON.stringify({ id: 'm1' }), { status: 200 }))
+    const firstResult = await first
+    expect(firstResult).toMatchObject({ outcome: 'completed' })
+
+    // The second write only reaches the wire after the first settles.
+    await Promise.resolve()
+    expect(h.calls).toHaveLength(2)
+    h.resolveGate(1, new Response(JSON.stringify({ id: 'm2' }), { status: 200 }))
+    expect(await second).toMatchObject({ outcome: 'completed' })
+  })
+
+  it('lets different route buckets proceed concurrently', async () => {
+    vi.useRealTimers()
+    const h = createGatedHarness()
+
+    const channels = h.client.request('POST', '/channels/42/messages', {})
+    const guilds = h.client.request('GET', '/guilds/77/channels')
+    await Promise.resolve()
+    expect(h.calls).toHaveLength(2)
+
+    h.resolveGate(1, new Response('[]', { status: 200 }))
+    h.resolveGate(0, new Response(JSON.stringify({ id: 'm1' }), { status: 200 }))
+    expect(await guilds).toMatchObject({ outcome: 'completed' })
+    expect(await channels).toMatchObject({ outcome: 'completed' })
+  })
+
+  it('buckets by major parameter, not full path', async () => {
+    vi.useRealTimers()
+    const h = createGatedHarness()
+
+    const send = h.client.request('POST', '/channels/42/messages', {})
+    const edit = h.client.request('PATCH', '/channels/42/messages/99', {})
+    const typing = h.client.request('POST', '/channels/42/typing', {})
+    await Promise.resolve()
+    expect(h.calls).toHaveLength(1)
+
+    h.resolveGate(0, new Response(JSON.stringify({}), { status: 200 }))
+    await send
+    await tick()
+    h.resolveGate(1, new Response(JSON.stringify({}), { status: 200 }))
+    await edit
+    await tick()
+    h.resolveGate(2, new Response(JSON.stringify({}), { status: 200 }))
+    await typing
+    expect(h.calls).toHaveLength(3)
+  })
+
+  it('keeps draining the bucket after a failed request', async () => {
+    vi.useRealTimers()
+    const h = createGatedHarness()
+
+    const failing = h.client.request('POST', '/channels/42/messages', {})
+    const following = h.client.request('POST', '/channels/42/messages', {})
+    await tick()
+    h.rejectGate(0, new TypeError('network down'))
+    await expect(failing).resolves.toMatchObject({ outcome: 'unknown' })
+
+    await tick()
+    expect(h.calls).toHaveLength(2)
+    h.resolveGate(1, new Response(JSON.stringify({ id: 'm2' }), { status: 200 }))
+    await expect(following).resolves.toMatchObject({ outcome: 'completed' })
   })
 })

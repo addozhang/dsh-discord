@@ -16,7 +16,7 @@ import {
   type ConnectionRpc,
 } from './features/adapter-status.js'
 import { describeDiscordCredential, resolveDiscordBotToken, type DiscordCredentialProvider } from './credential.js'
-import { createRestClient } from './discord/rest.js'
+import { createSharedRestClient, type SharedRestClient } from './discord/rest.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
 import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, type DshApiProxyFace } from './dsh/api-proxy-face.js'
@@ -144,7 +144,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   const CATEGORY_NAME = 'DeepSeek Harness'
   type GuildChannel = { id: string; name: string; type: number; parent_id?: string }
   const ensureCategory = async (
-    rest: ReturnType<typeof createRestClient>,
+    rest: SharedRestClient,
     guildId: string,
   ): Promise<{ channels: GuildChannel[]; categoryId: string } | undefined> => {
     const listed = await rest.request<GuildChannel[]>('GET', `/guilds/${guildId}/channels`)
@@ -158,12 +158,27 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     }
     return { channels, categoryId: category.id }
   }
-  const withRest = async <T>(
-    run: (rest: ReturnType<typeof createRestClient>) => Promise<T>,
-  ): Promise<T | undefined> => {
+  /**
+   * ONE process-wide REST client, rebuilt only when the resolved token
+   * changes. Per-route serialization lives inside the client, so concurrent
+   * sends/edits/typing into one channel queue behind each other instead of
+   * racing the bucket; every composition path goes through here.
+   */
+  let sharedRestCache: { token: string; client: SharedRestClient } | undefined
+  const sharedRest = async (): Promise<SharedRestClient | undefined> => {
     const token = (await resolveDiscordBotToken(credentials)) ?? ''
     if (token === '') return undefined
-    return run(createRestClient({ token }))
+    if (sharedRestCache?.token !== token) {
+      sharedRestCache = { token, client: createSharedRestClient({ token }) }
+    }
+    return sharedRestCache.client
+  }
+  const withRest = async <T>(
+    run: (rest: SharedRestClient) => Promise<T>,
+  ): Promise<T | undefined> => {
+    const rest = await sharedRest()
+    if (rest === undefined) return undefined
+    return run(rest)
   }
   const bindChannelKey = (guildId: string, channelId: string): string =>
     channelBindingKey({ applicationId: applicationIdRef.current, guildId, channelId })
@@ -265,8 +280,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     },
     policy,
     selfUserIdProvider: async () => {
-      const token = (await resolveDiscordBotToken(credentials)) ?? ''
-      const rest = createRestClient({ token })
+      const rest = await sharedRest()
+      if (rest === undefined) throw new TypeError('discord bot token unavailable')
       const me = await rest.request<{ id: string }>('GET', '/users/@me')
       if (me.outcome !== 'completed') throw new TypeError('cannot resolve bot identity')
       return me.body.id
@@ -352,7 +367,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         return
       }
       if (event.kind === 'interaction' && event.interactionType === 2 && interactionToken !== undefined) {
-        const rest = createRestClient({ token: (await resolveDiscordBotToken(credentials)) ?? '' })
+        const rest = await sharedRest()
+        if (rest === undefined) { rpcLog('discord_ack_failed', 'missing-token'); return }
         const ack = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 5, data: { flags: 64 } })
         if (ack.outcome !== 'completed') { rpcLog('discord_ack_failed', ack.outcome); return }
         // Deferred-ack followups must never fail silently: the REST client
@@ -514,7 +530,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       const bindContext = resolved.found ? resolved.context : undefined
       if (bindContext?.['kind'] === 'project-bind') {
         if (interactionToken === undefined) return
-        const rest = createRestClient({ token: (await resolveDiscordBotToken(credentials)) ?? '' })
+        const rest = await sharedRest()
+        if (rest === undefined) { rpcLog('discord_ack_failed', 'missing-token'); return }
         // Deferred update ack (type 6): keeps the ephemeral visible while the
         // commit resolves; the result arrives as a fresh ephemeral followup.
         const clicked = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
@@ -593,9 +610,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     if (registering || current.allowedGuildIds.length === 0) return
     registering = true
     try {
-      const token = (await resolveDiscordBotToken(credentials)) ?? ''
-      if (token === '') return
-      const rest = createRestClient({ token })
+      const rest = await sharedRest()
+      if (rest === undefined) return
       const me = await rest.request<{ id: string }>('GET', '/users/@me')
       if (me.outcome !== 'completed') return
       applicationIdRef.current = me.body.id

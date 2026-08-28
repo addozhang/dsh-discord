@@ -175,3 +175,46 @@ export function createRestClient(
 
   return { request }
 }
+
+/**
+ * The route bucket a request counts against (discord-transport spec,
+ * "Rate-limit-aware delivery"): the first two path segments carry Discord's
+ * major parameters — `channels/:id`, `guilds/:id`, `webhooks/:id` — so every
+ * write into one channel shares one bucket and serializes behind it.
+ */
+export function routeBucketOf(path: string): string {
+  const segments = path.split('/').filter(segment => segment.length > 0)
+  return segments.slice(0, 2).join('/')
+}
+
+export interface SharedRestClient {
+  request<T>(method: RestMethod, path: string, body?: unknown, init?: { signal?: AbortSignal }): Promise<RestResult<T>>
+}
+
+/**
+ * A process-wide REST client whose requests serialize per route bucket.
+ * Composition creates ONE shared instance (instead of a client per
+ * interaction) so concurrent sends, edits, and typing refreshes into the
+ * same channel never race the bucket's rate budget; distinct buckets run
+ * concurrently. Retries and outcome mapping stay the underlying client's.
+ */
+export function createSharedRestClient(
+  config: RestClientConfig,
+  options: RestClientOptions = {},
+  fetchLike?: FetchLike,
+): SharedRestClient {
+  const client = createRestClient(config, options, fetchLike)
+  const chains = new Map<string, Promise<unknown>>()
+
+  return {
+    request<T>(method: RestMethod, path: string, body?: unknown, init?: { signal?: AbortSignal }) {
+      const bucket = routeBucketOf(path)
+      const tail = chains.get(bucket) ?? Promise.resolve()
+      const run = tail.then(() => client.request<T>(method, path, body, init))
+      // The bucket chain never rejects: a failed request must not wedge or
+      // discard the requests queued behind it.
+      chains.set(bucket, run.then(() => undefined, () => undefined))
+      return run
+    },
+  }
+}
