@@ -5,6 +5,10 @@ Guild. Everything automatable has already passed: 502 tests / 77 files,
 typecheck, strict lint, Host + client builds, `pnpm pack` verification, and a
 clean `pnpm audit`.
 
+**Deployment / restart / observability procedures now live in
+`live-testing-runbook.md`** — follow it instead of reconstructing the steps
+from the historical snapshots below.
+
 ## Prerequisites
 
 - `sudo chown -R 501:20 ~/.npm` (npm's default cache has root-owned files;
