@@ -220,13 +220,16 @@ export function handleModalSubmit(
  * submits afterwards; a resolution the adapter already recorded (the user's
  * own answer) stays first — the remote frame only retires the controls.
  */
+export interface RemoteResolutionDeps {
+  store: Pick<QuestionStore, 'get' | 'markResolved'>
+  controls: { disable(questionRpcId: string): Promise<void> }
+  nowMs: () => number
+}
+
 export async function handleRemoteResolution(
-  deps: QuestionRoutingDeps,
+  deps: RemoteResolutionDeps,
   input: { questionRpcId: string; outcome: 'answered' | 'cancelled' },
 ): Promise<{ outcome: 'resolved-elsewhere' } | { outcome: 'unknown-control' }> {
-  if (deps.controls === undefined) {
-    throw new TypeError('Remote resolution requires a controls face')
-  }
   const record = deps.store.get(input.questionRpcId)
   if (record === undefined) return { outcome: 'unknown-control' }
 
