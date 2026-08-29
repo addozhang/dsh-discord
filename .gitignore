@@ -9,3 +9,9 @@ coverage/
 .DS_Store
 .agents/
 .opencode/
+
+# local-only working notes
+openspec/
+code-review-report.md
+discord-adapter-feasibility.md
+dsh-plugin-architecture-report.md
