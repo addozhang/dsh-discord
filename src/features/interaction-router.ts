@@ -582,13 +582,26 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       const isQuestionControl: boolean = 'questionRpcId' in bindContext
       const isApprovalControl: boolean = 'approvalId' in bindContext
       if (isQuestionControl) {
-        const outcome = await deps.handleQuestionComponent({
-          customId,
-          userId: event.actorId,
-          threadId: event.channelId,
-          values: event.selectValues,
-        })
-        await settleQuestionInteraction(event, interactionToken, outcome)
+        // A throw here must still ack the click, or Discord renders the
+        // interaction-failed state on the control message.
+        try {
+          const outcome = await deps.handleQuestionComponent({
+            customId,
+            userId: event.actorId,
+            threadId: event.channelId,
+            values: event.selectValues,
+          })
+          await settleQuestionInteraction(event, interactionToken, outcome)
+        } catch (cause) {
+          deps.warn('discord_question_click_failed', String(cause))
+          const rest = await deps.rest()
+          if (rest !== undefined) {
+            await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 }).then(acked => {
+              if (acked.outcome !== 'completed') deps.log('discord_ack_failed', acked.outcome)
+            }).catch(() => {})
+            await deps.componentFollowUp(event.interactionId, interactionToken, '⚠️ 命令处理失败，请稍后重试。').catch(() => {})
+          }
+        }
         return
       }
       if (isApprovalControl) {
