@@ -3,7 +3,8 @@
  * stable intent. The first creator claims it and records the new thread;
  * a duplicate delivery of the same message recovers the SAME thread without
  * creating a second one, and a replay of a DIFFERENT payload under the same
- * message id conflicts.
+ * message id conflicts. The opener (author-impersonated mirror) rides the
+ * creation call; recovered threads are never opened again.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -17,7 +18,6 @@ function threadPort(): DiscordThreadPort & { created: string[] } {
   let counter = 0
   return {
     created,
-    joinThread: () => Promise.resolve(),
     createThread: () => {
       counter += 1
       const threadId = `thread-${String(counter)}`
@@ -27,6 +27,8 @@ function threadPort(): DiscordThreadPort & { created: string[] } {
     findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
   }
 }
+
+const OPENER = { content: 'fix the bug', authorName: 'Addo' }
 
 function setup() {
   const intents = createIntentStore(createKvTableStub())
@@ -44,6 +46,7 @@ describe('thread creation intent', () => {
       guildId: 'g1',
       parentChannelId: 'c1',
       threadName: 'Task: ship it',
+      opener: OPENER,
     })
     expect(result).toMatchObject({ outcome: 'created', threadId: 'thread-1' })
     expect(port.created).toEqual(['thread-1'])
@@ -51,15 +54,15 @@ describe('thread creation intent', () => {
 
   it('recovers the same thread when the message redelivers', async () => {
     const { flow, port } = setup()
-    await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'hash-1', guildId: 'g1', parentChannelId: 'c1', threadName: 'x' })
-    const replay = await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'hash-1', guildId: 'g1', parentChannelId: 'c1', threadName: 'x' })
+    await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'hash-1', guildId: 'g1', parentChannelId: 'c1', threadName: 'x', opener: OPENER })
+    const replay = await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'hash-1', guildId: 'g1', parentChannelId: 'c1', threadName: 'x', opener: OPENER })
 
     expect(replay).toMatchObject({ outcome: 'recovered', threadId: 'thread-1' })
     // No second thread was ever created.
     expect(port.created).toEqual(['thread-1'])
   })
 
-  it('recovers via the deterministic lookup when the intent lacks a thread id', async () => {
+  it('recovers via the deterministic title lookup when the intent lacks a thread id', async () => {
     const intents = createIntentStore(createKvTableStub())
     let counter = 0
     const discord: DiscordThreadPort = {
@@ -67,22 +70,21 @@ describe('thread creation intent', () => {
         counter += 1
         return Promise.resolve({ outcome: 'completed', threadId: `thread-${String(counter)}` })
       },
-      findThreadBySource: (request: { sourceMessageId: string }) =>
-        Promise.resolve({ outcome: 'found', threadId: `recovered-for-${request.sourceMessageId}` }),
-      joinThread: () => Promise.resolve(),
+      findThreadBySource: (request: { threadName: string }) =>
+        Promise.resolve({ outcome: 'found', threadId: `recovered-for-${request.threadName}` }),
     }
     const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
 
     // Claim the intent WITHOUT completing creation (simulated crash window).
     await intents.claim({ messageId: 'm-crash', contentHash: 'h', claimedAtMs: 1 })
-    const result = await flow.ensureThread({ sourceMessageId: 'm-crash', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x' })
-    expect(result).toMatchObject({ outcome: 'recovered', threadId: 'recovered-for-m-crash' })
+    const result = await flow.ensureThread({ sourceMessageId: 'm-crash', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x', opener: OPENER })
+    expect(result).toMatchObject({ outcome: 'recovered', threadId: 'recovered-for-x' })
   })
 
   it('conflicts when the same message id redelivers different content', async () => {
     const { flow } = setup()
-    await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'hash-1', guildId: 'g1', parentChannelId: 'c1', threadName: 'x' })
-    const conflict = await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'hash-2', guildId: 'g1', parentChannelId: 'c1', threadName: 'x' })
+    await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'hash-1', guildId: 'g1', parentChannelId: 'c1', threadName: 'x', opener: OPENER })
+    const conflict = await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'hash-2', guildId: 'g1', parentChannelId: 'c1', threadName: 'x', opener: OPENER })
     expect(conflict).toEqual({ outcome: 'conflict' })
   })
 
@@ -91,74 +93,55 @@ describe('thread creation intent', () => {
     const discord: DiscordThreadPort = {
       createThread: () => Promise.resolve({ outcome: 'failed' }),
       findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
-      joinThread: () => Promise.resolve(),
     }
     const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
-    const result = await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x' })
+    const result = await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x', opener: OPENER })
     expect(result).toEqual({ outcome: 'failed' })
   })
 })
 
-describe('author join', () => {
-  it('joins the task author on a freshly created thread', async () => {
+describe('opener mirroring', () => {
+  it('hands the author-impersonated opener to the port on creation', async () => {
     const intents = createIntentStore(createKvTableStub())
-    const joined: Array<{ threadId: string; userId: string }> = []
+    const seen: Array<{ content: string; authorName: string }> = []
     const discord: DiscordThreadPort = {
-      createThread: () => Promise.resolve({ outcome: 'completed', threadId: 'thread-1' }),
-      findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
-      joinThread: (request) => {
-        joined.push(request)
-        return Promise.resolve()
+      createThread: (request) => {
+        seen.push(request.opener)
+        return Promise.resolve({ outcome: 'completed', threadId: 'thread-1' })
       },
+      findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
     }
     const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
 
     await flow.ensureThread({
-      sourceMessageId: 'm-1', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1',
-      threadName: 'x', creatorUserId: 'member-9',
+      sourceMessageId: 'm-1', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x',
+      opener: { content: 'fix the bug', authorName: 'Addo' },
     })
 
-    expect(joined).toEqual([{ threadId: 'thread-1', userId: 'member-9' }])
+    expect(seen).toEqual([{ content: 'fix the bug', authorName: 'Addo' }])
   })
 
-  it('joins the author on the recovery path too, and a join throw stays non-fatal', async () => {
+  it('does not open a recovered thread again', async () => {
     const intents = createIntentStore(createKvTableStub())
-    // Simulated crash window: intent claimed, no thread id recorded.
-    await intents.claim({ messageId: 'm-crash', contentHash: 'h', claimedAtMs: 1 })
-    const joined: string[] = []
+    let creations = 0
     const discord: DiscordThreadPort = {
-      createThread: () => Promise.resolve({ outcome: 'failed' }),
-      findThreadBySource: () => Promise.resolve({ outcome: 'found', threadId: 'recovered-1' }),
-      joinThread: (request) => {
-        joined.push(request.threadId)
-        return Promise.reject(new Error('join refused'))
+      createThread: () => {
+        creations += 1
+        return Promise.resolve({ outcome: 'completed', threadId: 'thread-1' })
       },
+      findThreadBySource: () => Promise.resolve({ outcome: 'found', threadId: 'recovered-1' }),
     }
     const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
 
+    // Claim first so the ensure call lands on the duplicate/recovery path.
+    await intents.claim({ messageId: 'm-1', contentHash: 'h', claimedAtMs: 1 })
+    await intents.annotate('m-1', { threadId: 'recovered-1' })
     const result = await flow.ensureThread({
-      sourceMessageId: 'm-crash', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1',
-      threadName: 'x', creatorUserId: 'member-9',
+      sourceMessageId: 'm-1', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x',
+      opener: { content: 'x', authorName: 'Addo' },
     })
 
     expect(result).toEqual({ outcome: 'recovered', threadId: 'recovered-1' })
-    expect(joined).toEqual(['recovered-1'])
-  })
-
-  it('skips the join when no author id is provided', async () => {
-    const intents = createIntentStore(createKvTableStub())
-    let joins = 0
-    const discord: DiscordThreadPort = {
-      createThread: () => Promise.resolve({ outcome: 'completed', threadId: 'thread-1' }),
-      findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
-      joinThread: () => {
-        joins += 1
-        return Promise.resolve()
-      },
-    }
-    const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
-
-    await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x' })
-    expect(joins).toBe(0)
+    expect(creations).toBe(0)
   })
 })

@@ -14,6 +14,7 @@ import { createTypingLifecycle, type TypingLifecycle } from './typing.js'
 import { createToolActivitySurface, type ToolActivitySurface, type ToolState } from './tool-view.js'
 import { createAnswerFinalizer, type AnswerFinalizer } from './finalizer.js'
 import { buildOutboundMessage } from './outbound.js'
+import { safeTitle } from '../policy/disclosure.js'
 import type { DiscordVerbosity } from '../settings.js'
 
 /** The mux frames the live path consumes (narrow, defensive shape). */
@@ -34,6 +35,10 @@ export interface LiveDeliveryPort {
     | { outcome: 'failed' }
   >
   typing(channelId: string): Promise<void>
+  renameThread(request: { channelId: string; name: string }): Promise<
+    | { outcome: 'completed' }
+    | { outcome: 'failed' }
+  >
 }
 
 export interface LiveRenderDeps {
@@ -61,6 +66,8 @@ interface ThreadRuntime {
   turnId: string | undefined
   /** Safe correlation for tool/result rows: the label stays the call's own. */
   toolNames: Map<string, string>
+  /** Last title this thread was renamed to (dedupes repeat projections). */
+  lastTitle: string | undefined
 }
 
 const ANSWER_MARKER = (interrupted: boolean): string => interrupted ? '\n\n*（已被中断）*' : ''
@@ -107,6 +114,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       activityMessageId: undefined,
       turnId: undefined,
       toolNames: new Map<string, string>(),
+      lastTitle: undefined,
     }
     runtimes.set(threadId, runtime)
     return runtime
@@ -280,6 +288,27 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     if (type === 'session/queue') {
       const items = Array.isArray(frame['items']) ? frame['items'] : []
       deps.onQueueSnapshot?.(sessionId, items.map(item => queueSummary(item)))
+      return
+    }
+    if (type === 'session/projection') {
+      // DSH's model-generated session title (from the user's first input):
+      // rename the thread once per distinct title, Kimaki-style.
+      if (frame['key'] !== 'title') return
+      const title = frame['value']
+      if (typeof title !== 'string' || title === '') return
+      const threadId = deps.threadForSession(sessionId)
+      if (threadId === undefined) return
+      const runtime = runtimeFor(threadId)
+      const name = safeTitle(title)
+      if (name === '' || name === runtime.lastTitle) return
+      runtime.lastTitle = name
+      void deps.delivery.renameThread({ channelId: threadId, name }).then((result) => {
+        if (result.outcome !== 'completed') {
+          deps.log?.('discord_live_rename_failed', { threadId, name })
+        }
+      }).catch((cause: unknown) => {
+        deps.log?.('discord_live_rename_threw', { threadId, cause: String(cause) })
+      })
       return
     }
     if (type !== 'session/event') return

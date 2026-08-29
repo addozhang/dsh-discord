@@ -1,34 +1,42 @@
 /**
- * Thread creation over the source-message intent (design.md §4, §10). The
- * source Discord message id is the stable claim: the first creator creates
- * the thread and records it on the intent; any redelivery of the same
- * message recovers that thread (from the record, or — across a crash window
- * where the intent exists but carries no thread id — from Discord's
- * deterministic source-message lookup). Different content under the same
- * message id conflicts, and creation failures surface as values.
+ * Thread creation over the source-message intent (design.md §4, §10,
+ * Kimaki thread model). The source Discord message id is the stable claim:
+ * the first creator creates an independent thread and records it on the
+ * intent; any redelivery of the same message recovers that thread (from the
+ * record, or — across a crash window where the intent exists but carries no
+ * thread id — by matching the deterministic task title among the parent's
+ * active threads). The author's channel message is mirrored once into the
+ * thread as the opener, rendered as the author via a webhook so the thread
+ * reads exactly like their own task post (Kimaki); different content under
+ * the same message id conflicts, and creation failures surface as values.
  */
 
 import type { IntentStore } from '../state/intents.js'
+
+/** The author-impersonated opener mirrored into the thread. */
+export interface ThreadOpener {
+  content: string
+  authorName: string
+  authorAvatarUrl?: string | undefined
+}
 
 /** The Discord thread surface the flow needs (REST in production, fakes here). */
 export interface DiscordThreadPort {
   createThread(request: {
     parentChannelId: string
     name: string
-    /** The source message anchors the thread (its durable first message). */
-    sourceMessageId: string
+    opener: ThreadOpener
   }): Promise<{ outcome: 'completed'; threadId: string } | { outcome: 'failed' } | { outcome: 'unknown' }>
-  /** Deterministic recovery: find the thread created for this source message. */
+  /**
+   * Deterministic crash-window recovery: find this task's thread among the
+   * parent's active threads by its deterministic title (title-derived names
+   * change only after a later session-title rename, never inside the crash
+   * window between creation and intent annotation).
+   */
   findThreadBySource(request: {
     parentChannelId: string
-    sourceMessageId: string
+    threadName: string
   }): Promise<{ outcome: 'found'; threadId: string } | { outcome: 'not-found' }>
-  /**
-   * Join the task author to the thread: Discord sidebars list only threads
-   * the user has joined, so a bot-created thread is invisible to its author
-   * until this runs. Best-effort by contract; failures never fail the task.
-   */
-  joinThread(request: { threadId: string; userId: string }): Promise<void>
 }
 
 export interface ThreadCreationDeps {
@@ -49,27 +57,13 @@ export interface EnsureThreadRequest {
   guildId: string
   parentChannelId: string
   threadName: string
-  /** The task author to join into the thread (sidebar visibility). */
-  creatorUserId?: string | undefined
+  /** The author-impersonated opener mirrored into the fresh thread. */
+  opener: ThreadOpener
 }
 
 export function createThreadCreationFlow(deps: ThreadCreationDeps): {
   ensureThread(request: EnsureThreadRequest): Promise<ThreadCreationResult>
 } {
-  /**
-   * Best-effort author join on every path that yields a live thread. A join
-   * failure never fails the task: the thread exists and reconciliation, not
-   * this call, owns Discord-side recovery.
-   */
-  async function joinAuthor(request: EnsureThreadRequest, threadId: string): Promise<void> {
-    if (request.creatorUserId === undefined || request.creatorUserId === '') return
-    try {
-      await deps.discord.joinThread({ threadId, userId: request.creatorUserId })
-    } catch {
-      return
-    }
-  }
-
   return {
     async ensureThread(request): Promise<ThreadCreationResult> {
       const claim = await deps.intents.claim({
@@ -83,34 +77,32 @@ export function createThreadCreationFlow(deps: ThreadCreationDeps): {
       if (claim.outcome === 'duplicate') {
         const existing = claim.record.threadId
         if (existing !== undefined && existing !== '') {
-          await joinAuthor(request, existing)
           return { outcome: 'recovered', threadId: existing }
         }
         // Intent exists without a thread id: a previous attempt crashed
         // mid-flow. Recover deterministically from Discord.
         const found = await deps.discord.findThreadBySource({
           parentChannelId: request.parentChannelId,
-          sourceMessageId: request.sourceMessageId,
+          threadName: request.threadName,
         })
         if (found.outcome === 'found') {
           await deps.intents.resolve(request.sourceMessageId, 'succeeded', deps.nowMs())
-          await joinAuthor(request, found.threadId)
           return { outcome: 'recovered', threadId: found.threadId }
         }
         return { outcome: 'failed' }
       }
 
-      // Fresh claim: create the thread and record it on the intent.
+      // Fresh claim: create the thread (opener mirrored by the port) and
+      // record it on the intent.
       const created = await deps.discord.createThread({
         parentChannelId: request.parentChannelId,
         name: request.threadName,
-        sourceMessageId: request.sourceMessageId,
+        opener: request.opener,
       })
       if (created.outcome !== 'completed') {
         await deps.intents.resolve(request.sourceMessageId, 'failed', deps.nowMs())
         return { outcome: 'failed' }
       }
-      await joinAuthor(request, created.threadId)
 
       const stored = deps.intents.get(request.sourceMessageId)
       if (stored !== undefined) {

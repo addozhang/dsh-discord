@@ -38,6 +38,9 @@ export interface MentionMainlineRequest {
   channelId: string
   messageId: string
   authorId: string
+  /** Author display identity for the thread-opener mirror (wire data). */
+  authorName: string | undefined
+  authorAvatarUrl: string | undefined
   workspaceId: string
   prompt: string
 }
@@ -93,7 +96,11 @@ export function createSessionMainline(deps: SessionMainlineDeps): {
         guildId: request.guildId,
         parentChannelId: request.channelId,
         threadName: safeTitle(request.prompt),
-        creatorUserId: request.authorId,
+        opener: {
+          content: request.prompt,
+          authorName: request.authorName ?? 'member',
+          authorAvatarUrl: request.authorAvatarUrl,
+        },
       })
       if (thread.outcome === 'conflict') return { outcome: 'thread-conflict' }
       if (thread.outcome !== 'created' && thread.outcome !== 'recovered') {

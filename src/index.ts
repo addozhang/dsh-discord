@@ -895,6 +895,12 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (rest === undefined) return
         await rest.request('POST', `/channels/${channelId}/typing`)
       },
+      renameThread: async (request) => {
+        const rest = await sharedRest()
+        if (rest === undefined) return { outcome: 'failed' }
+        const renamed = await rest.request('PATCH', `/channels/${request.channelId}`, { name: request.name })
+        return renamed.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
+      },
     },
     updateIntervalMs: current.streamUpdateIntervalMs,
     typingIntervalMs: current.typingIntervalMs,

@@ -1,8 +1,7 @@
 /**
- * The REST-backed DiscordThreadPort (Phase 1 wiring): thread creation
- * anchored to the source message, plus the deterministic crash-recovery
- * lookup that matches a thread by its durable first message. Every Discord
- * outcome maps onto the port's three states; nothing is retried here.
+ * The REST-backed DiscordThreadPort tests (Kimaki thread model): unanchored
+ * thread creation, author-impersonated opener mirroring through a reusable
+ * per-thread webhook, and crash-window recovery by deterministic title.
  */
 
 import { describe, expect, it } from 'vitest'
@@ -31,81 +30,96 @@ function createRest(scripted: ScriptedRoute[]): {
   return { rest: rest as unknown as ThreadPortRest, requests }
 }
 
-describe('createRestThreadPort', () => {
-  it('creates a public thread anchored to the source message', async () => {
-    const { rest, requests } = createRest([
-      { outcome: 'completed', body: { id: 'thread-9' } },
-    ])
-    const port = createRestThreadPort(rest)
+const OPENER = {
+  content: 'fix the login bug',
+  authorName: 'Addo',
+  authorAvatarUrl: 'https://cdn.discordapp.com/avatars/u-1/a.png',
+}
 
-    const created = await port.createThread({
+describe('createRestThreadPort', () => {
+  it('creates an unanchored thread and mirrors the opener as the author', async () => {
+    const { rest, requests } = createRest([
+      { outcome: 'completed', body: { id: 'thread-9' } },           // create thread
+      { outcome: 'completed', body: [] },                           // list webhooks (none)
+      { outcome: 'completed', body: { id: 'wh-1', token: 'tok' } }, // create webhook
+      { outcome: 'completed', body: { id: 'msg-1' } },              // execute webhook
+    ])
+    const created = await createRestThreadPort(rest).createThread({
       parentChannelId: 'chan-1',
-      name: 'fix the bug',
-      sourceMessageId: 'm-1',
+      name: 'fix the login bug',
+      opener: OPENER,
     })
 
     expect(created).toEqual({ outcome: 'completed', threadId: 'thread-9' })
     expect(requests[0]).toMatchObject({
       method: 'POST',
       path: '/channels/chan-1/threads',
-      body: { name: 'fix the bug', type: 11, message_id: 'm-1' },
+      body: { name: 'fix the login bug', type: 11 },
     })
+    expect(requests[1]).toMatchObject({ method: 'GET', path: '/channels/thread-9/webhooks' })
+    expect(requests[2]).toMatchObject({ method: 'POST', path: '/channels/thread-9/webhooks' })
+    expect(requests[3]).toMatchObject({ method: 'POST', path: '/webhooks/wh-1/tok?wait=true' })
+    expect(requests[3]?.body).toMatchObject({
+      content: 'fix the login bug',
+      username: 'Addo',
+      avatar_url: 'https://cdn.discordapp.com/avatars/u-1/a.png',
+    })
+    // Mirrored user content never pings.
+    expect((requests[3]?.body as { flags?: number }).flags).toBe(1 << 12)
   })
 
-  it('maps rejection and unknown outcomes onto failed/unknown', async () => {
+  it('reuses an existing opener webhook instead of creating another', async () => {
+    const { rest, requests } = createRest([
+      { outcome: 'completed', body: { id: 'thread-9' } },
+      { outcome: 'completed', body: [{ id: 'wh-existing', token: 'tok-9', name: 'dsh-discord' }] },
+      { outcome: 'completed', body: { id: 'msg-1' } },
+    ])
+    await createRestThreadPort(rest).createThread({ parentChannelId: 'chan-1', name: 'x', opener: OPENER })
+    expect(requests).toHaveLength(3)
+    expect(requests[2]).toMatchObject({ method: 'POST', path: '/webhooks/wh-existing/tok-9?wait=true' })
+  })
+
+  it('still completes the thread when the opener mirror fails', async () => {
+    const { rest } = createRest([
+      { outcome: 'completed', body: { id: 'thread-9' } },
+      { outcome: 'rejected', status: 403 }, // webhook listing forbidden
+      { outcome: 'rejected', status: 403 }, // webhook creation forbidden
+    ])
+    await expect(createRestThreadPort(rest).createThread({ parentChannelId: 'chan-1', name: 'x', opener: OPENER }))
+      .resolves.toEqual({ outcome: 'completed', threadId: 'thread-9' })
+  })
+
+  it('maps thread-creation rejection and unknown onto failed/unknown', async () => {
     const { rest: rejectedRest } = createRest([{ outcome: 'rejected' }])
-    await expect(createRestThreadPort(rejectedRest).createThread({
-      parentChannelId: 'chan-1', name: 'x', sourceMessageId: 'm-1',
-    })).resolves.toEqual({ outcome: 'failed' })
+    await expect(createRestThreadPort(rejectedRest).createThread({ parentChannelId: 'chan-1', name: 'x', opener: OPENER }))
+      .resolves.toEqual({ outcome: 'failed' })
 
     const { rest: unknownRest } = createRest([{ outcome: 'unknown' }])
-    await expect(createRestThreadPort(unknownRest).createThread({
-      parentChannelId: 'chan-1', name: 'x', sourceMessageId: 'm-1',
-    })).resolves.toEqual({ outcome: 'unknown' })
+    await expect(createRestThreadPort(unknownRest).createThread({ parentChannelId: 'chan-1', name: 'x', opener: OPENER }))
+      .resolves.toEqual({ outcome: 'unknown' })
   })
 
-  it('finds a source-anchored thread by its first message', async () => {
+  it('finds the task thread by its deterministic title', async () => {
     const { rest, requests } = createRest([
-      { outcome: 'completed', body: { threads: [{ id: 't-1' }, { id: 't-2' }] } },
-      { outcome: 'completed', body: [{ id: 'other-first' }] },
-      { outcome: 'completed', body: [{ id: 'm-1' }] },
+      { outcome: 'completed', body: { threads: [{ id: 't-1', name: 'other' }, { id: 't-2', name: 'fix the login bug' }] } },
     ])
-    const port = createRestThreadPort(rest)
-
-    const found = await port.findThreadBySource({ parentChannelId: 'chan-1', sourceMessageId: 'm-1' })
+    const found = await createRestThreadPort(rest).findThreadBySource({ parentChannelId: 'chan-1', threadName: 'fix the login bug' })
 
     expect(found).toEqual({ outcome: 'found', threadId: 't-2' })
-    expect(requests[1]).toMatchObject({ method: 'GET', path: '/channels/t-1/messages?after=0&limit=1' })
-    expect(requests[2]).toMatchObject({ method: 'GET', path: '/channels/t-2/messages?after=0&limit=1' })
+    expect(requests[0]).toMatchObject({ method: 'GET', path: '/channels/chan-1/threads/active' })
   })
 
-  it('reports not-found when no active thread anchors the source message', async () => {
+  it('reports not-found when no active thread carries the title', async () => {
     const { rest } = createRest([
-      { outcome: 'completed', body: { threads: [{ id: 't-1' }] } },
-      { outcome: 'completed', body: [{ id: 'unrelated' }] },
+      { outcome: 'completed', body: { threads: [{ id: 't-1', name: 'other' }] } },
     ])
-    await expect(createRestThreadPort(rest).findThreadBySource({
-      parentChannelId: 'chan-1', sourceMessageId: 'm-404',
-    })).resolves.toEqual({ outcome: 'not-found' })
+    await expect(createRestThreadPort(rest).findThreadBySource({ parentChannelId: 'chan-1', threadName: 'missing' }))
+      .resolves.toEqual({ outcome: 'not-found' })
   })
 
   it('degrades a failed thread listing to not-found (claim stays, caller decides)', async () => {
     const { rest } = createRest([{ outcome: 'unknown' }])
-    await expect(createRestThreadPort(rest).findThreadBySource({
-      parentChannelId: 'chan-1', sourceMessageId: 'm-1',
-    })).resolves.toEqual({ outcome: 'not-found' })
-  })
-})
-
-describe('thread membership', () => {
-  it('PUTs the author into the thread members', async () => {
-    const { rest, requests } = createRest([
-      { outcome: 'completed', body: {} },
-    ])
-    await createRestThreadPort(rest).joinThread({ threadId: 't-1', userId: 'u-9' })
-    expect(requests[0]).toMatchObject({
-      method: 'PUT',
-      path: '/channels/t-1/thread-members/u-9',
-    })
+    await expect(createRestThreadPort(rest).findThreadBySource({ parentChannelId: 'chan-1', threadName: 'x' }))
+      .resolves.toEqual({ outcome: 'not-found' })
   })
 })

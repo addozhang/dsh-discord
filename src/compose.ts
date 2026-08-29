@@ -34,6 +34,8 @@ export interface SessionMainlinePort {
     channelId: string
     messageId: string
     authorId: string
+    authorName: string | undefined
+    authorAvatarUrl: string | undefined
     workspaceId: string
     prompt: string
   }): Promise<
@@ -173,6 +175,8 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
       channelId: event.channelId,
       messageId: event.messageId,
       authorId: event.authorId,
+      authorName: event.authorUsername,
+      authorAvatarUrl: event.authorAvatarUrl,
       workspaceId,
       prompt,
     })

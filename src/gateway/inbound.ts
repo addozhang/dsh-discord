@@ -50,6 +50,9 @@ export interface NormalizedMessage {
   mentionedBot: boolean
   /** The snowflake of the message this one replies to, when present and valid. */
   repliedToId: DiscordSnowflake | undefined
+  /** Author display identity for thread-opener mirroring (optional wire data). */
+  authorUsername: string | undefined
+  authorAvatarUrl: string | undefined
 }
 
 /** A validated guild interaction with its actor identity. */
@@ -135,6 +138,18 @@ function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowf
   }
 
   const stripped = extractBotMention(content, selfUserId)
+  // Best-effort display identity: the thread opener mirrors the author, and
+  // a missing username/avatar degrades to the webhook's default, never a
+  // rejection.
+  const authorUsername = typeof author['username'] === 'string' && author['username'] !== ''
+    ? author['username']
+    : undefined
+  const avatarHash = typeof author['avatar'] === 'string' && author['avatar'] !== ''
+    ? author['avatar']
+    : undefined
+  const authorAvatarUrl = avatarHash === undefined
+    ? undefined
+    : `https://cdn.discordapp.com/avatars/${authorId}/${avatarHash}.${avatarHash.startsWith('a_') ? 'gif' : 'png'}`
   return {
     accepted: true,
     event: {
@@ -147,6 +162,8 @@ function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowf
       content: stripped.text,
       mentionedBot: stripped.mentioned,
       repliedToId,
+      authorUsername,
+      authorAvatarUrl,
     },
   }
 }

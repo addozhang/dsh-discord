@@ -55,7 +55,6 @@ describe('core session flow (fake transports)', () => {
         return Promise.resolve({ outcome: 'completed', threadId: `thread-${String(threadCounter)}` })
       },
       findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
-      joinThread: () => Promise.resolve(),
     }
     const threadFlow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
     const threadCreations = vi.fn()
@@ -98,6 +97,7 @@ describe('core session flow (fake transports)', () => {
       guildId: GUILD,
       parentChannelId: CHANNEL,
       threadName: 'Task: fix the login bug',
+      opener: { content: 'fix the login bug', authorName: 'member-1' },
     })
     expect(thread).toMatchObject({ outcome: 'created', threadId: 'thread-1' })
 

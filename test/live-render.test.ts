@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { startLiveRender, type LiveDeliveryPort, type LiveFrame } from '../src/stream/live.js'
 
 function createDelivery() {
-  const calls: Array<{ kind: 'send' | 'edit' | 'typing'; channelId: string; messageId?: string; content?: string }> = []
+  const calls: Array<{ kind: 'send' | 'edit' | 'typing' | 'rename'; channelId: string; messageId?: string; content?: string }> = []
   let messageCounter = 0
   const delivery: LiveDeliveryPort = {
     send: (request) => {
@@ -27,6 +27,10 @@ function createDelivery() {
       calls.push({ kind: 'typing', channelId })
       return Promise.resolve()
     },
+    renameThread: (request) => {
+      calls.push({ kind: 'rename', channelId: request.channelId, content: request.name })
+      return Promise.resolve({ outcome: 'completed' })
+    },
   }
   return { delivery, calls }
 }
@@ -41,7 +45,7 @@ async function drive(frames: LiveFrame[], options: {
   onQueueSnapshot?: (sessionId: string, items: Array<{ id: string; summary: string }>) => void
   onTurnEnded?: (sessionId: string) => void
   updateIntervalMs?: number
-}): Promise<Array<{ kind: 'send' | 'edit' | 'typing'; channelId: string; messageId?: string; content?: string }>> {
+}): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename'; channelId: string; messageId?: string; content?: string }>> {
   const { delivery, calls } = createDelivery()
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
