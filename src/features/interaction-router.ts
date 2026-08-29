@@ -17,7 +17,8 @@ import type { CancelOutcome, PromptOutcome, QueueRemoveOutcome, WorkspaceDetailO
 import { planSteer } from './steer-control.js'
 import { planStop } from './stop-control.js'
 import type { TurnTracker } from './turn-ownership.js'
-import { handleApprovalClick, type DshApprovalRespondPort } from './approval-routing.js'
+import { handleApprovalClick, type ApprovalClickOutcome, type DshApprovalRespondPort } from './approval-routing.js'
+import type { QuestionInteractionOutcome } from './question-routing.js'
 import type { ApprovalStore } from './approval-store.js'
 import type { ChannelBinding } from '../state/records.js'
 import type { NormalizedInteraction } from '../gateway/inbound.js'
@@ -54,6 +55,23 @@ export interface InteractionRouterDeps {
   }) => Promise<{ channelId: string; created: boolean } | undefined>
   /** Delete every adapter-owned record for one guild (DSH untouched). */
   forgetGuild: (guildId: string) => Promise<void>
+  /** Ephemeral failure/guidance followup on a component interaction. */
+  componentFollowUp: (interactionId: string, interactionToken: string, content: string) => Promise<void>
+  /** Retire a rendered control (remove its components on the source message). */
+  disableControl: (key: string) => Promise<void>
+  /** Question select/submit clicks and modal submits (module-tested routing). */
+  handleQuestionComponent: (input: {
+    customId: string
+    userId: string
+    threadId: string
+    values: string[]
+  }) => Promise<QuestionInteractionOutcome>
+  handleQuestionModal: (input: {
+    customId: string
+    userId: string
+    threadId: string
+    text: string
+  }) => QuestionInteractionOutcome
   rest: () => Promise<SharedRestClient | undefined>
   log: (event: string, detail?: unknown) => void
   warn: (event: string, detail?: unknown) => void
@@ -476,6 +494,52 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     if (posted.outcome !== 'completed') deps.log('discord_followup_failed', posted.outcome)
   }
 
+  async function settleQuestionInteraction(
+    event: RouterEvent,
+    interactionToken: string,
+    outcome: QuestionInteractionOutcome,
+  ): Promise<void> {
+    if (outcome.outcome === 'modal-requested') {
+      const rest = await deps.rest()
+      if (rest === undefined) return
+      const modal = outcome.modal
+      await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, {
+        type: 9,
+        data: {
+          custom_id: modal.custom_id,
+          components: [{
+            type: 1,
+            components: [{
+              type: 4,
+              custom_id: 'answer',
+              style: 2,
+              label: modal.textInput.label,
+              min_length: modal.textInput.min_length,
+              max_length: modal.textInput.max_length,
+              required: true,
+            }],
+          }],
+        },
+      })
+      return
+    }
+    // Every other outcome settles as a deferred update plus an ephemeral
+    // followup; the rendered controls retire only on terminal outcomes.
+    const rest = await deps.rest()
+    if (rest === undefined) return
+    await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
+    const copy: string | undefined =
+      outcome.outcome === 'submitted' ? '💡 回答已提交。'
+      : outcome.outcome === 'denied' ? '⚠️ 此问题不属于你。'
+      : outcome.outcome === 'already-resolved' ? '💡 该问题已被处理。'
+      : outcome.outcome === 'incomplete' ? '💡 还有问题未回答；请完成后再提交。'
+      : outcome.outcome === 'invalid-answer' ? `⚠️ 回答无效：${outcome.reason}`
+      : outcome.outcome === 'unresolved' ? '⚠️ 应答结果未知；DSH 未确认。'
+      : outcome.outcome === 'resolved-elsewhere' ? '💡 该问题已被其他客户端处理。'
+      : undefined
+    if (copy !== undefined) await deps.componentFollowUp(event.interactionId, interactionToken, copy)
+  }
+
   return {
     async route(event, interactionToken) {
       deps.log('discord_slash_dispatch', {
@@ -494,34 +558,62 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       if (event.interactionType !== 3) return
       const customId = event.data['custom_id']
       if (typeof customId !== 'string') return
+      if (interactionToken === undefined) return
       const registry = deps.registry()
       if (registry === undefined) return
       const resolved = registry.resolve(customId, Date.now())
       const bindContext = resolved.found ? resolved.context : undefined
       if (bindContext?.['kind'] === 'project-bind') {
-        // No token ⇒ nothing on the wire to ack; behave exactly as before.
-        if (interactionToken === undefined) return
         await routeBindComponent(event, interactionToken)
         return
       }
       if (bindContext?.['kind'] === 'guild-forget') {
-        if (interactionToken === undefined) return
         await routeGuildForGetComponent(event, interactionToken)
         return
       }
-      // Everything that is not a bind confirmation falls through to the
-      // approval routing, which owns its own registry contexts.
-      void handleApprovalClick(
-        {
-          registry,
-          store: deps.approvals,
-          port: deps.approvalRespondPort,
-          nowMs: () => Date.now(),
-        },
-        { customId, userId: event.actorId, threadId: event.channelId },
-      ).catch((cause: unknown) => {
-        deps.warn('discord_approval_click_failed', String(cause))
-      })
+      // Everything that is not a bind/guild-forget confirmation is either
+      // an approval button or a question control; route by context shape.
+      if (bindContext === undefined) return
+      const isQuestionControl: boolean = 'questionRpcId' in bindContext
+      const isApprovalControl: boolean = 'approvalId' in bindContext
+      if (isQuestionControl) {
+        const outcome = await deps.handleQuestionComponent({
+          customId,
+          userId: event.actorId,
+          threadId: event.channelId,
+          values: event.selectValues,
+        })
+        await settleQuestionInteraction(event, interactionToken, outcome)
+        return
+      }
+      if (isApprovalControl) {
+        let outcome: ApprovalClickOutcome
+        try {
+          outcome = await handleApprovalClick(
+            {
+              registry,
+              store: deps.approvals,
+              port: deps.approvalRespondPort,
+              nowMs: () => Date.now(),
+            },
+            { customId, userId: event.actorId, threadId: event.channelId },
+          )
+        } catch (cause) {
+          deps.warn('discord_approval_click_failed', String(cause))
+          return
+        }
+        if (outcome.outcome === 'submitted' || outcome.outcome === 'already-resolved' || outcome.outcome === 'unresolved') {
+          await deps.disableControl(String(bindContext['approvalId']))
+        }
+        if (outcome.outcome === 'denied') {
+          await deps.componentFollowUp(event.interactionId, interactionToken, '⚠️ 此确认不属于你。')
+        } else if (outcome.outcome === 'unresolved') {
+          await deps.componentFollowUp(event.interactionId, interactionToken, '⚠️ 应答结果未知；DSH 未确认，请勿重复点击。')
+        } else if (outcome.outcome === 'submitted') {
+          await deps.componentFollowUp(event.interactionId, interactionToken, '💡 已提交你的选择。')
+        }
+        return
+      }
     },
   }
 }

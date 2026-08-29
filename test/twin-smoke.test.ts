@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createInteractionRouter } from '../src/features/interaction-router.js'
 import { startLiveRender } from '../src/stream/live.js'
+import { handleSelectInput, handleModalSubmit } from '../src/features/question-routing.js'
 import { startDiscordAdapter, type DiscordAdapterRuntime } from '../src/compose.js'
 import { createSharedRestClient, type SharedRestClient } from '../src/discord/rest.js'
 import { createRestThreadPort } from '../src/discord/thread-port.js'
@@ -226,7 +227,16 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     rest = createSharedRestClient({ token: discord.botToken, apiBase: `${discord.restUrl}/v10` })
 
     turnTracker = createTurnTracker()
-    const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
+    const questionsStore = createQuestionStore()
+    const questionRoutingDeps = {
+      registry: () => runtimeRef.current?.registry ?? null,
+      store: questionsStore,
+      port: {
+        respond: () => Promise.resolve({ outcome: 'confirmed' as const }),
+      },
+      nowMs: () => Date.now(),
+      controls: { disable: () => Promise.resolve() },
+    } as unknown as Parameters<typeof handleSelectInput>[0]
     const interactionRouter = createInteractionRouter({
       policy: () => ({
         allowedGuildIds: [GUILD],
@@ -251,6 +261,15 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
         }
         return Promise.resolve()
       },
+      componentFollowUp: async (_interactionId: string, interactionToken: string, content: string) => {
+        await rest.request('POST', `/webhooks/${BOT}/${interactionToken}`, { content, flags: 64 })
+      },
+      disableControl: (key: string) => {
+        void key
+        return Promise.resolve()
+      },
+      handleQuestionComponent: input => handleSelectInput(questionRoutingDeps, input),
+      handleQuestionModal: input => handleModalSubmit(questionRoutingDeps, input),
       dsh: {
         cancel: (sessionId: string) => {
           cancelCalls.push(sessionId)
@@ -673,6 +692,8 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
       updateIntervalMs: 0,
       activityCoalesceMs: 0,
       typingIntervalMs: 60_000,
+      approvalTimeoutMs: 600_000,
+      questionTimeoutMs: 1_800_000,
       onTurnEnded: () => {},
     })
 

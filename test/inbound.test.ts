@@ -165,6 +165,9 @@ describe('parseGatewayDispatch', () => {
         isBot: false,
         commandName: 'project',
         data: { name: 'project' },
+        componentMessageId: undefined,
+        selectValues: [],
+        modalFields: [],
       },
     })
 

@@ -64,6 +64,12 @@ export interface NormalizedInteraction {
   roleIds: string[]
   /** Permission bitmask string from the member, when the wire carried one. */
   memberPermissions: string | undefined
+  /** The component interaction's parent message (control editing). */
+  componentMessageId: string | undefined
+  /** Select-menu values (string selects only). */
+  selectValues: string[]
+  /** Modal text fields, flattened from the action rows (custom_id + value). */
+  modalFields: Array<{ customId: string; value: string }>
   /** Whether the invoking user is itself a bot; such invocations are denied. */
   isBot: boolean
   /** Slash-command name for command/autocomplete interactions, when present. */
@@ -187,6 +193,25 @@ function parseInteraction(payload: Record<string, unknown>): IngestResult {
     ? member['permissions']
     : undefined
 
+  // Component parent message + select values + modal fields (the question
+  // and approval flows need all three; absent for commands/autocomplete).
+  const wireMessage = payload['message']
+  const componentMessageId = isRecord(wireMessage) ? asSnowflake(wireMessage['id']) : undefined
+  const selectValues = isRecord(data) && Array.isArray(data['values'])
+    ? data['values'].filter((value): value is string => typeof value === 'string')
+    : []
+  const modalRows = isRecord(data) && Array.isArray(data['components']) ? data['components'] : []
+  const modalFields: Array<{ customId: string; value: string }> = []
+  for (const row of modalRows) {
+    if (!isRecord(row) || !Array.isArray(row['components'])) continue
+    for (const field of row['components']) {
+      if (!isRecord(field)) continue
+      if (typeof field['custom_id'] === 'string' && typeof field['value'] === 'string') {
+        modalFields.push({ customId: field['custom_id'], value: field['value'] })
+      }
+    }
+  }
+
   return {
     accepted: true,
     event: {
@@ -201,6 +226,9 @@ function parseInteraction(payload: Record<string, unknown>): IngestResult {
       isBot: (memberUser?.['bot'] ?? wireUser?.['bot']) === true,
       commandName,
       data: table ?? {},
+      componentMessageId,
+      selectValues,
+      modalFields,
     },
   }
 }

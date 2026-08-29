@@ -21,7 +21,12 @@ import { createRestThreadPort } from './discord/thread-port.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
 import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, type DshApiProxyFace } from './dsh/api-proxy-face.js'
-import { createApprovalStore } from './features/approval-store.js'
+import { createApprovalStore, type ApprovalRecord } from './features/approval-store.js'
+import { renderApprovalControls } from './features/approval-view.js'
+import { sweepExpiredApprovals } from './features/approval-expiry.js'
+import { renderQuestionControls } from './features/question-view.js'
+import { handleSelectInput, handleModalSubmit, handleRemoteResolution } from './features/question-routing.js'
+import { sweepExpiredQuestions } from './features/question-expiry.js'
 import { createQuestionStore } from './features/question-store.js'
 import type { DshApprovalRespondPort } from './features/approval-routing.js'
 import { createInteractionRouter } from './features/interaction-router.js'
@@ -158,6 +163,37 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const threadBindingStore = createBindingStore<ThreadBinding>(threadTable)
     const intents = createIntentStore(intentTable)
     const turnTracker = createTurnTracker()
+    // Approvals: process-local backing (minutes-lived; DSH replays pending
+    // asks on mux reopen). turnActors maps submitted request ids to their
+    // Discord authors — the ownership fact for approval/question clicks.
+    const approvalRows = new Map<string, ApprovalRecord>()
+    const approvalsStore = createApprovalStore({
+      get: key => approvalRows.get(key),
+      put: (key, record) => {
+        approvalRows.set(key, record)
+        return Promise.resolve()
+      },
+    })
+    const questionsStore = createQuestionStore()
+    const turnActors = new Map<string, string>()
+    const controlMessages = new Map<string, { channelId: string; messageId: string }>()
+    const disableControl = async (key: string): Promise<void> => {
+      const target = controlMessages.get(key)
+      if (target === undefined) return
+      controlMessages.delete(key)
+      const rest = await sharedRest()
+      if (rest === undefined) return
+      const patched = await rest.request('PATCH', `/channels/${target.channelId}/messages/${target.messageId}`, { components: [] })
+      if (patched.outcome !== 'completed') rpcLog('discord_control_disable_failed', patched.outcome)
+    }
+    const componentFollowUp = async (_interactionId: string, interactionToken: string, content: string): Promise<void> => {
+      const rest = await sharedRest()
+      if (rest === undefined) return
+      const posted = await rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: 64 })
+      if (posted.outcome !== 'completed') {
+        rpcLog('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
+      }
+    }
     const bindings: BindingsProbe = {
       workspaceForChannel: (guildId, channelId) =>
         bindingStore.get(channelBindingKey({
@@ -232,6 +268,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       admitMention: async (request: Parameters<typeof composedMainline.admitMention>[0]) => {
         const result = await composedMainline.admitMention(request)
         if (result.outcome === 'admitted') {
+          // Ownership fact: this request id's turn belongs to this author —
+          // approval/question clicks authorize against it.
+          turnActors.set(`discord:${request.messageId}`, request.authorId)
           rpcLog('discord_mention_admitted', { messageId: request.messageId, threadId: result.threadId, sessionId: result.sessionId })
         } else {
           rpcLog('discord_mention_not_admitted', { messageId: request.messageId, outcome: result.outcome })
@@ -455,6 +494,34 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       }
     }, 6 * 60 * 60_000)
     ctx.effect(() => () => { clearInterval(retentionTimer) }, 'discord retention sweep')
+    // Approval/question expiry: 30s sweep — approvals auto-reject before
+    // their controls expire; question expiry cancels the owning turn.
+    const expiryTimer = setInterval(() => {
+      void sweepExpiredApprovals({
+        store: approvalsStore,
+        port: approvalRespondPort,
+        controls: { disable: disableControl },
+        nowMs: () => Date.now(),
+      }).catch((cause: unknown) => { rpcLog('discord_approval_expiry_threw', String(cause)) })
+      void sweepExpiredQuestions({
+        store: questionsStore,
+        cancelPort: {
+          cancel: async ({ sessionId }) => {
+            const cancelled = await cancelSessionViaProxy(apiProxy, { sessionId }, { log: rpcLog })
+            const turn = turnTracker.active(sessionId)
+            if (turn !== undefined) turnTracker.complete(turn.requestId)
+            return cancelled.outcome === 'accepted'
+              ? { outcome: 'accepted' as const }
+              : cancelled.outcome === 'rejected'
+                ? { outcome: 'rejected' as const, reason: cancelled.reason }
+                : { outcome: 'unknown' as const }
+          },
+        },
+        controls: { disable: disableControl },
+        nowMs: () => Date.now(),
+      }).catch((cause: unknown) => { rpcLog('discord_question_expiry_threw', String(cause)) })
+    }, 30_000)
+    ctx.effect(() => () => { clearInterval(expiryTimer) }, 'discord interaction expiry sweep')
 
     const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
     // DSH approval respond face: the client-response echoes the ask's rpcId.
@@ -480,6 +547,21 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       rpcLog('discord_guild_forget_deleted', { guildId, channels: plan.channelKeys.length, threads: plan.threadKeys.length })
     }
 
+    const questionRespondPort = {
+      respond: async (input: { rpcId: string; sessionId: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }) => {
+        const receipt = await (apiProxy.respond as (
+          rpcId: string, payload: unknown,
+        ) => Promise<unknown>)(input.rpcId, { sessionId: input.sessionId, answer: input.answer })
+        return receipt === undefined || receipt === null ? { outcome: 'unknown' as const } : { outcome: 'confirmed' as const }
+      },
+    }
+    const questionRoutingDeps = {
+      registry: () => runtimeRef.current?.registry ?? null,
+      store: questionsStore,
+      port: questionRespondPort,
+      nowMs: () => Date.now(),
+      controls: { disable: disableControl },
+    } as unknown as Parameters<typeof handleSelectInput>[0]
     const interactionRouter = createInteractionRouter({
       policy,
       applicationId: () => applicationIdRef.current,
@@ -489,6 +571,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       turnTracker,
       queueSnapshots,
       forgetGuild,
+      componentFollowUp,
+      disableControl,
+      handleQuestionComponent: input => handleSelectInput(questionRoutingDeps, input),
+      handleQuestionModal: input => handleModalSubmit(questionRoutingDeps, input),
       dsh: {
         cancel: sessionId => cancelSessionViaProxy(apiProxy, { sessionId }, { log: rpcLog }),
         steer: (sessionId, prompt) => steerSession(apiProxy, { sessionId, prompt }, { log: rpcLog }),
@@ -571,8 +657,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           await rest.request('POST', `/guilds/${guildId}/channels`, { name: 'general', type: 0, parent_id: ensured.categoryId })
         })
       },
-      approvals,
-      questions: createQuestionStore(),
+      approvals: approvalsStore,
+      questions: questionsStore,
       status: statusTracker,
       onReady: () => reconcileOnReady(),
       routeInteraction: (event, token) => {
@@ -675,12 +761,102 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       },
       updateIntervalMs: current.streamUpdateIntervalMs,
       typingIntervalMs: current.typingIntervalMs,
+      approvalTimeoutMs: current.approvalTimeoutMs,
+      questionTimeoutMs: current.questionTimeoutMs,
       verbosity: current.defaultVerbosity,
       log: rpcLog,
       onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
       onTurnEnded: (sessionId) => {
         const turn = turnTracker.active(sessionId)
         if (turn !== undefined) turnTracker.complete(turn.requestId)
+      },
+      requests: {
+        onApprovalRequested: (input) => {
+          const requestId = turnTracker.active(input.sessionId)?.requestId ?? ''
+          approvalsStore.open({
+            approvalId: input.approvalId,
+            sessionId: input.sessionId,
+            threadId: input.threadId,
+            requestId,
+            rpcId: input.rpcId,
+            actorUserId: turnActors.get(requestId) ?? '',
+            toolName: input.toolName,
+            reason: input.reason,
+            expiresAtMs: input.expiresAtMs,
+            state: 'pending',
+          })
+          const registry = runtimeRef.current?.registry
+          if (registry === undefined) return
+          const payload = renderApprovalControls({
+            registry,
+            sessionId: input.sessionId,
+            rpcId: input.rpcId,
+            approvalId: input.approvalId,
+            toolName: input.toolName,
+            reason: input.reason,
+            expiresAtMs: input.expiresAtMs,
+          })
+          void (async () => {
+            const rest = await sharedRest()
+            if (rest === undefined) return
+            const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${input.threadId}/messages`, payload)
+            if (sent.outcome === 'completed' && typeof sent.body?.id === 'string') {
+              controlMessages.set(input.approvalId, { channelId: input.threadId, messageId: sent.body.id })
+            }
+          })().catch((cause: unknown) => { rpcLog('discord_approval_render_failed', String(cause)) })
+        },
+        onApprovalResolved: (input) => {
+          const record = approvalsStore.get(input.approvalId)
+          if (record !== undefined && record.state === 'pending') {
+            void approvalsStore.markResolved(input.approvalId, input.outcome === 'allowed-once' ? 'allowed-once' : 'rejected', Date.now())
+          }
+          void disableControl(input.approvalId)
+        },
+        onQuestionRequested: (input) => {
+          const requestId = turnTracker.active(input.sessionId)?.requestId ?? ''
+          const opened = questionsStore.open({
+            questionRpcId: input.rpcId,
+            sessionId: input.sessionId,
+            threadId: input.threadId,
+            requestId,
+            actorUserId: turnActors.get(requestId) ?? '',
+            expiresAtMs: input.expiresAtMs,
+            questions: input.questions.map(question => ({
+              id: typeof question['id'] === 'string' ? question['id'] : '',
+              question: typeof question['question'] === 'string' ? question['question'] : '',
+              header: typeof question['header'] === 'string' ? question['header'] : undefined,
+              options: Array.isArray(question['options'])
+                ? question['options'].map(option => ({
+                    label: typeof (option as { label?: unknown }).label === 'string'
+                      ? (option as { label: string }).label
+                      : '',
+                  }))
+                : undefined,
+              multiSelect: question['multiSelect'] === true,
+            })),
+          })
+          if (!opened.ok) {
+            rpcLog('discord_question_open_rejected', { error: opened.error })
+            return
+          }
+          const registry = runtimeRef.current?.registry
+          if (registry === undefined) return
+          const payload = renderQuestionControls({ registry, batch: input as never })
+          void (async () => {
+            const rest = await sharedRest()
+            if (rest === undefined) return
+            const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${input.threadId}/messages`, payload)
+            if (sent.outcome === 'completed' && typeof sent.body?.id === 'string') {
+              controlMessages.set(input.rpcId, { channelId: input.threadId, messageId: sent.body.id })
+            }
+          })().catch((cause: unknown) => { rpcLog('discord_question_render_failed', String(cause)) })
+        },
+        onQuestionResolved: (input) => {
+          void handleRemoteResolution(questionRoutingDeps, {
+            questionRpcId: input.questionRpcId,
+            outcome: input.outcome,
+          }).catch((cause: unknown) => { rpcLog('discord_question_remote_resolve_failed', String(cause)) })
+        },
       },
     })
     ctx.effect(() => () => { liveRef.current?.dispose() }, 'dsh-discord live render')
