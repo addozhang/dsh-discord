@@ -32,7 +32,7 @@ function createRest(scripted: ScriptedRoute[]): {
 }
 
 describe('createRestThreadPort', () => {
-  it('creates a public thread anchored to the source message with OneDay archive', async () => {
+  it('creates the thread through the message-scoped anchored route with OneDay archive', async () => {
     const { rest, requests } = createRest([
       { outcome: 'completed', body: { id: 'thread-9' } },
     ])
@@ -45,8 +45,8 @@ describe('createRestThreadPort', () => {
     expect(created).toEqual({ outcome: 'completed', threadId: 'thread-9' })
     expect(requests[0]).toMatchObject({
       method: 'POST',
-      path: '/channels/chan-1/threads',
-      body: { name: 'fix the login bug', type: 11, message_id: 'm-1', auto_archive_duration: 1440 },
+      path: '/channels/chan-1/messages/m-1/threads',
+      body: { name: 'fix the login bug', type: 11, auto_archive_duration: 1440 },
     })
   })
 
@@ -62,15 +62,18 @@ describe('createRestThreadPort', () => {
     })).resolves.toEqual({ outcome: 'unknown' })
   })
 
-  it('finds a source-anchored thread by its first message', async () => {
+  it('finds a source-anchored thread by its first message via the guild route', async () => {
     const { rest, requests } = createRest([
       { outcome: 'completed', body: { threads: [{ id: 't-1' }, { id: 't-2' }] } },
       { outcome: 'completed', body: [{ id: 'other-first' }] },
       { outcome: 'completed', body: [{ id: 'm-1' }] },
     ])
-    const found = await createRestThreadPort(rest).findThreadBySource({ parentChannelId: 'chan-1', sourceMessageId: 'm-1' })
+    const found = await createRestThreadPort(rest).findThreadBySource({ guildId: 'guild-1', sourceMessageId: 'm-1' })
 
     expect(found).toEqual({ outcome: 'found', threadId: 't-2' })
+    // The channel-scoped active route does not exist in the Discord API:
+    // recovery MUST use the guild-scoped listing.
+    expect(requests[0]).toMatchObject({ method: 'GET', path: '/guilds/guild-1/threads/active' })
     expect(requests[1]).toMatchObject({ method: 'GET', path: '/channels/t-1/messages?after=0&limit=1' })
     expect(requests[2]).toMatchObject({ method: 'GET', path: '/channels/t-2/messages?after=0&limit=1' })
   })
@@ -81,14 +84,14 @@ describe('createRestThreadPort', () => {
       { outcome: 'completed', body: [{ id: 'unrelated' }] },
     ])
     await expect(createRestThreadPort(rest).findThreadBySource({
-      parentChannelId: 'chan-1', sourceMessageId: 'm-404',
+      guildId: 'guild-1', sourceMessageId: 'm-404',
     })).resolves.toEqual({ outcome: 'not-found' })
   })
 
   it('degrades a failed thread listing to not-found (claim stays, caller decides)', async () => {
     const { rest } = createRest([{ outcome: 'unknown' }])
     await expect(createRestThreadPort(rest).findThreadBySource({
-      parentChannelId: 'chan-1', sourceMessageId: 'm-1',
+      guildId: 'guild-1', sourceMessageId: 'm-1',
     })).resolves.toEqual({ outcome: 'not-found' })
   })
 

@@ -37,12 +37,19 @@ export interface ThreadPortOptions {
 export function createRestThreadPort(rest: ThreadPortRest, options: ThreadPortOptions = {}): DiscordThreadPort {
   return {
     async createThread(request) {
-      const made = await rest.request<{ id?: string } | undefined>('POST', `/channels/${request.parentChannelId}/threads`, {
-        name: request.name,
-        type: 11,
-        auto_archive_duration: options.autoArchiveMinutes?.() ?? DEFAULT_AUTO_ARCHIVE_MINUTES,
-        message_id: request.sourceMessageId,
-      })
+      // Anchored creation uses the documented message-scoped route: Discord
+      // moves the source message into the thread as its first post. The
+      // channel-scoped route ignores a `message_id` body field, so anchoring
+      // silently no-ops there (seen live).
+      const made = await rest.request<{ id?: string } | undefined>(
+        'POST',
+        `/channels/${request.parentChannelId}/messages/${request.sourceMessageId}/threads`,
+        {
+          name: request.name,
+          type: 11,
+          auto_archive_duration: options.autoArchiveMinutes?.() ?? DEFAULT_AUTO_ARCHIVE_MINUTES,
+        },
+      )
       if (made.outcome === 'completed' && typeof made.body?.id === 'string') {
         return { outcome: 'completed', threadId: made.body.id }
       }
@@ -50,9 +57,12 @@ export function createRestThreadPort(rest: ThreadPortRest, options: ThreadPortOp
     },
 
     async findThreadBySource(request) {
+      // Active-thread listing is GUILD-scoped only: the channel-scoped
+      // `threads/active` route does not exist in the Discord API (archived
+      // listing is the only channel-level one), so recovery would 404 forever.
       const listed = await rest.request<{ threads?: Array<{ id: string }> } | undefined>(
         'GET',
-        `/channels/${request.parentChannelId}/threads/active`,
+        `/guilds/${request.guildId}/threads/active`,
       )
       if (listed.outcome !== 'completed') return { outcome: 'not-found' }
       const threads = Array.isArray(listed.body?.threads) ? listed.body.threads : []

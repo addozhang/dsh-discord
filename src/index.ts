@@ -285,7 +285,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const token = (await resolveDiscordBotToken(credentials)) ?? ''
     if (token === '') return undefined
     if (sharedRestCache?.token !== token) {
-      sharedRestCache = { token, client: createSharedRestClient({ token }) }
+      const apiBase = process.env['DSH_DISCORD_REST_BASE']
+      sharedRestCache = {
+        token,
+        client: createSharedRestClient({ token, ...(apiBase === undefined ? {} : { apiBase }) }),
+      }
     }
     return sharedRestCache.client
   }
@@ -403,6 +407,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       return me.body.id
     },
     intents: GATEWAY_INTENTS,
+    // Twin-E2E seams: both overrides default to the production surfaces and
+    // exist only so a local Discord API twin can host the real protocol.
+    ...(process.env['DSH_DISCORD_GATEWAY_URL'] === undefined
+      ? {}
+      : { gatewayUrl: process.env['DSH_DISCORD_GATEWAY_URL'] }),
     allowedGuildIds: [...current.allowedGuildIds],
     applicationId: () => applicationIdRef.current,
     mainline,

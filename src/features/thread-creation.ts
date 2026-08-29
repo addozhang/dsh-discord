@@ -24,7 +24,7 @@ export interface DiscordThreadPort {
   }): Promise<{ outcome: 'completed'; threadId: string } | { outcome: 'failed' } | { outcome: 'unknown' }>
   /** Deterministic recovery: find the thread created for this source message. */
   findThreadBySource(request: {
-    parentChannelId: string
+    guildId: string
     sourceMessageId: string
   }): Promise<{ outcome: 'found'; threadId: string } | { outcome: 'not-found' }>
   /**
@@ -96,7 +96,7 @@ export function createThreadCreationFlow(deps: ThreadCreationDeps): {
         // Intent exists without a thread id: a previous attempt crashed
         // mid-flow. Recover deterministically from Discord.
         const found = await deps.discord.findThreadBySource({
-          parentChannelId: request.parentChannelId,
+          guildId: request.guildId,
           sourceMessageId: request.sourceMessageId,
         })
         if (found.outcome === 'found') {

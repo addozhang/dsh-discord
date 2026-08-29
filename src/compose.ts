@@ -76,6 +76,11 @@ export interface CompositionDeps {
   selfUserIdProvider: () => Promise<string>
   /** Gateway intent bitmask (Milestone 1 fixed set). */
   intents: number
+  /**
+   * Gateway endpoint override (twin-E2E seam): defaults to the production
+   * wss URL. Must expose the real Gateway wire protocol, not a fake.
+   */
+  gatewayUrl?: string
   /** Live accessor for the adapter's Discord application id (binding keys). */
   applicationId: () => string
   mainline: SessionMainlinePort
@@ -245,7 +250,7 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
     })
 
     gateway = startGateway({
-      url: GATEWAY_URL,
+      url: deps.gatewayUrl ?? GATEWAY_URL,
       tokenProvider: () => deps.tokenProvider().then((value) => {
         if (value === undefined) throw new TypeError('discord bot token unavailable')
         return value
