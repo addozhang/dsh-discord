@@ -542,7 +542,6 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         return { outcome: 'unknown' }
       },
     }
-    const approvals = createApprovalStore({ get: () => undefined, put: async () => {} })
     const queueSnapshots: Map<string, Array<{ id: string; summary: string }>> = new Map()
     /** Delete every adapter-owned record for one guild (DSH untouched). */
     const forgetGuild = async (guildId: string): Promise<void> => {
@@ -581,7 +580,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       policy,
       applicationId: () => applicationIdRef.current,
       registry: () => runtimeRef.current?.registry,
-      approvals,
+      approvals: approvalsStore,
       approvalRespondPort,
       turnTracker,
       queueSnapshots,
