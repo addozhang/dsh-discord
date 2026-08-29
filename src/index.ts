@@ -26,7 +26,7 @@ import { projectInfo } from './features/project-info.js'
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
 import { handleApprovalClick, type DshApprovalRespondPort } from './features/approval-routing.js'
-import { channelBindingKey, parseChannelBindingKey, threadBindingKey } from './state/domain.js'
+import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey } from './state/domain.js'
 import { createBindingStore } from './state/bindings.js'
 import { createIntentStore, type InboundIntentRecord } from './state/intents.js'
 import { createTurnTracker } from './features/turn-ownership.js'
@@ -34,6 +34,7 @@ import { createThreadCreationFlow, type DiscordThreadPort } from './features/thr
 import { createSessionCreationFlow, type DshSessionPort } from './features/session-creation.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from './features/prompt-submission.js'
 import { createSessionMainline } from './features/session-mainline.js'
+import { startLiveRender } from './stream/live.js'
 import type { ChannelBinding, ThreadBinding } from './state/records.js'
 import { evaluateAuthorization, levelAtLeast, type PolicyTable } from './policy/authorization.js'
 import { planWorkspaceChannel, workspaceChannelName, type ChannelBindingState } from './features/workspace-channel.js'
@@ -723,6 +724,63 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     emitLog(ctx, 'warn', { event: 'discord_command_register_failed', cause: String(cause) })
   })
 
+  // ── Live streaming: DSH events.mux → per-thread Discord rendering ─────
+  // The queue snapshot cache is the /queue surface's data source: DSH 0.1.1
+  // has no queue-list RPC, only the authoritative whole-snapshot mux frame.
+  const queueSnapshots = new Map<string, Array<{ id: string; summary: string }>>()
+  const threadForSession = (sessionId: string): string | undefined => {
+    for (const [key, record] of threadRows) {
+      if (record.sessionId !== sessionId) continue
+      const scope = parseThreadBindingKey(key)
+      if (scope !== undefined) return scope.threadId
+    }
+    return undefined
+  }
+  interface EventsFace {
+    mux(request: { rpcId: string; payload: Record<string, never> }, signal: AbortSignal): AsyncIterable<unknown>
+  }
+  const liveRef: { current: ReturnType<typeof startLiveRender> | undefined } = { current: undefined }
+  liveRef.current = startLiveRender({
+    frames: (signal) => {
+      const events = (apiProxy as unknown as { events?: EventsFace }).events
+      if (events === undefined) throw new TypeError('apiProxy.events is unavailable on this Host')
+      return events.mux({ rpcId: crypto.randomUUID(), payload: {} }, signal)
+    },
+    threadForSession,
+    delivery: {
+      send: async (request) => {
+        const rest = await sharedRest()
+        if (rest === undefined) return { outcome: 'failed' }
+        const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${request.channelId}/messages`, { content: request.content })
+        if (sent.outcome === 'completed' && typeof sent.body?.id === 'string') {
+          return { outcome: 'completed', messageId: sent.body.id }
+        }
+        rpcLog('discord_live_send_failed', { channelId: request.channelId, outcome: sent.outcome })
+        return { outcome: 'failed' }
+      },
+      edit: async (request) => {
+        const rest = await sharedRest()
+        if (rest === undefined) return { outcome: 'failed' }
+        const edited = await rest.request('PATCH', `/channels/${request.channelId}/messages/${request.messageId}`, { content: request.content })
+        return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
+      },
+      typing: async (channelId) => {
+        const rest = await sharedRest()
+        if (rest === undefined) return
+        await rest.request('POST', `/channels/${channelId}/typing`)
+      },
+    },
+    updateIntervalMs: current.streamUpdateIntervalMs,
+    typingIntervalMs: current.typingIntervalMs,
+    verbosity: current.defaultVerbosity,
+    log: rpcLog,
+    onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
+    onTurnEnded: (sessionId) => {
+      const turn = turnTracker.active(sessionId)
+      if (turn !== undefined) turnTracker.complete(turn.requestId)
+    },
+  })
+  ctx.effect(() => () => { liveRef.current?.dispose() }, 'dsh-discord live render')
   ctx.effect(() => () => { runtimeRef.current?.dispose() }, 'dsh-discord composed runtime')
 }
 
