@@ -65,3 +65,22 @@ The adapter SHALL allow a project channel to choose between text-only, essential
 #### Scenario: Text-only mode
 - **WHEN** a channel uses text-only verbosity
 - **THEN** tool progress is omitted from Discord while assistant text and terminal status remain available
+
+### Requirement: Fixed adapter-owned iconography
+Tool activity rows and adapter notices SHALL carry fixed emoji prefixes chosen from an adapter-owned constant table: tool state uses the traffic-light set (running 🟡, succeeded ✅, failed ❌), tool categories reuse the label allowlist (Shell ⌨️, Read 📖, Write ✍️, Edit ✏️, Search 🔍, Find 🗂️, Web 🌐, generic fallback 🧩), and notices use kind-fixed prefixes (⚠️ failure/unknown, 💡 guidance, 🛑 stop, ↪️ steer, ⏳ queued). Assistant answer text SHALL NOT carry icon prefixes. The table SHALL live in one module and SHALL be the only source of iconography; icons SHALL never be derived from model output, tool output, or Host presentation views, and the sanitized text labels SHALL remain unchanged beside them.
+
+#### Scenario: Tool rows render state and category icons
+- **WHEN** a tool activity row is rendered for a running, succeeded, or failed call
+- **THEN** the row is prefixed by the state icon and the category icon from the constant table, followed by the unchanged sanitized label
+
+#### Scenario: Unknown tool falls back
+- **WHEN** a tool name is outside the category allowlist
+- **THEN** the row uses the generic category icon with the generic label
+
+#### Scenario: Icons are never model-controlled
+- **WHEN** model or tool output contains emoji or characters resembling the icon table
+- **THEN** they are rendered as escaped content like any other text and never interpreted as adapter iconography
+
+#### Scenario: Text-only verbosity
+- **WHEN** a channel uses text-only verbosity
+- **THEN** icon-prefixed tool rows are omitted entirely, consistent with the verbosity requirement above
