@@ -405,7 +405,7 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     })
     await discord.channel(threadId).waitForInteractionAck({ interactionId: interaction.id })
     const reply = await discord.channel(threadId).waitForMessage({ predicate: message => message.content.includes('已插话') })
-    expect(reply.content).toBe('✅ 已插话。')
+    expect(reply.content).toBe('↪️ 已插话。')
     expect(steerCalls).toEqual([{ sessionId: 'sess-1', prompt: 'focus on auth' }])
   }, 20_000)
 })

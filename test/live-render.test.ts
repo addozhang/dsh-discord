@@ -157,13 +157,14 @@ describe('live render', () => {
       }),
     ], { threadForSession: () => 'thread-1' })
 
-    // The safe allowlist label ('bash' → 'Shell') never echoes raw names
-    // beyond the allowlist, and the completed row shows the terminal state.
-    const running = calls.find(call => call.kind === 'send' && call.content?.includes('Shell'))
-    expect(running).toBeDefined()
-    const edited = calls.find(call => call.kind === 'edit' && call.content?.includes('✓ Shell'))
-    expect(edited).toBeDefined()
-    expect(edited?.content).not.toContain('raw-output')
+    // Icon-prefixed rows (inline-snapshot style): exception-only state
+    // marks — running amber, then the quiet completed row in the SAME
+    // activity message (the disappearing 🟡 is the completion signal).
+    const runningRow = calls.find(call => call.kind === 'send' && call.content?.includes('Shell'))
+    expect(runningRow?.content).toBe('> 🟡 ⌨️ Shell')
+    const doneRow = calls.find(call => call.kind === 'edit' && call.content?.includes('Shell'))
+    expect(doneRow?.content).toBe('> ⌨️ Shell')
+    expect(doneRow?.content).not.toContain('raw-output')
   })
 })
 

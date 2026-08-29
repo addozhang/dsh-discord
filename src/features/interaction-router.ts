@@ -135,13 +135,13 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           // captured; only the opaque ws: reference crosses the wire.
           const decision = authorize(event)
           if (!decision.allowed || !levelAtLeast(decision.level, 'workspace-administrator')) {
-            await followUp('⛔ 只有工作区管理员可以绑定频道。')
+            await followUp('⚠️ 只有工作区管理员可以绑定频道。')
             return
           }
           const wireOptions = Array.isArray(subcommand?.options) ? subcommand.options : []
           const reference = wireOptions.find(option => option.name === 'workspace')?.value
           if (typeof reference !== 'string' || reference === '') {
-            await followUp('用法：/project bind workspace:<从候选中选择>')
+            await followUp('💡 用法：/project bind workspace:<从候选中选择>')
             return
           }
           const resolvedWorkspace = await deps.resolver.resolve(reference)
@@ -196,13 +196,13 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             // channels, including the control channel, are unbound.
             await followUp(decision.allowed
               ? '此频道未绑定工作区；请到工作区的专属频道中使用（/project bind 可创建）。'
-              : '⛔ 此频道未绑定工作区。')
+              : '⚠️ 此频道未绑定工作区。')
             return
           }
           const detail = await deps.dsh.readWorkspaceDetail(binding.workspaceId)
           if (!decision.allowed) {
             // Refuse identity disclosure to non-members even when bound.
-            await followUp('⛔ 只有成员可以查看此频道的绑定。')
+            await followUp('⚠️ 只有成员可以查看此频道的绑定。')
             return
           }
           if (detail.outcome !== 'found') {
@@ -218,7 +218,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             workspace: { id: detail.workspace.id, title: detail.workspace.title, path: detail.workspace.path },
           })
           if (view.outcome !== 'info') {
-            await followUp('⛔ 只有成员可以查看此频道的绑定。')
+            await followUp('⚠️ 只有成员可以查看此频道的绑定。')
             return
           }
           const lines = [
@@ -229,7 +229,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           await followUp(lines.join('\n'))
           return
         }
-        await followUp('未知子命令。')
+        await followUp('💡 未知子命令。')
         return
       }
       // ── Session control commands (session-control spec) ─────────────
@@ -239,7 +239,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       if (event.commandName === 'stop' || event.commandName === 'steer') {
         const sessionId = deps.sessionForThread(event.guildId, event.channelId)
         if (sessionId === undefined) {
-          await followUp('此频道不是适配器拥有的会话线程。')
+          await followUp('⚠️ 此频道不是适配器拥有的会话线程。')
           return
         }
         if (event.commandName === 'stop') {
@@ -260,11 +260,11 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           if (result.outcome === 'refused') {
             await followUp(result.reason === 'no-active-turn'
               ? '此线程当前没有可停止的运行中任务。'
-              : '⛔ 当前运行中的任务不是由此线程提交的，无法停止。')
+              : '⚠️ 当前运行中的任务不是由此线程提交的，无法停止。')
             return
           }
           if (result.outcome === 'cancelled') {
-            await followUp(result.pendingPreserved ? '✅ 已停止；队列中的待处理消息已保留。' : '✅ 已停止。')
+            await followUp(result.pendingPreserved ? '🛑 已停止；队列中的待处理消息已保留。' : '🛑 已停止。')
             return
           }
           await followUp(result.outcome === 'rejected'
@@ -278,7 +278,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           : undefined
         const prompt = typeof steerText === 'string' ? steerText.trim() : ''
         if (prompt === '') {
-          await followUp('用法：/steer prompt:<插话内容>')
+          await followUp('💡 用法：/steer prompt:<插话内容>')
           return
         }
         const result = await planSteer(
@@ -298,11 +298,11 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         if (result.outcome === 'refused') {
           await followUp(result.reason === 'no-active-turn'
             ? '此线程当前没有运行中的任务可插话。'
-            : '⛔ 当前任务不是由此线程提交的，无法插话。')
+            : '⚠️ 当前任务不是由此线程提交的，无法插话。')
           return
         }
         await followUp(result.outcome === 'accepted'
-          ? '✅ 已插话。'
+          ? '↪️ 已插话。'
           : result.outcome === 'rejected'
             ? '⚠️ DSH 拒绝了插话。'
             : '⚠️ 插话结果未知。')
@@ -311,7 +311,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       if (event.commandName === 'queue') {
         const sessionId = deps.sessionForThread(event.guildId, event.channelId)
         if (sessionId === undefined) {
-          await followUp('此频道不是适配器拥有的会话线程。')
+          await followUp('⚠️ 此频道不是适配器拥有的会话线程。')
           return
         }
         const wireOptions = event.data['options'] as Array<{ name?: unknown; options?: Array<{ name?: unknown; value?: unknown }> }> | undefined
@@ -320,7 +320,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           const raw = Array.isArray(sub.options) ? sub.options.find(option => option.name === 'item')?.value : undefined
           const reference = typeof raw === 'string' ? raw.trim() : ''
           if (reference === '') {
-            await followUp('用法：/queue remove item:</queue list 中的编号>')
+            await followUp('💡 用法：/queue remove item:</queue list 中的编号>')
             return
           }
           const snapshot = deps.queueSnapshots.get(sessionId)
@@ -333,7 +333,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           }
           const removed = await deps.dsh.removeQueueItem(sessionId, byPosition.id)
           if (removed.outcome === 'accepted') {
-            await followUp(`✅ 已移除：${byPosition.summary}`)
+            await followUp(`⏳ 已移除：${byPosition.summary}`)
             return
           }
           await followUp(removed.outcome === 'rejected'
@@ -348,11 +348,11 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           return
         }
         if (snapshot.length === 0) {
-          await followUp('（队列为空）')
+          await followUp('⏳ （队列为空）')
           return
         }
         const rows = snapshot.map((item, index) => `${String(index + 1)}. ${item.summary}`)
-        await followUp(['**队列**', ...rows, '', '用 `/queue remove <编号>` 移除。'].join('\n'))
+        await followUp(['⏳ **队列**', ...rows, '', '💡 用 `/queue remove <编号>` 移除。'].join('\n'))
         return
       }
     } catch (cause) {
@@ -393,7 +393,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     ) {
       // Another member's button (or a malformed context): deny
       // ephemerally and leave the control pending for its rightful owner.
-      await followUpResult('⛔ 此确认不属于你。')
+      await followUpResult('⚠️ 此确认不属于你。')
       return
     }
     if (bindContext['action'] !== 'confirm') {
@@ -418,8 +418,8 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     }
     deps.log('discord_project_bind_commit', { workspaceId, channelId: ensuredChannel.channelId, created: ensuredChannel.created })
     await followUpResult(ensuredChannel.created
-      ? `✅ 已为工作区「${workspaceTitle}」创建频道：<#${ensuredChannel.channelId}>`
-      : `工作区「${workspaceTitle}」的频道已存在于：<#${ensuredChannel.channelId}>`)
+      ? `💡 已为工作区「${workspaceTitle}」创建频道：<#${ensuredChannel.channelId}>`
+      : `💡 工作区「${workspaceTitle}」的频道已存在于：<#${ensuredChannel.channelId}>`)
   }
 
   return {

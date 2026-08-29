@@ -11,9 +11,10 @@
 import { createThreadRenderModel, type ThreadRenderModel } from './render-model.js'
 import { createUpdateScheduler, type UpdateScheduler } from './update-scheduler.js'
 import { createTypingLifecycle, type TypingLifecycle } from './typing.js'
-import { createToolActivitySurface, type ToolActivitySurface, type ToolState } from './tool-view.js'
+import { createToolActivitySurface, type ToolActivitySurface } from './tool-view.js'
 import { createAnswerFinalizer, type AnswerFinalizer } from './finalizer.js'
 import { buildOutboundMessage } from './outbound.js'
+import { toolCategoryIcon, toolStateIcon } from './icons.js'
 import { safeTitle } from '../policy/disclosure.js'
 import type { DiscordVerbosity } from '../settings.js'
 
@@ -160,9 +161,10 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
   async function renderActivity(threadId: string, runtime: ThreadRuntime): Promise<void> {
     const rows = runtime.tools.render()
     if (rows.length === 0) return
-    const icon = (state: ToolState): string =>
-      state === 'succeeded' ? '✓' : state === 'running' ? '…' : '✗'
-    const content = rows.map(row => `> ${icon(row.state)} ${row.label}`).join('\n')
+    const content = rows.map(row => {
+      const marks = [toolStateIcon(row.state), toolCategoryIcon(row.label)].filter(Boolean)
+      return `> ${marks.join(' ')} ${row.label}`
+    }).join('\n')
     if (runtime.activityMessageId === undefined) {
       const sent = await deps.delivery.send({ channelId: threadId, content })
       if (sent.outcome === 'completed') runtime.activityMessageId = sent.messageId
