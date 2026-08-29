@@ -576,6 +576,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             threadId: event.channelId,
             values: event.selectValues,
           })
+          if (outcome.outcome === 'denied') deps.log('discord_question_click_denied', { userId: event.actorId, threadId: event.channelId })
           await settleQuestionInteraction(event, interactionToken, outcome)
         } catch (cause) {
           deps.warn('discord_question_click_failed', String(cause))

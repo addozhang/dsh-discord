@@ -183,6 +183,26 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const questionsStore = createQuestionStore()
     const turnActors = new Map<string, string>()
     const controlMessages = new Map<string, { channelId: string; messageId: string }>()
+    /**
+     * Ownership for approval/question clicks. DSH starts follow-up turns for
+     * later tool rounds without a new Discord submission, so the active turn
+     * can be gone while its asks are still pending — ownership then falls
+     * back to the durable thread creator (the user whose mention created the
+     * session's thread; Milestone 1: one thread, one owner).
+     */
+    const resolveAskActor = (sessionId: string, threadId: string): { actorUserId: string; actorSource: 'turn' | 'thread-binding' | 'none' } => {
+      const turn = turnTracker.active(sessionId)
+      if (turn !== undefined) {
+        const actor = turnActors.get(turn.requestId)
+        if (actor !== undefined) return { actorUserId: actor, actorSource: 'turn' }
+      }
+      for (const key of threadTable.keys()) {
+        if (!key.endsWith(`:${threadId}`)) continue
+        const createdBy = threadTable.get(key)?.createdBy
+        if (typeof createdBy === 'string' && createdBy !== '') return { actorUserId: createdBy, actorSource: 'thread-binding' }
+      }
+      return { actorUserId: '', actorSource: 'none' }
+    }
     const disableControl = async (key: string): Promise<void> => {
       const target = controlMessages.get(key)
       if (target === undefined) return
@@ -787,17 +807,20 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       onTurnEnded: (sessionId) => {
         const turn = turnTracker.active(sessionId)
         if (turn !== undefined) turnTracker.complete(turn.requestId)
+        rpcLog('discord_turn_ended', { sessionId, hadActiveTurn: turn !== undefined })
       },
       requests: {
         onApprovalRequested: (input) => {
+          const { actorUserId, actorSource } = resolveAskActor(input.sessionId, input.threadId)
           const requestId = turnTracker.active(input.sessionId)?.requestId ?? ''
+          rpcLog('discord_approval_opened', { approvalId: input.approvalId, requestId, actorUserId, actorSource, sessionId: input.sessionId, threadId: input.threadId })
           approvalsStore.open({
             approvalId: input.approvalId,
             sessionId: input.sessionId,
             threadId: input.threadId,
             requestId,
             rpcId: input.rpcId,
-            actorUserId: turnActors.get(requestId) ?? '',
+            actorUserId,
             toolName: input.toolName,
             reason: input.reason,
             expiresAtMs: input.expiresAtMs,
@@ -829,13 +852,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           void disableControl(input.approvalId)
         },
         onQuestionRequested: (input) => {
+          const { actorUserId, actorSource } = resolveAskActor(input.sessionId, input.threadId)
           const requestId = turnTracker.active(input.sessionId)?.requestId ?? ''
+          rpcLog('discord_question_opened', { questionRpcId: input.rpcId, requestId, actorUserId, actorSource, sessionId: input.sessionId, threadId: input.threadId })
           const opened = questionsStore.open({
             questionRpcId: input.rpcId,
             sessionId: input.sessionId,
             threadId: input.threadId,
             requestId,
-            actorUserId: turnActors.get(requestId) ?? '',
+            actorUserId,
             expiresAtMs: input.expiresAtMs,
             questions: input.questions.map(question => ({
               id: typeof question['id'] === 'string' ? question['id'] : '',
