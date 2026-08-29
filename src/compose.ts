@@ -107,6 +107,12 @@ export interface CompositionDeps {
   }) => void | Promise<void>
   /** Idempotently ensure the category + control channel exist in a guild. */
   ensureGuildChannels?: (guildId: string) => Promise<void>
+  /**
+   * Runs once per READY after channel provisioning: the reconciliation
+   * sweep's trigger (startup mapping verification precedes accepting
+   * writes for those mappings — reconciliation spec).
+   */
+  onReady?: () => void | Promise<void>
   /** Allowlist snapshot used to provision channels on READY. */
   allowedGuildIds?: readonly string[] | undefined
   logger?: { warn(event: string, detail?: unknown): void }
@@ -229,6 +235,11 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
           deps.logger?.warn('discord_channel_provision_failed', { guildId, cause: String(cause) })
         })
       }
+    }
+    if (dispatch.t === 'READY' && deps.onReady !== undefined) {
+      void Promise.resolve(deps.onReady()).catch((cause: unknown) => {
+        deps.logger?.warn('discord_ready_reconcile_failed', String(cause))
+      })
     }
   }
 

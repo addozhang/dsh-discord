@@ -76,6 +76,9 @@ export const MILESTONE_ONE_COMMANDS: readonly AdapterCommand[] = [
   grouped('host', 'Show the connected DSH host status', [
     { name: 'status' },
   ]),
+  grouped('guild', 'Guild-scoped adapter operations', [
+    { name: 'forget' },
+  ]),
 ]
 
 const DISCORD_APPLICATION_COMMAND = 1

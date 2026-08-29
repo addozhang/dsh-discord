@@ -43,6 +43,7 @@ function face(
       create: () => Promise.resolve(ok({ sessionId: 'sess-1' })) as ReturnType<DshApiProxyFace['sessions']['create']>,
       cancel: () => Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['cancel']>,
       updateQueue: () => Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['updateQueue']>,
+      list: () => Promise.resolve(ok({ items: [] })) as ReturnType<DshApiProxyFace['sessions']['list']>,
     },
   }
 }

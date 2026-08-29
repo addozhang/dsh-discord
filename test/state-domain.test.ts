@@ -23,6 +23,7 @@ import {
   parseChannelBindingKey,
   parseThreadBindingKey,
   threadBindingKey,
+  INTENTS_TABLE,
 } from '../src/state/domain.js'
 import { ChannelBindingRecord, ThreadBindingRecord } from '../src/state/records.js'
 
@@ -114,9 +115,9 @@ describe('domain spec', () => {
     expect(DISCORD_DOMAIN_VERSION).toBe(1)
   })
 
-  it('declares exactly the two binding tables', () => {
+  it('declares exactly the binding and intent tables', () => {
     expect(Object.keys(discordDomainSpec.tables).sort()).toEqual(
-      [CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE].sort(),
+      [CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE].sort(),
     )
     expect(discordDomainSpec.version).toBe(DISCORD_DOMAIN_VERSION)
   })

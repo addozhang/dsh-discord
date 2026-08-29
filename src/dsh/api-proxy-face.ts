@@ -46,6 +46,7 @@ export interface DshApiProxyFace {
       itemId: string
       action: { kind: 'remove' }
     }>): Promise<RpcResponseShape<{ accepted: true }>>
+    list(request: RpcRequestShape<{ cursor?: string }>): Promise<RpcResponseShape<{ items: Array<{ sessionId: string }> }>>
   }
 }
 
@@ -355,6 +356,42 @@ export async function createSessionViaProxy(
   }
   log?.('discord_session_create_rejected', { code: result.error.code, sessionId: request.sessionId })
   return { outcome: 'rejected', reason: result.error.code }
+}
+
+/** The durable Session-id baseline reconciliation reconciles against. */
+export type SessionIdListOutcome =
+  | { outcome: 'completed'; ids: string[] }
+  | { outcome: 'failed' }
+  | { outcome: 'unknown' }
+
+/** List durable Session ids (`session.list`, v1 returns everything). */
+export async function listSessionIds(
+  dsh: DshApiProxyFace,
+  options: ApiProxyFaceOptions = {},
+): Promise<SessionIdListOutcome> {
+  const timeoutMs = options.timeoutMs ?? CATALOG_TIMEOUT_MS
+  const log = options.log
+  let response: RpcResponseShape<{ items: Array<{ sessionId: string }> }>
+  try {
+    response = await withRpcTimeout(dsh.sessions.list(mintRequest({})), timeoutMs)
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      log?.('discord_session_list_timeout', { timeoutMs })
+      return { outcome: 'unknown' }
+    }
+    log?.('discord_session_list_threw', { cause: String(cause) })
+    return { outcome: 'unknown' }
+  }
+  const result = (response as Partial<RpcResponseShape<{ items: Array<{ sessionId: string }> }>> | undefined)?.result
+  if (result === undefined) {
+    log?.('discord_session_list_malformed')
+    return { outcome: 'failed' }
+  }
+  if (result.ok) {
+    return { outcome: 'completed', ids: Array.isArray(result.value.items) ? result.value.items.map(item => item.sessionId) : [] }
+  }
+  log?.('discord_session_list_rejected', { code: result.error.code })
+  return { outcome: 'failed' }
 }
 
 export type CancelOutcome =

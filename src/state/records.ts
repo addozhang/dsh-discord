@@ -17,6 +17,17 @@ export const ChannelBindingRecord = z.strictObject({
 
 export type ChannelBinding = z.infer<typeof ChannelBindingRecord>
 
+/** One inbound intent record; the durable at-most-once claim (design §10). */
+export const InboundIntentRecordSchema = z.strictObject({
+  contentHash: z.string().min(1),
+  state: z.enum(['claimed', 'succeeded', 'failed', 'unknown']),
+  claimedAtMs: z.number().int().min(0),
+  resolvedAtMs: z.number().int().min(0).optional(),
+  threadId: z.string().min(1).optional(),
+})
+
+export type InboundIntentRecordSchema = z.infer<typeof InboundIntentRecordSchema>
+
 /** One thread-to-session writable binding; `revision` fences stale writes. */
 export const ThreadBindingRecord = z.strictObject({
   sessionId: z.string().min(1),

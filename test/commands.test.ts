@@ -10,9 +10,9 @@ import { describe, expect, it } from 'vitest'
 import { MILESTONE_ONE_COMMANDS, buildCommandRegistrations } from '../src/discord/commands.js'
 
 describe('milestone one command set', () => {
-  it('declares exactly the nine fixed commands', () => {
+  it('declares exactly the ten fixed commands', () => {
     expect(MILESTONE_ONE_COMMANDS.map(command => command.name)).toEqual([
-      'project', 'session', 'queue', 'steer', 'stop', 'model', 'preset', 'skill', 'host',
+      'project', 'session', 'queue', 'steer', 'stop', 'model', 'preset', 'skill', 'host', 'guild',
     ])
   })
 

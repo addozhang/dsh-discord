@@ -9,7 +9,7 @@
 
 import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { ChannelBinding, ThreadBinding } from './records.js'
-import { ChannelBindingRecord, ThreadBindingRecord } from './records.js'
+import { ChannelBindingRecord, InboundIntentRecordSchema, ThreadBindingRecord } from './records.js'
 
 /**
  * Storage-legal domain name (`UNIT_NAME_RE` allows only lowercase, digits,
@@ -22,6 +22,7 @@ export const DISCORD_DOMAIN_VERSION = 1
 
 export const CHANNEL_BINDINGS_TABLE = 'channel_bindings'
 export const THREAD_BINDINGS_TABLE = 'thread_bindings'
+export const INTENTS_TABLE = 'inbound_intents'
 
 /** Scope of one project-channel binding. */
 export interface ChannelBindingScope {
@@ -92,6 +93,7 @@ export const discordDomainSpec = defineDomain({
   tables: {
     [CHANNEL_BINDINGS_TABLE]: domainTable<'channel', ChannelBinding>(ChannelBindingRecord),
     [THREAD_BINDINGS_TABLE]: domainTable<'thread', ThreadBinding>(ThreadBindingRecord),
+    [INTENTS_TABLE]: domainTable<'intent', InboundIntentRecordSchema>(InboundIntentRecordSchema),
   },
 })
 

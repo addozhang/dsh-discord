@@ -52,6 +52,8 @@ export interface InteractionRouterDeps {
     title: string
     actorId: string
   }) => Promise<{ channelId: string; created: boolean } | undefined>
+  /** Delete every adapter-owned record for one guild (DSH untouched). */
+  forgetGuild: (guildId: string) => Promise<void>
   rest: () => Promise<SharedRestClient | undefined>
   log: (event: string, detail?: unknown) => void
   warn: (event: string, detail?: unknown) => void
@@ -355,6 +357,30 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         await followUp(['⏳ **队列**', ...rows, '', '💡 用 `/queue remove <编号>` 移除。'].join('\n'))
         return
       }
+      if (event.commandName === 'guild') {
+        const options = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string }> }> | undefined
+        const subName = Array.isArray(options) ? options[0]?.name : undefined
+        if (subName !== 'forget') {
+          await followUp('💡 未知子命令。')
+          return
+        }
+        // Guild forget mutates adapter-owned state for the whole guild:
+        // Host-operator authority ONLY (binding-state spec; decision 16.7).
+        const isOperator = deps.policy().hostOperatorUserIds.includes(event.actorId)
+        if (!isOperator) {
+          await followUp('⚠️ 只有 Host 操作员可以忘记 Guild。')
+          return
+        }
+        const expiresAtMs = Date.now() + 15 * 60 * 1000
+        const registry = deps.registry()
+        if (registry === undefined) return
+        const confirmId = registry.register({ kind: 'guild-forget', action: 'confirm', guildId: event.guildId, actorId: event.actorId, expiresAtMs })
+        await followUp('⚠️ 将删除本 Guild 的全部适配器记录（绑定/意图；DSH 工作区与 Session 不受影响）。确认？', [{
+          type: 1,
+          components: [{ type: 2, style: 4, label: '确认忘记', custom_id: confirmId }],
+        }])
+        return
+      }
     } catch (cause) {
       console.error('[dsh-discord] slash handler failed:', cause)
       await followUp('⚠️ 命令处理失败，请稍后重试。').catch(() => {})
@@ -422,6 +448,34 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       : `💡 工作区「${workspaceTitle}」的频道已存在于：<#${ensuredChannel.channelId}>`)
   }
 
+  async function routeGuildForGetComponent(event: RouterEvent, interactionToken: string): Promise<void> {
+    const registry = deps.registry()
+    if (registry === undefined) return
+    const customId = event.data['custom_id']
+    if (typeof customId !== 'string') return
+    const resolved = registry.resolve(customId, Date.now())
+    const context = resolved.found ? resolved.context : undefined
+    if (context?.['kind'] !== 'guild-forget') return
+    const rest = await deps.rest()
+    if (rest === undefined) { deps.log('discord_ack_failed', 'missing-token'); return }
+    const clicked = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
+    if (clicked.outcome !== 'completed') { deps.log('discord_ack_failed', clicked.outcome); return }
+    const owner = context['actorId']
+    const guildId = context['guildId']
+    if (owner !== event.actorId || typeof guildId !== 'string' || guildId !== event.guildId) {
+      const denied = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, { content: '⚠️ 此确认不属于你。', flags: 64 })
+      if (denied.outcome !== 'completed') deps.log('discord_followup_failed', denied.outcome)
+      return
+    }
+    await deps.forgetGuild(guildId)
+    deps.log('discord_guild_forget_commit', { guildId })
+    const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, {
+      content: '💡 已忘记本 Guild：适配器记录（绑定/意图）已删除；DSH 工作区与 Session 未受影响。',
+      flags: 64,
+    })
+    if (posted.outcome !== 'completed') deps.log('discord_followup_failed', posted.outcome)
+  }
+
   return {
     async route(event, interactionToken) {
       deps.log('discord_slash_dispatch', {
@@ -448,6 +502,11 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         // No token ⇒ nothing on the wire to ack; behave exactly as before.
         if (interactionToken === undefined) return
         await routeBindComponent(event, interactionToken)
+        return
+      }
+      if (bindContext?.['kind'] === 'guild-forget') {
+        if (interactionToken === undefined) return
+        await routeGuildForGetComponent(event, interactionToken)
         return
       }
       // Everything that is not a bind confirmation falls through to the

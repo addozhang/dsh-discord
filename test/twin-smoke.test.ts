@@ -236,7 +236,7 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
         administratorRoleIds: [],
         deniedUserIds: [],
         deniedRoleIds: [],
-        hostOperatorUserIds: [],
+        hostOperatorUserIds: [USER],
       }),
       applicationId: () => BOT,
       registry: () => runtimeRef.current?.registry,
@@ -244,6 +244,13 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
       approvalRespondPort: { respond: () => Promise.resolve({ outcome: 'confirmed' as const }) },
       turnTracker,
       queueSnapshots: queueSnapshotsHandle,
+      forgetGuild: (guildId: string) => {
+        for (const [key] of [...rowMap.entries()]) {
+          const scope = parseChannelBindingKey(key)
+          if (scope?.guildId === guildId) rowMap.delete(key)
+        }
+        return Promise.resolve()
+      },
       dsh: {
         cancel: (sessionId: string) => {
           cancelCalls.push(sessionId)
@@ -395,6 +402,45 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     expect(result.content).toContain('<#')
     const keys = [...rowMap.values()]
     expect(keys.some(binding => binding.workspaceId === 'ws-1')).toBe(true)
+  }, 20_000)
+
+  it('forgets the guild through the host-operator command and confirm button', async () => {
+    // Seed a binding that forget must remove.
+    rowMap.set(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }), {
+      workspaceId: 'ws-1', revision: 1, boundBy: USER, boundAtMs: 1,
+    })
+
+    // A plain member (not a host operator) is refused.
+    await discord.prisma.guildMember.update({
+      where: { guildId_userId: { guildId: GUILD, userId: '222222222222222223' } },
+      data: { permissions: '0' },
+    })
+    const denied = await discord.simulateSlashCommand({
+      channelId, userId: '222222222222222223', name: 'guild', options: [{ name: 'forget', type: 1 }],
+    })
+    await discord.channel(channelId).waitForInteractionAck({ interactionId: denied.id })
+    await discord.channel(channelId).waitForMessage({
+      predicate: message => message.content.includes('只有 Host 操作员'),
+    })
+
+    // The operator confirms; adapter records for the guild are deleted.
+    const interaction = await discord.simulateSlashCommand({
+      channelId, userId: USER, name: 'guild', options: [{ name: 'forget', type: 1 }],
+    })
+    await discord.channel(channelId).waitForInteractionAck({ interactionId: interaction.id })
+    const plan = await discord.channel(channelId).waitForMessage({
+      predicate: message => message.content.includes('将删除本 Guild 的全部适配器记录'),
+    })
+    const row = (plan.components?.[0] as { components?: Array<{ custom_id?: string }> } | undefined)?.components ?? []
+    const confirmId = row[0]?.custom_id
+    expect(typeof confirmId).toBe('string')
+
+    await discord.simulateButtonClick({ channelId, userId: USER, messageId: plan.id, customId: confirmId ?? '' })
+    const done = await discord.channel(channelId).waitForMessage({
+      predicate: message => message.content.includes('已忘记本 Guild'),
+    })
+    expect(done.content).toContain('DSH 工作区与 Session 未受影响')
+    expect(rowMap.has(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }))).toBe(false)
   }, 20_000)
 
   it('stops the thread-owned active turn', async () => {
