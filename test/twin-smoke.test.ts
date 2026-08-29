@@ -1067,7 +1067,7 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
           })().catch(() => {})
         },
         onQuestionResolved: (input) => {
-          void handleRemoteResolution(questionRoutingDeps, {
+          void handleRemoteResolution({ store: questionsStore, controls: { disable: disableControl }, nowMs: () => Date.now() }, {
             questionRpcId: input.questionRpcId,
             outcome: input.outcome,
           }).catch(() => {})

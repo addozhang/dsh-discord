@@ -209,10 +209,10 @@ describe('atomic submission and remote resolution (14.3)', () => {
   })
 
   it('disables controls and never resubmits when DSH resolved elsewhere', async () => {
-    const { registry, store, respond } = setup()
+    const { store, respond } = setup()
     const disable = vi.fn(async () => {})
     const outcome = await handleRemoteResolution(
-      { registry, store, port: { respond: vi.fn() }, nowMs: () => 0, controls: { disable } },
+      { store, nowMs: () => 0, controls: { disable } },
       { questionRpcId: 'qrpc-1', outcome: 'cancelled' },
     )
 
@@ -227,10 +227,10 @@ describe('atomic submission and remote resolution (14.3)', () => {
   })
 
   it('treats later user interaction on a remotely resolved batch as already-resolved', async () => {
-    const { registry, store, select, respond } = setup()
+    const { store, select, respond } = setup()
     const disable = vi.fn(async () => {})
     await handleRemoteResolution(
-      { registry, store, port: { respond: vi.fn() }, nowMs: () => 0, controls: { disable } },
+      { store, nowMs: () => 0, controls: { disable } },
       { questionRpcId: 'qrpc-1', outcome: 'answered' },
     )
 
@@ -241,7 +241,7 @@ describe('atomic submission and remote resolution (14.3)', () => {
   })
 
   it('keeps the user answer first when DSH reports a remote resolution afterwards', async () => {
-    const { registry, store, select, respond } = setup()
+    const { store, select, respond } = setup()
     await select('dc:opaque-1', ['Postgres'])
     await select('dc:opaque-2', ['Rust'])
     await select('dc:opaque-3', [])
@@ -249,7 +249,7 @@ describe('atomic submission and remote resolution (14.3)', () => {
 
     const disable = vi.fn(async () => {})
     const outcome = await handleRemoteResolution(
-      { registry, store, port: { respond: vi.fn() }, nowMs: () => 0, controls: { disable } },
+      { store, nowMs: () => 0, controls: { disable } },
       { questionRpcId: 'qrpc-1', outcome: 'cancelled' },
     )
 
