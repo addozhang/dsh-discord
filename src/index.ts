@@ -527,12 +527,18 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     // DSH approval respond face: the client-response echoes the ask's rpcId.
     const approvalRespondPort: DshApprovalRespondPort = {
       respond: async ({ rpcId, sessionId, approvalId, outcome }) => {
-        // apiProxy.respond resolves with an RpcReceipt: {accepted: true} on
-        // delivery, {accepted: false, reason} when the ask is gone
-        // (not-pending = the Host already timed it out or resolved it).
+        // apiProxy.respond takes the full ClientResponse envelope — the
+        // type discriminator routes it, result.value carries the
+        // ApprovalResponsePayload (approvals.d.ts) — and resolves with an
+        // RpcReceipt: {accepted: true} on delivery, {accepted: false,
+        // reason: 'not-pending' | 'bad-response'} otherwise.
         const receipt = await (apiProxy.respond as (
-          rpcId: string, payload: { sessionId: string; approvalId: string; outcome: string },
-        ) => Promise<unknown>)(rpcId, { sessionId, approvalId, outcome })
+          message: unknown,
+        ) => Promise<unknown>)({
+          type: 'client-response',
+          rpcId,
+          result: { ok: true, value: { sessionId, approvalId, outcome } },
+        })
         rpcLog('discord_approval_respond_receipt', { rpcId, approvalId, outcome, receipt })
         const accepted = (receipt as { accepted?: unknown } | undefined)?.accepted
         if (accepted === true) return { outcome: 'confirmed' }
@@ -558,8 +564,12 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const questionRespondPort = {
       respond: async (input: { rpcId: string; sessionId: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }) => {
         const receipt = await (apiProxy.respond as (
-          rpcId: string, payload: unknown,
-        ) => Promise<unknown>)(input.rpcId, { sessionId: input.sessionId, answer: input.answer })
+          message: unknown,
+        ) => Promise<unknown>)({
+          type: 'client-response',
+          rpcId: input.rpcId,
+          result: { ok: true, value: { sessionId: input.sessionId, answer: input.answer } },
+        })
         rpcLog('discord_question_respond_receipt', { rpcId: input.rpcId, receipt })
         const accepted = (receipt as { accepted?: unknown } | undefined)?.accepted
         if (accepted === true) return { outcome: 'confirmed' as const }
