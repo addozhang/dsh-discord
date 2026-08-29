@@ -563,6 +563,11 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       if (registry === undefined) return
       const resolved = registry.resolve(customId, Date.now())
       const bindContext = resolved.found ? resolved.context : undefined
+      deps.log('discord_component_resolve', {
+        customId,
+        found: resolved.found,
+        context: bindContext ?? null,
+      })
       if (bindContext?.['kind'] === 'project-bind') {
         await routeBindComponent(event, interactionToken)
         return
