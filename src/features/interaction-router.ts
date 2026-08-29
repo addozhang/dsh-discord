@@ -576,7 +576,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             threadId: event.channelId,
             values: event.selectValues,
           })
-          if (outcome.outcome === 'denied') deps.log('discord_question_click_denied', { userId: event.actorId, threadId: event.channelId })
+          deps.log('discord_question_click', { outcome: outcome.outcome, userId: event.actorId, complete: outcome.outcome === 'recorded' ? outcome.complete : undefined })
           await settleQuestionInteraction(event, interactionToken, outcome)
         } catch (cause) {
           deps.warn('discord_question_click_failed', String(cause))
@@ -613,8 +613,10 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           deps.warn('discord_approval_click_failed', String(cause))
           return
         }
+        const approvalId = typeof bindContext['approvalId'] === 'string' ? bindContext['approvalId'] : ''
+        deps.log('discord_approval_click', { outcome: outcome.outcome, userId: event.actorId, approvalId })
         if (outcome.outcome === 'submitted' || outcome.outcome === 'already-resolved' || outcome.outcome === 'unresolved') {
-          await deps.disableControl(String(bindContext['approvalId']))
+          await deps.disableControl(approvalId)
         }
         if (outcome.outcome === 'denied') {
           await deps.componentFollowUp(event.interactionId, interactionToken, '⚠️ 此确认不属于你。')
