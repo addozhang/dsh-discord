@@ -1,5 +1,5 @@
 /**
- * Twin smoke (E2E seam, Kimaki discipline): the REAL gateway client and REAL
+ * Twin smoke (E2E seam, silent-failure-is-a-bug discipline): the REAL gateway client and REAL
  * REST client run against a local Discord API twin — the same wire protocol —
  * while DSH stays a deterministic fake. Only Discord-visible state is
  * asserted (threads, messages); internal logging is never asserted.
@@ -312,7 +312,7 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
         threadRows.get(threadBindingKey({ applicationId: BOT, guildId, threadId: tid }))?.sessionId,
       ensureWorkspaceChannel: async (options) => {
         // Minimal provisioning over the twin: reuse the same-named channel,
-        // else create a -2 sibling — mirroring index's Kimaki placement.
+        // else create a -2 sibling — mirroring the index placement.
         const listed = await rest.request<Array<{ id: string; name: string; type: number }>>('GET', `/guilds/${options.guildId}/channels`)
         const channels = listed.outcome === 'completed' && Array.isArray(listed.body) ? listed.body : []
         const bind = (cid: string): void => {
@@ -776,7 +776,7 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
     const typing = discord.getTypingEvents({ channelId: tid })
     expect(typing.length).toBeGreaterThanOrEqual(1)
 
-    // The session title renamed the thread (Kimaki rename).
+    // The session title renamed the thread (title rename).
     const renamed = await discord.channel(CHANNEL).waitForThread({
       timeout: 10_000,
       predicate: t => t.name === '检查磁盘状态',

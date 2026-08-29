@@ -234,7 +234,7 @@ describe('live render: per-step answer separation', () => {
   })
 })
 
-describe('live render: admission-time typing (Kimaki pattern)', () => {
+describe('live render: admission-time typing', () => {
   it('starts typing when a prompt is queued, before any turn event', async () => {
     const calls = await drive([
       { type: 'session/queue', sessionId: 'sess-1', items: [{ id: 'm-1', summary: 'hello' }] } as LiveFrame,

@@ -149,7 +149,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         const subcommand = Array.isArray(options) ? options[0] : undefined
         const subName = subcommand?.name
         if (subName === 'bind') {
-          // Kimaki add-project semantics: bind provisions (or reuses)
+          // Add-project semantics: bind provisions (or reuses)
           // the Workspace's home channel under the adapter category.
           // The current channel — e.g. the control channel — is never
           // captured; only the opaque ws: reference crosses the wire.
@@ -176,7 +176,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           const { id: workspaceId, title } = resolvedWorkspace.workspace
           const existing = deps.findBoundChannelFor(event.guildId, workspaceId)
           if (existing !== undefined) {
-            // Idempotent, Kimaki-style: one workspace, one channel.
+            // Idempotent: one workspace, one channel.
             await followUp(`工作区「${title}」的频道已存在于：<#${existing}>`)
             return
           }

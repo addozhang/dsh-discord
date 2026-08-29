@@ -100,9 +100,9 @@ export interface AutocompleteChoice {
 
 /**
  * Build the autocomplete choices for a workspace reference option (the
- * Kimaki `/resume` pattern: the option lists live candidates as you type,
+ * Live-candidates pattern: the option lists live candidates as you type,
  * so no id is ever copy-pasted). Labels carry the same sanitized base as
- * `/project list` plus the Kimaki-style abbreviated canonical path when the
+ * `/project list` plus the abbreviated canonical path when the
  * Host supplies one; the query narrows via the shared filter and matches
  * path text too. Labels exceeding Discord's 100-character choice-name
  * limit fall back to the bare sanitized label rather than truncating.

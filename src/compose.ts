@@ -220,7 +220,7 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
   let startError: 'missing-token' | undefined
   let ingress: { accept(dispatch: GatewayDispatch): { accepted: boolean; event?: NormalizedInboundEvent } } | undefined
 
-  // Kimaki-style provisioning: one category + one control channel per
+  // provisioning style: one category + one control channel per
   // allowed guild, created idempotently on the first READY.
   const provisioned = new Set<string>()
   function handleDispatch(dispatch: GatewayDispatch): void {

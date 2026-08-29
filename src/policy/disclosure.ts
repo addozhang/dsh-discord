@@ -23,11 +23,10 @@ export interface WorkspaceEntry {
 }
 
 /**
- * Kimaki-style path abbreviation (16.1): the user's home directory collapses
+ * path abbreviation (16.1): the user's home directory collapses
  * to a `~` prefix — `/Users/addo/Workspaces/x` → `~/Workspaces/x` — so
  * autocomplete labels stay short without hiding the directory structure.
- * Unlike Kimaki's `startsWith` check, the home path must end at a segment
- * boundary: `/Users/addoish/x` is NOT under `/Users/addo`. Display-only;
+ * The home path must end at a segment boundary: `/Users/addoish/x` is NOT under `/Users/addo`. Display-only;
  * never persisted to Discord metadata.
  */
 export function abbreviatePath(fullPath: string, home: string = homedir()): string {

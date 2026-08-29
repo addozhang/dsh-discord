@@ -376,7 +376,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     }
     const bindChannelKey = (guildId: string, channelId: string): string =>
       channelBindingKey({ applicationId: applicationIdRef.current, guildId, channelId })
-    /** The guild channel already serving this Workspace, if any (Kimaki's one-project-one-channel lookup). */
+    /** The guild channel already serving this Workspace, if any (one-project-one-channel lookup). */
     const findBoundChannelFor = (guildId: string, workspaceId: string): string | undefined => {
       for (const [key, binding] of channelTable.entries()) {
         if (binding.workspaceId !== workspaceId) continue
@@ -387,7 +387,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     }
     /**
      * Ensure the Workspace's home channel exists under the adapter category
-     * and serves this Workspace (Kimaki one-project-one-channel: the
+     * and serves this Workspace (one-project-one-channel: the
      * Workspace's existing bound channel wins outright). A same-name channel
      * is reused only when unbound; a channel serving another Workspace is
      * never stolen — a `-2` sibling is created instead.
@@ -401,7 +401,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       return withRest(async (rest) => {
         const ensured = await ensureCategory(rest, options.guildId)
         if (ensured === undefined) return undefined
-        // The control channel (general, the Kimaki #kimaki-opencode analog) is
+        // The control channel (general, the control-channel analog) is
         // the command surface — it must never become a Workspace home.
         const controlChannelId = ensured.channels.find((c) => c.type === 0 && c.name.toLowerCase() === 'general' && c.parent_id === ensured.categoryId)?.id
         const bindingOf = (channelId: string): ChannelBindingState => {
@@ -882,7 +882,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             return
           }
           const payload = renderQuestionControls({ registry: sharedRegistry, batch })
-          // Kimaki discipline: controls that never reached Discord can never
+          // Controls that never reached Discord can never
           // be answered, so cancel the owning Turn now instead of letting the
           // sweep wait out the deadline with DSH's tool call hanging.
           const abandonQuestion = (cause: string): void => {

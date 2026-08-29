@@ -36,7 +36,7 @@ export interface WorkspaceChannelCandidate {
 }
 
 /**
- * Decide create-vs-reuse for the workspace channel, Kimaki-add-project
+ * Decide create-vs-reuse for the workspace channel, add-project
  * style. The Workspace's existing home channel (any channel of this guild
  * already bound to this Workspace) wins outright: reuse without rebinding —
  * one Workspace, one channel. Otherwise a same-name channel under the

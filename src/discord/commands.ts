@@ -12,7 +12,7 @@ export interface CommandArgument {
   required: boolean
   /**
    * Discord sends a type-4 autocomplete interaction while the user types;
-   * the adapter answers with live choices (Kimaki's /resume pattern).
+   * the adapter answers with live choices (live-candidates pattern).
    */
   autocomplete?: boolean
 }

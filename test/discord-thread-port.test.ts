@@ -1,5 +1,5 @@
 /**
- * The REST-backed DiscordThreadPort tests (Kimaki thread model): thread
+ * The REST-backed DiscordThreadPort tests (anchored source-message thread model): thread
  * creation anchored to the source message, deterministic recovery by the
  * anchored first message, and the author join that surfaces the thread in
  * the author's sidebar.

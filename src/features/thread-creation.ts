@@ -1,5 +1,5 @@
 /**
- * Thread creation over the source-message intent (design.md §4, §10, Kimaki
+ * Thread creation over the source-message intent (design.md §4, §10, anchored-thread
  * thread model). The source Discord message id is the stable claim: the
  * first creator creates a thread ANCHORED to that message (Discord moves it
  * into the thread as its first post — the user's task text opens the
@@ -7,7 +7,7 @@
  * recovers that thread (from the record, or — across a crash window where
  * the intent exists but carries no thread id — from Discord's deterministic
  * source-message lookup). The author is joined to the thread so it appears
- * in their sidebar (Kimaki: "add user to thread so it appears in their
+ * in their sidebar (live-tested: "add user to thread so it appears in their
  * sidebar"). Different content under the same message id conflicts, and
  * creation failures surface as values.
  */

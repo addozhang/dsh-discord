@@ -1,5 +1,5 @@
 /**
- * The REST-backed DiscordThreadPort (Kimaki thread model). Thread creation
+ * The REST-backed DiscordThreadPort (anchored source-message thread model). Thread creation
  * is anchored to the source message (`message_id`): Discord moves the user's
  * task message into the thread as its durable first post, so the thread
  * opens with what reads exactly like the user's own task post. Crash-window
@@ -26,7 +26,7 @@ export interface ThreadPortRest {
 /** Bound the crash-recovery scan: never walk an unbounded thread list. */
 const MAX_THREADS_SCANNED = 25
 
-/** Kimaki's OneDay archive is the default; the deployment can widen or narrow it. */
+/** OneDay auto-archive is the default; the deployment can widen or narrow it. */
 const DEFAULT_AUTO_ARCHIVE_MINUTES = 1440
 
 export interface ThreadPortOptions {

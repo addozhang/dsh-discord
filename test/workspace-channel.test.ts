@@ -93,7 +93,7 @@ describe('planWorkspaceChannel', () => {
   it('the existing home channel wins outright \u2014 one workspace, one channel', () => {
     // Even when another same-name channel is free and would match by name,
     // the channel already serving this workspace is reused without rebinding
-    // (Kimaki: "A channel already exists for this directory").
+    // ("a channel already exists for this directory").
     const plan = planWorkspaceChannel({
       channels,
       categoryId: 'cat',

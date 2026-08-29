@@ -409,7 +409,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     if (type === 'session/queue') {
       const items = Array.isArray(frame['items']) ? frame['items'] : []
       deps.onQueueSnapshot?.(sessionId, items.map(item => queueSummary(item)))
-      // Kimaki admission-time typing: typing starts when the prompt is
+      // Admission-time typing: typing starts when the prompt is
       // ENQUEUED — covering the queue wait, agent startup, and first-token
       // latency before the first turn event — and stops when the queue
       // drains with no turn open (never wedges the indicator on).
@@ -425,7 +425,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     }
     if (type === 'session/projection') {
       // DSH's model-generated session title (from the user's first input):
-      // rename the thread once per distinct title, Kimaki-style.
+      // rename the thread once per distinct title.
       if (frame['key'] !== 'title') return
       const title = frame['value']
       if (typeof title !== 'string' || title === '') return
