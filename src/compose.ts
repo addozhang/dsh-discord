@@ -218,7 +218,9 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
   let gateway: GatewayHandle | undefined
   let started = false
   let startError: 'missing-token' | undefined
-  let ingress: { accept(dispatch: GatewayDispatch): { accepted: boolean; event?: NormalizedInboundEvent } } | undefined
+  let ingress: {
+    accept(dispatch: GatewayDispatch): { accepted: boolean; event?: NormalizedInboundEvent; reason?: string; response?: 'silent' | 'ephemeral-denial' }
+  } | undefined
 
   // provisioning style: one category + one control channel per
   // allowed guild, created idempotently on the first READY.
@@ -226,6 +228,12 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
   function handleDispatch(dispatch: GatewayDispatch): void {
     if (dispatch.t === 'READY') status.setGateway('connected')
     const accepted = ingress?.accept(dispatch)
+    if (accepted?.accepted === false && (dispatch.t === 'INTERACTION_CREATE' || dispatch.t === 'MESSAGE_CREATE')) {
+      // A user-driven dispatch that dies at the gate must not vanish: from
+      // the user's side the click "does nothing", so the gate reason is on
+      // the record. Unrelated dispatch noise stays unlogged.
+      deps.logger?.warn('discord_dispatch_rejected', { type: dispatch.t, reason: accepted.reason })
+    }
     if (accepted?.accepted === true && accepted.event !== undefined && accepted.event.kind === 'interaction') {
       const d = dispatch.d as Record<string, unknown> | undefined
       const token = typeof d?.['token'] === 'string' ? d['token'] : undefined

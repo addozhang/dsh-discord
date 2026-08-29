@@ -1324,3 +1324,222 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     expect(respondCalls.length).toBe(before)
   }, 20_000)
 })
+
+describe('twin smoke: isolation matrix (15.11)', () => {
+  const GUILD2 = '333333333333333334'
+  const GUILD3 = '333333333333333335' // present on the wire, absent from the allowlist
+  const CHANNEL2 = '444444444444444446'
+  const CHANNEL3 = '444444444444444447'
+  const GUEST = '222222222222222223'
+  let discord: DigitalDiscord
+  let rest: SharedRestClient
+  const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
+  const rowMap = new Map<string, ChannelBinding>()
+  const admissions: Array<Record<string, unknown>> = []
+  const continuations: Array<Record<string, unknown>> = []
+  const notices: Array<{ channelId: string; audience: string }> = []
+  const followups: Array<{ channelId: string; content: string }> = []
+
+  beforeAll(async () => {
+    discord = new DigitalDiscord({
+      botToken: 'twin-test-token',
+      botUser: { id: BOT, username: 'dsh' },
+      dbUrl: ':memory:',
+      guilds: [
+        { id: GUILD, name: 'G1', channels: [{ id: CHANNEL, name: 'general', type: 0 }] },
+        { id: GUILD2, name: 'G2', channels: [{ id: CHANNEL2, name: 'general', type: 0 }] },
+        { id: GUILD3, name: 'G3', channels: [{ id: CHANNEL3, name: 'general', type: 0 }] },
+      ],
+      users: [
+        { id: USER, username: 'Addo' },
+        { id: GUEST, username: 'Guest' },
+      ],
+    })
+    await discord.start()
+    rest = createSharedRestClient({ token: discord.botToken, apiBase: `${discord.restUrl}/v10` })
+
+    rowMap.set(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }), {
+      workspaceId: 'ws-1', revision: 1, boundBy: USER, boundAtMs: 1,
+    })
+    rowMap.set(channelBindingKey({ applicationId: BOT, guildId: GUILD2, channelId: CHANNEL2 }), {
+      workspaceId: 'ws-2', revision: 1, boundBy: USER, boundAtMs: 1,
+    })
+
+    const sharedRegistry = createComponentRegistry()
+    const interactionRouter = createInteractionRouter({
+      policy: () => ({
+        allowedGuildIds: [GUILD, GUILD2],
+        memberUserIds: [USER],
+        memberRoleIds: [],
+        administratorUserIds: [USER],
+        administratorRoleIds: [],
+        deniedUserIds: [],
+        deniedRoleIds: [],
+        hostOperatorUserIds: [],
+      }),
+      applicationId: () => BOT,
+      registry: sharedRegistry,
+      approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
+      approvalRespondPort: { respond: () => Promise.resolve({ outcome: 'confirmed' as const }) },
+      turnTracker: createTurnTracker(),
+      queueSnapshots: new Map(),
+      forgetGuild: () => Promise.resolve(),
+      componentFollowUp: (_interactionId, _interactionToken, content) => {
+        followups.push({ channelId: '', content })
+        return Promise.resolve()
+      },
+      disableControl: () => Promise.resolve(),
+      handleQuestionComponent: input => handleSelectInput({
+        registry: sharedRegistry,
+        store: createQuestionStore(),
+        port: { respond: () => Promise.resolve({ outcome: 'confirmed' as const }) },
+        nowMs: () => Date.now(),
+      } as unknown as Parameters<typeof handleSelectInput>[0], input),
+      handleQuestionModal: input => handleModalSubmit({
+        registry: sharedRegistry,
+        store: createQuestionStore(),
+        port: { respond: () => Promise.resolve({ outcome: 'confirmed' as const }) },
+        nowMs: () => Date.now(),
+      } as unknown as Parameters<typeof handleSelectInput>[0], input),
+      dsh: {
+        cancel: () => Promise.resolve({ outcome: 'accepted' as const }),
+        steer: () => Promise.resolve({ outcome: 'accepted' as const }),
+        removeQueueItem: () => Promise.resolve({ outcome: 'accepted' as const }),
+        readWorkspaceDetail: (reference: string) => {
+          const id = reference
+          return Promise.resolve({
+            outcome: 'found' as const,
+            workspace: { id, title: id === 'ws-2' ? 'ws-two' : 'tmp', path: `/tmp/${id}` },
+          })
+        },
+      },
+      catalogPort: { listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [] }) },
+      resolver: { resolve: () => Promise.resolve({ outcome: 'stale' as const }) },
+      channelBinding: (guildId, cid) => rowMap.get(channelBindingKey({ applicationId: BOT, guildId, channelId: cid })),
+      findBoundChannelFor: () => undefined,
+      sessionForThread: () => undefined,
+      ensureWorkspaceChannel: () => Promise.resolve(undefined),
+      rest: () => Promise.resolve(rest),
+      log: () => {},
+      warn: () => {},
+    })
+
+    runtimeRef.current = startDiscordAdapter({
+      tokenProvider: () => Promise.resolve(discord.botToken),
+      socketFactory: twinSocket,
+      logger: { warn: () => {} },
+      policy: () => ({
+        allowedGuildIds: [GUILD, GUILD2],
+        memberUserIds: [USER],
+        memberRoleIds: [],
+        administratorUserIds: [USER],
+        administratorRoleIds: [],
+        deniedUserIds: [],
+        deniedRoleIds: [],
+        hostOperatorUserIds: [],
+      }),
+      selfUserIdProvider: () => Promise.resolve(BOT),
+      intents: (1 << 0) | (1 << 9) | (1 << 15),
+      applicationId: () => BOT,
+      mainline: {
+        admitMention: request => {
+          admissions.push({ ...request })
+          return Promise.resolve({
+            outcome: 'admitted' as const,
+            threadId: request.messageId,
+            sessionId: `sess-${String(admissions.length)}`,
+          })
+        },
+        continueInThread: request => {
+          continuations.push({ ...request })
+          return Promise.resolve({ outcome: 'queued' as const })
+        },
+      },
+      gatewayUrl: `${discord.gatewayUrl}?v=10&encoding=json`,
+      bindings: {
+        workspaceForChannel: (guildId, cid) =>
+          rowMap.get(channelBindingKey({ applicationId: BOT, guildId, channelId: cid }))?.workspaceId,
+        sessionForThread: () => undefined,
+      },
+      unboundNotice: request => {
+        notices.push({ channelId: request.channelId, audience: request.audience })
+        void rest.request('POST', `/channels/${request.channelId}/messages`, { content: '💡 unbound' })
+      },
+      approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
+      questions: createQuestionStore(),
+      status: createAdapterStatusTracker(),
+      routeInteraction: (event, token) => {
+        if (event.kind !== 'interaction') return
+        return interactionRouter.route(event, token)
+      },
+    })
+    await new Promise(resolve => { setTimeout(resolve, 500) })
+  }, 20_000)
+
+  afterAll(async () => {
+    runtimeRef.current?.dispose()
+    await discord.stop()
+  })
+
+  it('admits each allowed guild against its own binding', async () => {
+    await discord.channel(CHANNEL).user(USER).sendMessage({ content: `<@${BOT}> task for g1` })
+    await discord.channel(CHANNEL2).user(USER).sendMessage({ content: `<@${BOT}> task for g2` })
+    await new Promise(resolve => { setTimeout(resolve, 400) })
+
+    expect(admissions).toHaveLength(2)
+    expect(admissions[0]).toMatchObject({ guildId: GUILD, channelId: CHANNEL, workspaceId: 'ws-1' })
+    expect(admissions[1]).toMatchObject({ guildId: GUILD2, channelId: CHANNEL2, workspaceId: 'ws-2' })
+  })
+
+  it('drops a mention from a guild outside the allowlist without notice or DSH calls', async () => {
+    await discord.channel(CHANNEL3).user(USER).sendMessage({ content: `<@${BOT}> g3 should not exist` })
+    await new Promise(resolve => { setTimeout(resolve, 400) })
+
+    expect(admissions).toHaveLength(2)
+    expect(notices).toHaveLength(0)
+    expect(followups).toHaveLength(0)
+  })
+
+  it('does not admit an unauthorized member of an allowed guild', async () => {
+    await discord.channel(CHANNEL).user(GUEST).sendMessage({ content: `<@${BOT}> guest should not pass` })
+    await new Promise(resolve => { setTimeout(resolve, 400) })
+
+    expect(admissions).toHaveLength(2)
+    expect(notices).toHaveLength(0)
+  })
+
+  it('filters bot-authored messages even when they mention the bot', async () => {
+    await discord.channel(CHANNEL).user(BOT).sendMessage({ content: `<@${BOT}> bot echo` })
+    await new Promise(resolve => { setTimeout(resolve, 400) })
+
+    expect(admissions).toHaveLength(2)
+  })
+
+  it('scopes /project info to the calling guild binding', async () => {
+    // The reply rides the interaction webhook, so it lands as a channel
+    // message on the twin wire.
+    const interaction = await discord.simulateSlashCommand({
+      channelId: CHANNEL, userId: USER, name: 'project',
+      options: [{ name: 'info', type: 1 }],
+    })
+    await discord.channel(CHANNEL).waitForInteractionAck({ interactionId: interaction.id })
+    const g1Reply = await discord.channel(CHANNEL).waitForMessage({
+      predicate: message => message.content.includes('路径：'),
+    })
+    expect(g1Reply.content).toContain('tmp')
+    expect(g1Reply.content).toContain('/tmp/ws-1')
+    expect(g1Reply.content).not.toContain('ws-two')
+
+    const interaction2 = await discord.simulateSlashCommand({
+      channelId: CHANNEL2, guildId: GUILD2, userId: USER, name: 'project',
+      options: [{ name: 'info', type: 1 }],
+    })
+    await discord.channel(CHANNEL2).waitForInteractionAck({ interactionId: interaction2.id })
+    const g2Reply = await discord.channel(CHANNEL2).waitForMessage({
+      predicate: message => message.content.includes('路径：'),
+    })
+    expect(g2Reply.content).toContain('ws-two')
+    expect(g2Reply.content).toContain('/tmp/ws-2')
+    expect(g2Reply.content).not.toContain('ws-1')
+  }, 20_000)
+})
