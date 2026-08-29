@@ -2,8 +2,9 @@
  * Markdown-aware splitting (design.md §8, task 11.6). Fenced code blocks stay
  * balanced across chunk boundaries: a cut inside a fence closes it at the end
  * of the earlier chunk and reopens it — same language — at the top of the
- * next. Output ending inside a fence gets the fence closed. Table rows are
- * ordinary lines, so line-boundary breaking keeps them intact.
+ * next. Output ending inside a fence gets the fence closed. GFM tables are
+ * wrapped into fences (wrapGfmTables) before splitting, so they ride the
+ * same balance guarantee.
  */
 
 import { splitMessage } from './splitter.js'
@@ -62,4 +63,45 @@ export function splitMarkdownAware(text: string, limit: number): string[] {
   const state: FenceState = { open: '' }
   const rebalanced = base.map(chunk => rebalanceChunk(chunk, state))
   return rebalanced.filter(chunk => chunk.trim() !== '')
+}
+
+const TABLE_DELIMITER_ROW = /^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$/u
+
+function isTableRow(line: string): boolean {
+  const trimmed = line.trim()
+  return trimmed.startsWith('|') && trimmed.endsWith('|')
+}
+
+/**
+ * Discord does not render GFM tables: raw pipe rows collapse into ragged
+ * text. A table region outside any fence — a header row, a delimiter row,
+ * then body rows — is wrapped in a fence so Discord renders it as aligned
+ * monospace. Regions inside fences are left untouched, and the resulting
+ * fences are ordinary balanced fences to the splitter.
+ */
+export function wrapGfmTables(text: string): string {
+  const lines = text.split('\n')
+  const out: string[] = []
+  let inFence = false
+  let index = 0
+  while (index < lines.length) {
+    const line = lines[index] ?? ''
+    if (FENCE_PATTERN.test(line)) {
+      inFence = !inFence
+      out.push(line)
+      index += 1
+      continue
+    }
+    if (!inFence && isTableRow(line)
+        && TABLE_DELIMITER_ROW.test(lines[index + 1] ?? '')) {
+      let end = index
+      while (end < lines.length && isTableRow(lines[end] ?? '')) end += 1
+      out.push('```', ...lines.slice(index, end), '```')
+      index = end
+      continue
+    }
+    out.push(line)
+    index += 1
+  }
+  return out.join('\n')
 }

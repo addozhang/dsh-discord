@@ -12,7 +12,13 @@ import { DigitalDiscord } from 'discord-digital-twin'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createInteractionRouter } from '../src/features/interaction-router.js'
+import { renderApprovalControls } from '../src/features/approval-view.js'
+import { createApprovalStore } from '../src/features/approval-store.js'
+import { createClientRespondPort, type RespondReceipt } from '../src/dsh/api-proxy-face.js'
+import { createComponentRegistry } from '../src/discord/components.js'
 import { startLiveRender } from '../src/stream/live.js'
+import { renderQuestionControls } from '../src/features/question-view.js'
+import { handleRemoteResolution } from '../src/features/question-routing.js'
 import { handleSelectInput, handleModalSubmit } from '../src/features/question-routing.js'
 import { startDiscordAdapter, type DiscordAdapterRuntime } from '../src/compose.js'
 import { createSharedRestClient, type SharedRestClient } from '../src/discord/rest.js'
@@ -23,7 +29,6 @@ import { createSessionCreationFlow, type DshSessionPort } from '../src/features/
 import { createPromptSubmissionFlow, type DshPromptPort } from '../src/features/prompt-submission.js'
 import { createTurnTracker } from '../src/features/turn-ownership.js'
 import { createAdapterStatusTracker } from '../src/features/adapter-status.js'
-import { createApprovalStore } from '../src/features/approval-store.js'
 import { createQuestionStore } from '../src/features/question-store.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey } from '../src/state/domain.js'
 import { createBindingStore } from '../src/state/bindings.js'
@@ -126,7 +131,7 @@ describe('twin smoke: mention mainline over the real wire', () => {
         hostOperatorUserIds: [],
       }),
       selfUserIdProvider: () => Promise.resolve(BOT),
-      intents: (1 << 0) | (1 << 1) | (1 << 9) | (1 << 15),
+      intents: (1 << 0) | (1 << 9) | (1 << 15),
       applicationId: () => BOT,
       mainline,
       gatewayUrl: `${discord.gatewayUrl}?v=10&encoding=json`,
@@ -227,9 +232,10 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     rest = createSharedRestClient({ token: discord.botToken, apiBase: `${discord.restUrl}/v10` })
 
     turnTracker = createTurnTracker()
+    const sharedRegistry = createComponentRegistry()
     const questionsStore = createQuestionStore()
     const questionRoutingDeps = {
-      registry: () => runtimeRef.current?.registry ?? null,
+      registry: sharedRegistry,
       store: questionsStore,
       port: {
         respond: () => Promise.resolve({ outcome: 'confirmed' as const }),
@@ -249,7 +255,7 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
         hostOperatorUserIds: [USER],
       }),
       applicationId: () => BOT,
-      registry: () => runtimeRef.current?.registry,
+      registry: sharedRegistry,
       approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
       approvalRespondPort: { respond: () => Promise.resolve({ outcome: 'confirmed' as const }) },
       turnTracker,
@@ -345,7 +351,7 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
         hostOperatorUserIds: [],
       }),
       selfUserIdProvider: () => Promise.resolve(BOT),
-      intents: (1 << 0) | (1 << 1) | (1 << 9) | (1 << 15),
+      intents: (1 << 0) | (1 << 9) | (1 << 15),
       applicationId: () => BOT,
       mainline: {
         admitMention: () => Promise.resolve({ outcome: 'admitted', threadId: 't', sessionId: 's' }),
@@ -711,7 +717,7 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
         hostOperatorUserIds: [],
       }),
       selfUserIdProvider: () => Promise.resolve(BOT),
-      intents: (1 << 0) | (1 << 1) | (1 << 9) | (1 << 15),
+      intents: (1 << 0) | (1 << 9) | (1 << 15),
       applicationId: () => BOT,
       mainline,
       gatewayUrl: `${discord.gatewayUrl}?v=10&encoding=json`,
@@ -723,8 +729,8 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
       questions: createQuestionStore(),
       status: createAdapterStatusTracker(),
     })
-    await new Promise(resolve => { setTimeout(resolve, 500) })
     void live
+    await new Promise(resolve => { setTimeout(resolve, 500) })
   }, 20_000)
 
   afterAll(async () => {
@@ -788,3 +794,408 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
 function sessionEventFrame(sessionId: string, type: string, data: Record<string, unknown>): unknown {
   return { type: 'session/event', sessionId, event: { type, data } }
 }
+
+describe('twin smoke: approval/question round trip with a STRICT fake DSH', () => {
+  let discord: DigitalDiscord
+  let rest: SharedRestClient
+  let runtime: DiscordAdapterRuntime
+  let threadId = ''
+  const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
+  /** Host-side pending asks: an rpcId leaves the map when answered. */
+  const pendingAsks = new Map<string, { sessionId: string; kind: 'approval' | 'question' }>()
+  const respondCalls: Array<Record<string, unknown>> = []
+  const controlMessages = new Map<string, { channelId: string; messageId: string }>()
+  let pushFrames: (frames: unknown[]) => void = () => {}
+  let turnTracker: ReturnType<typeof createTurnTracker>
+  let approvalsStore: ReturnType<typeof createApprovalStore>
+
+  beforeAll(async () => {
+    discord = new DigitalDiscord({
+      botToken: 'twin-test-token',
+      botUser: { id: BOT, username: 'dsh' },
+      dbUrl: ':memory:',
+      guild: { id: GUILD, name: 'Twin Guild' },
+      channels: [{ id: CHANNEL, name: 'tmp', type: 0 }],
+      users: [{ id: USER, username: 'Addo' }],
+    })
+    await discord.start()
+    rest = createSharedRestClient({ token: discord.botToken, apiBase: `${discord.restUrl}/v10` })
+
+    // A REAL twin thread channel: the controls are Discord messages in it.
+    const source = await discord.channel(CHANNEL).user(USER).sendMessage({ content: 'approval task' })
+    const made = await rest.request<{ id?: string } | undefined>(
+      'POST',
+      `/channels/${CHANNEL}/messages/${source.id}/threads`,
+      { name: 'approval task', type: 11, auto_archive_duration: 1440 },
+    )
+    if (made.outcome === 'completed' && typeof made.body?.id === 'string') {
+      threadId = made.body.id
+    }
+
+    turnTracker = createTurnTracker()
+    const sharedRegistry = createComponentRegistry()
+    approvalsStore = createApprovalStore(createKvTableStub())
+    const questionsStore = createQuestionStore()
+
+    // ── STRICT fake DSH apiProxy: validates the ClientResponse envelope
+    // exactly like the Host, and resolves each ask exactly once.
+    const strictRespond = (message: unknown): Promise<RespondReceipt> => {
+      const m = message as { type?: unknown; rpcId?: unknown; result?: { ok?: unknown; value?: unknown } }
+      if (m.type !== 'client-response') return Promise.reject(new TypeError('respond: missing type discriminator'))
+      if (typeof m.rpcId !== 'string' || m.rpcId === '') return Promise.reject(new TypeError('respond: missing rpcId'))
+      if (m.result?.ok !== true) return Promise.reject(new TypeError('respond: result must be ok'))
+      const ask = pendingAsks.get(m.rpcId)
+      if (ask === undefined) return Promise.resolve({ accepted: false, reason: 'not-pending' })
+      pendingAsks.delete(m.rpcId)
+      respondCalls.push(message as Record<string, unknown>)
+      return Promise.resolve({ accepted: true })
+    }
+    const clientRespond = createClientRespondPort({ respond: strictRespond }, { log: () => {} })
+
+    // Pushable mux: the test drives approval/question frames like the Host.
+    const pushed: unknown[] = []
+    pushFrames = frames => { pushed.push(...frames) }
+    async function* pushableFrames(signal: AbortSignal): AsyncIterable<unknown> {
+      let index = 0
+      while (!signal.aborted) {
+        while (index < pushed.length) {
+          yield pushed[index]
+          index += 1
+        }
+        await new Promise(resolve => { setTimeout(resolve, 5) })
+      }
+    }
+
+    const disableControl = async (key: string): Promise<void> => {
+      const target = controlMessages.get(key)
+      if (target === undefined) return
+      controlMessages.delete(key)
+      await rest.request('PATCH', `/channels/${target.channelId}/messages/${target.messageId}`, { components: [] })
+    }
+    const componentFollowUp = async (interactionToken: string, content: string): Promise<void> => {
+      await rest.request('POST', `/webhooks/${BOT}/${interactionToken}`, { content, flags: 64 })
+    }
+
+    const questionRoutingDeps = {
+      registry: sharedRegistry,
+      store: questionsStore,
+      port: {
+        respond: (input: { rpcId: string; sessionId: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }) =>
+          clientRespond.respond(input.rpcId, { sessionId: input.sessionId, answer: input.answer }),
+      },
+      nowMs: () => Date.now(),
+      controls: { disable: disableControl },
+    } as unknown as Parameters<typeof handleSelectInput>[0]
+
+    const interactionRouter = createInteractionRouter({
+      policy: () => ({
+        allowedGuildIds: [GUILD],
+        memberUserIds: [USER],
+        memberRoleIds: [],
+        administratorUserIds: [],
+        administratorRoleIds: [],
+        deniedUserIds: [],
+        deniedRoleIds: [],
+        hostOperatorUserIds: [],
+      }),
+      applicationId: () => BOT,
+      registry: sharedRegistry,
+      approvals: approvalsStore,
+      approvalRespondPort: {
+        respond: ({ rpcId, sessionId, approvalId, outcome }) =>
+          clientRespond.respond(rpcId, { sessionId, approvalId, outcome }),
+      },
+      turnTracker,
+      queueSnapshots: new Map(),
+      forgetGuild: () => Promise.resolve(),
+      componentFollowUp: async (_interactionId: string, interactionToken: string, content: string) => {
+        await componentFollowUp(interactionToken, content)
+      },
+      disableControl,
+      handleQuestionComponent: input => handleSelectInput(questionRoutingDeps, input),
+      handleQuestionModal: input => handleModalSubmit(questionRoutingDeps, input),
+      dsh: {
+        cancel: () => Promise.resolve({ outcome: 'accepted' as const }),
+        steer: () => Promise.resolve({ outcome: 'accepted' as const }),
+        removeQueueItem: () => Promise.resolve({ outcome: 'accepted' as const }),
+        readWorkspaceDetail: () => Promise.resolve({ outcome: 'stale' }),
+      },
+      catalogPort: { listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [] }) },
+      resolver: { resolve: () => Promise.resolve({ outcome: 'stale' }) },
+      channelBinding: () => undefined,
+      findBoundChannelFor: () => undefined,
+      sessionForThread: () => undefined,
+      ensureWorkspaceChannel: () => Promise.resolve(undefined),
+      rest: () => Promise.resolve(rest),
+      log: () => {},
+      warn: () => {},
+    })
+
+    runtime = startDiscordAdapter({
+      registry: sharedRegistry,
+      tokenProvider: () => Promise.resolve(discord.botToken),
+      socketFactory: twinSocket,
+      policy: () => ({
+        allowedGuildIds: [GUILD],
+        memberUserIds: [USER],
+        memberRoleIds: [],
+        administratorUserIds: [],
+        administratorRoleIds: [],
+        deniedUserIds: [],
+        deniedRoleIds: [],
+        hostOperatorUserIds: [],
+      }),
+      selfUserIdProvider: () => Promise.resolve(BOT),
+      intents: (1 << 0) | (1 << 9) | (1 << 15),
+      applicationId: () => BOT,
+      mainline: {
+        admitMention: () => Promise.resolve({ outcome: 'admitted', threadId: 't', sessionId: 's' }),
+        continueInThread: () => Promise.resolve({ outcome: 'queued' }),
+      },
+      gatewayUrl: `${discord.gatewayUrl}?v=10&encoding=json`,
+      bindings: {
+        workspaceForChannel: () => undefined,
+        sessionForThread: () => undefined,
+      },
+      approvals: approvalsStore,
+      questions: questionsStore,
+      status: createAdapterStatusTracker(),
+      routeInteraction: (event, token) => {
+        if (event.kind !== 'interaction') return
+        return interactionRouter.route(event, token)
+      },
+    })
+    runtimeRef.current = runtime
+
+    // The live renderer with index-style requests wiring over the strict port.
+    const live = startLiveRender({
+      frames: pushableFrames,
+      threadForSession: (sessionId: string) => sessionId === 'sess-1' ? threadId : undefined,
+      delivery: {
+        send: async (request) => {
+          const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${request.channelId}/messages`, { content: request.content })
+          if (sent.outcome === 'completed' && typeof sent.body?.id === 'string') {
+            return { outcome: 'completed', messageId: sent.body.id }
+          }
+          return { outcome: 'failed' }
+        },
+        edit: async (request) => {
+          const edited = await rest.request('PATCH', `/channels/${request.channelId}/messages/${request.messageId}`, { content: request.content })
+          return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
+        },
+        delete: () => Promise.resolve({ outcome: 'completed' as const }),
+        typing: async () => {},
+        renameThread: () => Promise.resolve({ outcome: 'completed' as const }),
+      },
+      updateIntervalMs: 0,
+      activityCoalesceMs: 0,
+      typingIntervalMs: 60_000,
+      approvalTimeoutMs: 600_000,
+      questionTimeoutMs: 1_800_000,
+      requests: {
+        onApprovalRequested: (input) => {
+          void input.threadId
+          approvalsStore.open({
+            approvalId: input.approvalId,
+            sessionId: input.sessionId,
+            threadId: input.threadId,
+            requestId: 'discord:m-1',
+            rpcId: input.rpcId,
+            actorUserId: USER,
+            toolName: input.toolName,
+            reason: input.reason,
+            expiresAtMs: input.expiresAtMs,
+            state: 'pending',
+          })
+          turnTracker.register({ sessionId: input.sessionId, requestId: 'discord:m-1', threadId: input.threadId })
+          const payload = renderApprovalControls({
+            registry: sharedRegistry,
+            sessionId: input.sessionId,
+            rpcId: input.rpcId,
+            approvalId: input.approvalId,
+            toolName: input.toolName,
+            reason: input.reason,
+            expiresAtMs: input.expiresAtMs,
+          })
+          void (async () => {
+            const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${input.threadId}/messages`, payload)
+            if (sent.outcome === 'completed' && typeof sent.body?.id === 'string') {
+              controlMessages.set(input.approvalId, { channelId: input.threadId, messageId: sent.body.id })
+            }
+          })().catch(() => {})
+        },
+        onApprovalResolved: () => {},
+        onQuestionRequested: (input) => {
+          const batch = {
+            questionRpcId: input.rpcId,
+            sessionId: input.sessionId,
+            threadId: input.threadId,
+            requestId: 'discord:m-1',
+            actorUserId: USER,
+            expiresAtMs: input.expiresAtMs,
+            questions: input.questions.map(question => ({
+              id: typeof question['id'] === 'string' ? question['id'] : '',
+              question: typeof question['question'] === 'string' ? question['question'] : '',
+              header: typeof question['header'] === 'string' ? question['header'] : undefined,
+              options: Array.isArray(question['options'])
+                ? question['options'].map(option => ({
+                    label: typeof (option as { label?: unknown }).label === 'string'
+                      ? (option as { label: string }).label
+                      : '',
+                  }))
+                : undefined,
+              multiSelect: question['multiSelect'] === true,
+            })),
+          }
+          const opened = questionsStore.open(batch)
+          if (!opened.ok) return
+          const payload = renderQuestionControls({ registry: sharedRegistry, batch })
+          void (async () => {
+            const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${input.threadId}/messages`, payload)
+            if (sent.outcome === 'completed' && typeof sent.body?.id === 'string') {
+              controlMessages.set(input.rpcId, { channelId: input.threadId, messageId: sent.body.id })
+            }
+          })().catch(() => {})
+        },
+        onQuestionResolved: (input) => {
+          void handleRemoteResolution(questionRoutingDeps, {
+            questionRpcId: input.questionRpcId,
+            outcome: input.outcome,
+          }).catch(() => {})
+        },
+      },
+    })
+    void live
+    await new Promise(resolve => { setTimeout(resolve, 500) })
+  }, 20_000)
+
+  afterAll(async () => {
+    runtimeRef.current?.dispose()
+    await discord.stop()
+  })
+
+  it('carries an approval click into a shape-correct client-response', async () => {
+    pendingAsks.set('ask-approval', { sessionId: 'sess-1', kind: 'approval' })
+    pushFrames([{
+      rpcId: 'ask-approval',
+      payload: {
+        type: 'approval/requested',
+        sessionId: 'sess-1',
+        approvalId: '7c4a447f',
+        toolName: 'bash',
+        reason: 'write outside workspace',
+      },
+    }])
+
+    const scope = discord.channel(threadId)
+    const control = await scope.waitForMessage({
+      predicate: message => message.content.includes('Approval required'),
+    })
+    const row = (control.components?.[0] as { components?: Array<{ custom_id?: string; label?: string }> } | undefined)?.components ?? []
+    const allowId = row.find(button => button.label === 'Allow once')?.custom_id
+    if (typeof allowId !== 'string') throw new TypeError('allow control missing custom_id')
+
+    await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: control.id, customId: allowId })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+
+    // The strict fake validated the envelope; the payload rides result.value.
+    expect(respondCalls).toHaveLength(1)
+    expect(respondCalls[0]).toMatchObject({
+      type: 'client-response',
+      rpcId: 'ask-approval',
+      result: { ok: true, value: { sessionId: 'sess-1', approvalId: '7c4a447f', outcome: 'allowed-once' } },
+    })
+    // Controls retired on the confirmed answer.
+    const edited = await discord.thread(threadId).getMessages()
+    const controlAfter = edited.find(message => message.id === control.id)
+    expect(controlAfter).toBeDefined()
+    expect(controlAfter?.components ?? []).toHaveLength(0)
+  }, 20_000)
+
+  it('carries a question select + submit into a shape-correct answer batch', async () => {
+    pendingAsks.set('ask-question', { sessionId: 'sess-1', kind: 'question' })
+    pushFrames([{
+      rpcId: 'ask-question',
+      payload: {
+        type: 'question/requested',
+        sessionId: 'sess-1',
+        questions: [{
+          id: 'q1',
+          question: 'How to proceed',
+          options: [
+            { label: 'Retry with approval (Recommended)' },
+            { label: 'Create in /private/tmp' },
+            { label: 'Other — tell us in your own words' },
+          ],
+        }],
+      },
+    }])
+
+    const scope = discord.channel(threadId)
+    const control = await scope.waitForMessage({
+      predicate: message => message.content.includes('How to proceed'),
+    })
+    const rows = control.components as Array<{ components: Array<{ custom_id?: string }> }>
+    const selectCustomId = rows[0]?.components[0]?.custom_id
+    if (typeof selectCustomId !== 'string') throw new TypeError('select control missing custom_id')
+
+    // Select the first option, then submit.
+    await discord.simulateSelectMenu({
+      channelId: threadId, userId: USER, messageId: control.id, customId: selectCustomId,
+      values: ['Retry with approval (Recommended)'],
+    })
+    await new Promise(resolve => { setTimeout(resolve, 200) })
+    const submitCustomId = rows.at(-1)?.components[0]?.custom_id
+    if (typeof submitCustomId !== 'string') throw new TypeError('submit control missing custom_id')
+    await discord.simulateButtonClick({
+      channelId: threadId, userId: USER, messageId: control.id,
+      customId: submitCustomId,
+    })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+
+    const sent = respondCalls.filter(message => message.rpcId === 'ask-question')
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      type: 'client-response',
+      result: {
+        ok: true,
+        value: { sessionId: 'sess-1', answer: { answers: [{ id: 'q1', selected: ['Retry with approval (Recommended)'] }] } },
+      },
+    })
+  }, 20_000)
+
+  it('answers a second respond for a settled ask with not-pending', async () => {
+    // The Host-semantics regression: an ask answered once is no longer
+    // pending — a duplicate respond must NOT be treated as delivered.
+    pendingAsks.set('ask-dupe', { sessionId: 'sess-1', kind: 'approval' })
+    const first = await (async () => {
+      // Drive the strict responder directly through a fresh render+click.
+      pushFrames([{
+        rpcId: 'ask-dupe',
+        payload: {
+          type: 'approval/requested',
+          sessionId: 'sess-1',
+          approvalId: 'dupe-1',
+          toolName: 'bash',
+        },
+      }])
+      const scope = discord.channel(threadId)
+      const control = await scope.waitForMessage({
+        predicate: message => message.content.includes('Approval required'),
+      })
+      const row = (control.components?.[0] as { components?: Array<{ custom_id?: string }> } | undefined)?.components ?? []
+      return { control, allowId: row[0]?.custom_id ?? '' }
+    })()
+    await discord.simulateButtonClick({ channelId: 'thread-1', userId: USER, messageId: first.control.id, customId: first.allowId })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+
+    const before = respondCalls.length
+    const strict = await (async () => {
+      // A second respond for the settled ask: not-pending.
+      const port = createClientRespondPort({ respond: () => Promise.resolve({ accepted: false, reason: 'not-pending' }) })
+      return port.respond('ask-dupe', {})
+    })()
+    expect(strict).toEqual({ outcome: 'rejected', reason: 'not-pending' })
+    expect(respondCalls.length).toBe(before)
+  }, 20_000)
+})

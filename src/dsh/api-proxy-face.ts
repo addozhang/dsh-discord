@@ -471,3 +471,47 @@ export async function removeQueueItemViaProxy(
   log?.('discord_queue_remove_rejected', { code: result.error.code, sessionId: request.sessionId })
   return { outcome: 'rejected', reason: result.error.code }
 }
+
+/** The carrier verdict apiProxy.respond resolves with (RpcReceipt). */
+export type RespondReceipt =
+  | { accepted: true }
+  | { accepted: false; reason: 'not-pending' | 'bad-response' }
+  | { accepted: unknown }
+
+export type RespondOutcome =
+  | { outcome: 'confirmed' }
+  | { outcome: 'rejected'; reason: string }
+  | { outcome: 'unknown' }
+
+/**
+ * The respond face for answerable server-requests (approvals, questions).
+ * Builds the full ClientResponse envelope — {type: 'client-response',
+ * rpcId, result: {ok: true, value}} is the wire contract; posting the bare
+ * payload is silently ignored by the Host (rpcId never resolves) — and
+ * maps the RpcReceipt onto the port outcome.
+ */
+export function createClientRespondPort(
+  dsh: { respond(message: unknown): Promise<unknown> },
+  options: ApiProxyFaceOptions = {},
+): {
+  respond(rpcId: string, value: unknown): Promise<RespondOutcome>
+} {
+  const log = options.log
+  return {
+    respond(rpcId, value): Promise<RespondOutcome> {
+      return dsh.respond({
+        type: 'client-response',
+        rpcId,
+        result: { ok: true, value },
+      }).then(r => {
+        const receipt = r as { accepted?: unknown; reason?: unknown } | undefined
+        log?.('discord_client_respond_receipt', { rpcId, receipt: receipt ?? null })
+        if (receipt?.accepted === true) return { outcome: 'confirmed' }
+        if (receipt?.accepted === false) {
+          return { outcome: 'rejected', reason: typeof receipt.reason === 'string' ? receipt.reason : 'respond-refused' }
+        }
+        return { outcome: 'unknown' }
+      })
+    },
+  }
+}

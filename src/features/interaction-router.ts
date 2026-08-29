@@ -34,8 +34,8 @@ export interface InteractionDshFace {
 export interface InteractionRouterDeps {
   policy: () => PolicyTable
   applicationId: () => string
-  /** The registry exists only once the composed runtime has started. */
-  registry: () => ComponentRegistry | undefined
+  /** The shared component registry (render + click routing use one instance). */
+  registry: ComponentRegistry
   approvals: ApprovalStore
   approvalRespondPort: DshApprovalRespondPort
   turnTracker: TurnTracker
@@ -181,10 +181,8 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             return
           }
           const expiresAtMs = Date.now() + 15 * 60 * 1000
-          const registry = deps.registry()
-          if (registry === undefined) return
-          const confirmId = registry.register({ kind: 'project-bind', action: 'confirm', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
-          const cancelId = registry.register({ kind: 'project-bind', action: 'cancel', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
+          const confirmId = deps.registry.register({ kind: 'project-bind', action: 'confirm', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
+          const cancelId = deps.registry.register({ kind: 'project-bind', action: 'cancel', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
           deps.log('discord_project_bind_planned', { interactionId: event.interactionId, workspaceId })
           await followUp(`将为工作区「${title}」创建专属频道（DeepSeek Harness 分类下）？`, buttonRow(confirmId, cancelId))
           return
@@ -390,9 +388,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           return
         }
         const expiresAtMs = Date.now() + 15 * 60 * 1000
-        const registry = deps.registry()
-        if (registry === undefined) return
-        const confirmId = registry.register({ kind: 'guild-forget', action: 'confirm', guildId: event.guildId, actorId: event.actorId, expiresAtMs })
+        const confirmId = deps.registry.register({ kind: 'guild-forget', action: 'confirm', guildId: event.guildId, actorId: event.actorId, expiresAtMs })
         await followUp('⚠️ 将删除本 Guild 的全部适配器记录（绑定/意图；DSH 工作区与 Session 不受影响）。确认？', [{
           type: 1,
           components: [{ type: 2, style: 4, label: '确认忘记', custom_id: confirmId }],
@@ -406,11 +402,9 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
   }
 
   async function routeBindComponent(event: RouterEvent, interactionToken: string): Promise<void> {
-    const registry = deps.registry()
-    if (registry === undefined) return
     const customId = event.data['custom_id']
     if (typeof customId !== 'string') return
-    const resolved = registry.resolve(customId, Date.now())
+    const resolved = deps.registry.resolve(customId, Date.now())
     const bindContext = resolved.found ? resolved.context : undefined
     if (bindContext?.['kind'] !== 'project-bind') return
     const rest = await deps.rest()
@@ -467,11 +461,9 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
   }
 
   async function routeGuildForGetComponent(event: RouterEvent, interactionToken: string): Promise<void> {
-    const registry = deps.registry()
-    if (registry === undefined) return
     const customId = event.data['custom_id']
     if (typeof customId !== 'string') return
-    const resolved = registry.resolve(customId, Date.now())
+    const resolved = deps.registry.resolve(customId, Date.now())
     const context = resolved.found ? resolved.context : undefined
     if (context?.['kind'] !== 'guild-forget') return
     const rest = await deps.rest()
@@ -559,15 +551,8 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       const customId = event.data['custom_id']
       if (typeof customId !== 'string') return
       if (interactionToken === undefined) return
-      const registry = deps.registry()
-      if (registry === undefined) return
-      const resolved = registry.resolve(customId, Date.now())
+      const resolved = deps.registry.resolve(customId, Date.now())
       const bindContext = resolved.found ? resolved.context : undefined
-      deps.log('discord_component_resolve', {
-        customId,
-        found: resolved.found,
-        context: bindContext ?? null,
-      })
       if (bindContext?.['kind'] === 'project-bind') {
         await routeBindComponent(event, interactionToken)
         return
@@ -616,7 +601,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         try {
           outcome = await handleApprovalClick(
             {
-              registry,
+              registry: deps.registry,
               store: deps.approvals,
               port: deps.approvalRespondPort,
               nowMs: () => Date.now(),

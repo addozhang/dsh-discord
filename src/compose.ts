@@ -115,6 +115,12 @@ export interface CompositionDeps {
   onReady?: () => void | Promise<void>
   /** Allowlist snapshot used to provision channels on READY. */
   allowedGuildIds?: readonly string[] | undefined
+  /**
+   * Registry override so the composition root shares ONE registry instance
+   * across the runtime and every feature handler (question controls,
+   * approval buttons, bind confirms).
+   */
+  registry?: ComponentRegistry
   logger?: { warn(event: string, detail?: unknown): void }
 }
 
@@ -206,7 +212,7 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
  * token resolves; `started` flips once the Gateway has been spawned.
  */
 export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntime {
-  const registry = createComponentRegistry()
+  const registry = deps.registry ?? createComponentRegistry()
   const status = deps.status
 
   let gateway: GatewayHandle | undefined

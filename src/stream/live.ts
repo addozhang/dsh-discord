@@ -51,6 +51,8 @@ export interface LiveRenderDeps {
   frames: (signal: AbortSignal) => AsyncIterable<unknown>
   threadForSession: (sessionId: string) => string | undefined
   delivery: LiveDeliveryPort
+  /** Wire name of a thread, when resolvable; lets a restart skip no-op renames. */
+  threadName?: (channelId: string) => Promise<string | undefined>
   updateIntervalMs: number
   typingIntervalMs: number
   /** Approval ask deadline (approvalTimeoutMs setting). */
@@ -433,10 +435,20 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       const name = safeTitle(title)
       if (name === '' || name === runtime.lastTitle) return
       runtime.lastTitle = name
-      void deps.delivery.renameThread({ channelId: threadId, name }).then((result) => {
-        if (result.outcome !== 'completed') {
-          deps.log?.('discord_live_rename_failed', { threadId, name })
-        }
+      // Cold dedupe state after a restart: confirm the thread's wire name
+      // before PATCHing — Discord throttles renames hard (~2 per 10 min),
+      // and an unchanged session must not burn one on a no-op.
+      const renameNeeded = deps.threadName === undefined ? Promise.resolve(true)
+        : deps.threadName(threadId).then(
+            (current) => current === undefined || safeTitle(current) !== name,
+          ).catch(() => true)
+      void renameNeeded.then((needed) => {
+        if (!needed) return
+        return deps.delivery.renameThread({ channelId: threadId, name }).then((result) => {
+          if (result.outcome !== 'completed') {
+            deps.log?.('discord_live_rename_failed', { threadId, name })
+          }
+        })
       }).catch((cause: unknown) => {
         deps.log?.('discord_live_rename_threw', { threadId, cause: String(cause) })
       })

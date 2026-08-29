@@ -36,4 +36,30 @@ describe('outbound message builder', () => {
     const payload = buildOutboundMessage({ kind: 'assistant', content: 'plain text 123' })
     expect(payload.content).toBe('plain text 123')
   })
+
+  it('wraps GFM tables in fences on the assistant surface', () => {
+    const payload = buildOutboundMessage({
+      kind: 'assistant',
+      content: '结果如下：\n| 命令 | 耗时 |\n| --- | --- |\n| ls | 3ms |\n| du | 12ms |',
+    })
+    expect(payload.content).toBe(
+      '结果如下：\n```\n| 命令 | 耗时 |\n| --- | --- |\n| ls | 3ms |\n| du | 12ms |\n```',
+    )
+  })
+
+  it('leaves pipe text alone when there is no delimiter row or it sits in a fence', () => {
+    const noTable = buildOutboundMessage({ kind: 'assistant', content: '| 只是 | 一行 |\n普通文本' })
+    expect(noTable.content).toBe('| 只是 | 一行 |\n普通文本')
+
+    const fenced = buildOutboundMessage({
+      kind: 'assistant',
+      content: '```\n| a | b |\n| - | - |\n```\n后文',
+    })
+    expect(fenced.content).toBe('```\n| a | b |\n| - | - |\n```\n后文')
+  })
+
+  it('does not wrap tables on non-assistant surfaces', () => {
+    const payload = buildOutboundMessage({ kind: 'tool', content: '| a | b |\n| - | - |' })
+    expect(payload.content).toBe('| a | b |\n| - | - |')
+  })
 })

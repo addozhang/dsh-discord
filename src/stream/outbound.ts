@@ -7,6 +7,7 @@
  */
 
 import { DISCORD_SUPPRESS_MENTIONS_FLAG, safeTitle } from '../policy/disclosure.js'
+import { wrapGfmTables } from './markdown.js'
 import { suppressMentionSyntax } from '../policy/suppress.js'
 
 /** Discord message flags the adapter always sets (SUPPRESS_MENTIONS). */
@@ -26,6 +27,8 @@ export interface OutboundMessage {
 export function buildOutboundMessage(input: { kind: OutboundContentKind; content: string }): OutboundMessage {
   const content = input.kind === 'title'
     ? safeTitle(input.content)
-    : suppressMentionSyntax(input.content)
+    : input.kind === 'assistant'
+      ? suppressMentionSyntax(wrapGfmTables(input.content))
+      : suppressMentionSyntax(input.content)
   return { content, flags: OUTBOUND_MESSAGE_FLAGS }
 }

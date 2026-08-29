@@ -63,3 +63,30 @@ export async function sweepExpiredQuestions(deps: QuestionExpiryDeps): Promise<Q
 
   return { handled }
 }
+
+export interface AbandonQuestionDeps {
+  store: Pick<QuestionStore, 'claim' | 'get' | 'markExpired'>
+  cancelPort: DshTurnCancelPort
+  nowMs: () => number
+}
+
+/**
+ * The controls never reached Discord, so nobody can ever answer: cancel the
+ * owning turn immediately instead of letting the sweep wait out the deadline
+ * with DSH's tool call hanging. Same claim discipline as the sweep — a user
+ * click that somehow won the race owns the question and this is a no-op.
+ */
+export async function abandonUnrenderableQuestion(deps: AbandonQuestionDeps, questionRpcId: string): Promise<void> {
+  const claim = await deps.store.claim(questionRpcId)
+  if (claim.outcome !== 'claimed') return
+  const cancelled = await deps.cancelPort.cancel({
+    sessionId: claim.record.sessionId,
+    requestId: claim.record.requestId,
+  })
+  const outcome = cancelled.outcome === 'accepted'
+    ? 'accepted'
+    : cancelled.outcome === 'rejected'
+      ? 'rejected'
+      : 'unknown'
+  await deps.store.markExpired(questionRpcId, outcome, deps.nowMs())
+}

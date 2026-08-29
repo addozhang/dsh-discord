@@ -16,6 +16,7 @@ import {
   sweepExpiredQuestions,
   type DshTurnCancelPort,
   type QuestionControls,
+  abandonUnrenderableQuestion,
 } from '../src/features/question-expiry.js'
 
 function batch(overrides: Partial<QuestionBatch> = {}): QuestionBatch {
@@ -129,5 +130,37 @@ describe('question expiry sweep', () => {
 
     expect(result.handled).toEqual([])
     expect(cancel).not.toHaveBeenCalled()
+  })
+})
+
+describe('abandonUnrenderableQuestion', () => {
+  it('cancels the owning turn and records expiry when the controls never rendered', async () => {
+    const { store, cancel, disable } = setup()
+    await abandonUnrenderableQuestion({
+      store,
+      cancelPort: { cancel },
+      nowMs: () => 5_000,
+    }, 'qrpc-1')
+
+    expect(cancel).toHaveBeenCalledWith({ sessionId: 'sess-1', requestId: 'req-1' })
+    expect(store.get('qrpc-1')).toEqual(expect.objectContaining({
+      state: 'expired',
+      expiredCancel: 'accepted',
+    }))
+    expect(disable).not.toHaveBeenCalled()
+  })
+
+  it('is a no-op when a user click already owns the question', async () => {
+    const { store, cancel, disable } = setup()
+    await store.claim('qrpc-1')
+
+    await abandonUnrenderableQuestion({
+      store,
+      cancelPort: { cancel },
+      nowMs: () => 5_000,
+    }, 'qrpc-1')
+
+    expect(cancel).not.toHaveBeenCalled()
+    expect(disable).not.toHaveBeenCalled()
   })
 })

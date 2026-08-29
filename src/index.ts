@@ -18,6 +18,7 @@ import {
 import { describeDiscordCredential, resolveDiscordBotToken, type DiscordCredentialProvider } from './credential.js'
 import { createSharedRestClient, type SharedRestClient } from './discord/rest.js'
 import { createRestThreadPort } from './discord/thread-port.js'
+import { createComponentRegistry } from './discord/components.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
 import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, type DshApiProxyFace } from './dsh/api-proxy-face.js'
@@ -26,14 +27,14 @@ import { renderApprovalControls } from './features/approval-view.js'
 import { sweepExpiredApprovals } from './features/approval-expiry.js'
 import { renderQuestionControls } from './features/question-view.js'
 import { handleSelectInput, handleModalSubmit, handleRemoteResolution } from './features/question-routing.js'
-import { sweepExpiredQuestions } from './features/question-expiry.js'
+import { sweepExpiredQuestions, abandonUnrenderableQuestion } from './features/question-expiry.js'
 import { createQuestionStore } from './features/question-store.js'
 import type { DshApprovalRespondPort } from './features/approval-routing.js'
 import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
 import { planBindingReconciliation } from './features/reconcile-bindings.js'
 import { guildKeysToForget, sweepExpired } from './state/retention.js'
-import { listSessionIds } from './dsh/api-proxy-face.js'
+import { listSessionIds, createClientRespondPort } from './dsh/api-proxy-face.js'
 import { createBindingStore } from './state/bindings.js'
 import { createIntentStore, type InboundIntentRecord, type IntentTable } from './state/intents.js'
 import type { BindingTable } from './state/bindings.js'
@@ -58,8 +59,13 @@ export type Config = DiscordSettings
 
 export const Config: z<Config> = DiscordSettingsSchema
 
-/** Fixed Milestone 1 Gateway intents: guilds, members, messages, content. */
-const GATEWAY_INTENTS = (1 << 0) | (1 << 1) | (1 << 9) | (1 << 15)
+/**
+ * Fixed Milestone 1 Gateway intents: guilds, messages, content. Member data
+ * rides MESSAGE_CREATE/INTERACTION_CREATE payloads, so the privileged
+ * GUILD_MEMBERS bit (1 << 1) is not requested — without the Dev Portal
+ * toggle Discord rejects identify with 4014, which is terminal for us.
+ */
+const GATEWAY_INTENTS = (1 << 0) | (1 << 9) | (1 << 15)
 
 /**
  * Emit through the Host's logger service only when it is actually wired:
@@ -494,6 +500,20 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       }
     }, 6 * 60 * 60_000)
     ctx.effect(() => () => { clearInterval(retentionTimer) }, 'discord retention sweep')
+    // Question turn-cancellation face shared by the expiry sweep and the
+    // render-failure abandonment: both cancel the owning adapter Turn.
+    const questionCancelPort = {
+      cancel: async ({ sessionId }: { sessionId: string }) => {
+        const cancelled = await cancelSessionViaProxy(apiProxy, { sessionId }, { log: rpcLog })
+        const turn = turnTracker.active(sessionId)
+        if (turn !== undefined) turnTracker.complete(turn.requestId)
+        return cancelled.outcome === 'accepted'
+          ? { outcome: 'accepted' as const }
+          : cancelled.outcome === 'rejected'
+            ? { outcome: 'rejected' as const, reason: cancelled.reason }
+            : { outcome: 'unknown' as const }
+      },
+    }
     // Approval/question expiry: 30s sweep — approvals auto-reject before
     // their controls expire; question expiry cancels the owning turn.
     const expiryTimer = setInterval(() => {
@@ -505,18 +525,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       }).catch((cause: unknown) => { rpcLog('discord_approval_expiry_threw', String(cause)) })
       void sweepExpiredQuestions({
         store: questionsStore,
-        cancelPort: {
-          cancel: async ({ sessionId }) => {
-            const cancelled = await cancelSessionViaProxy(apiProxy, { sessionId }, { log: rpcLog })
-            const turn = turnTracker.active(sessionId)
-            if (turn !== undefined) turnTracker.complete(turn.requestId)
-            return cancelled.outcome === 'accepted'
-              ? { outcome: 'accepted' as const }
-              : cancelled.outcome === 'rejected'
-                ? { outcome: 'rejected' as const, reason: cancelled.reason }
-                : { outcome: 'unknown' as const }
-          },
-        },
+        cancelPort: questionCancelPort,
         controls: { disable: disableControl },
         nowMs: () => Date.now(),
       }).catch((cause: unknown) => { rpcLog('discord_question_expiry_threw', String(cause)) })
@@ -525,27 +534,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
 
     const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
     // DSH approval respond face: the client-response echoes the ask's rpcId.
+    const clientRespond = createClientRespondPort(
+      apiProxy as unknown as { respond(message: unknown): Promise<unknown> },
+      { log: rpcLog },
+    )
     const approvalRespondPort: DshApprovalRespondPort = {
       respond: async ({ rpcId, sessionId, approvalId, outcome }) => {
-        // apiProxy.respond takes the full ClientResponse envelope — the
-        // type discriminator routes it, result.value carries the
-        // ApprovalResponsePayload (approvals.d.ts) — and resolves with an
-        // RpcReceipt: {accepted: true} on delivery, {accepted: false,
-        // reason: 'not-pending' | 'bad-response'} otherwise.
-        const receipt = await (apiProxy.respond as (
-          message: unknown,
-        ) => Promise<unknown>)({
-          type: 'client-response',
-          rpcId,
-          result: { ok: true, value: { sessionId, approvalId, outcome } },
-        })
+        const receipt = await clientRespond.respond(rpcId, { sessionId, approvalId, outcome })
         rpcLog('discord_approval_respond_receipt', { rpcId, approvalId, outcome, receipt })
-        const accepted = (receipt as { accepted?: unknown } | undefined)?.accepted
-        if (accepted === true) return { outcome: 'confirmed' }
-        if (accepted === false) {
-          return { outcome: 'rejected', reason: 'respond-refused' }
-        }
-        return { outcome: 'unknown' }
+        return receipt
       },
     }
     const queueSnapshots: Map<string, Array<{ id: string; summary: string }>> = new Map()
@@ -561,26 +558,16 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       rpcLog('discord_guild_forget_deleted', { guildId, channels: plan.channelKeys.length, threads: plan.threadKeys.length })
     }
 
+    const sharedRegistry = createComponentRegistry()
     const questionRespondPort = {
       respond: async (input: { rpcId: string; sessionId: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }) => {
-        const receipt = await (apiProxy.respond as (
-          message: unknown,
-        ) => Promise<unknown>)({
-          type: 'client-response',
-          rpcId: input.rpcId,
-          result: { ok: true, value: { sessionId: input.sessionId, answer: input.answer } },
-        })
+        const receipt = await clientRespond.respond(input.rpcId, { sessionId: input.sessionId, answer: input.answer })
         rpcLog('discord_question_respond_receipt', { rpcId: input.rpcId, receipt })
-        const accepted = (receipt as { accepted?: unknown } | undefined)?.accepted
-        if (accepted === true) return { outcome: 'confirmed' as const }
-        if (accepted === false) {
-          return { outcome: 'rejected' as const, reason: 'respond-refused' }
-        }
-        return { outcome: 'unknown' as const }
+        return receipt
       },
     }
     const questionRoutingDeps = {
-      registry: () => runtimeRef.current?.registry ?? null,
+      registry: sharedRegistry,
       store: questionsStore,
       port: questionRespondPort,
       nowMs: () => Date.now(),
@@ -589,7 +576,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const interactionRouter = createInteractionRouter({
       policy,
       applicationId: () => applicationIdRef.current,
-      registry: () => runtimeRef.current?.registry,
+      registry: sharedRegistry,
       approvals: approvalsStore,
       approvalRespondPort,
       turnTracker,
@@ -684,6 +671,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       approvals: approvalsStore,
       questions: questionsStore,
       status: statusTracker,
+      registry: sharedRegistry,
       onReady: () => reconcileOnReady(),
       routeInteraction: (event, token) => {
         // The router speaks the interaction dialect only (compose forwards
@@ -783,6 +771,12 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           return renamed.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
         },
       },
+      threadName: async (channelId) => {
+        const rest = await sharedRest()
+        if (rest === undefined) return undefined
+        const got = await rest.request<{ name?: string } | undefined>('GET', `/channels/${channelId}`)
+        return got.outcome === 'completed' && typeof got.body?.name === 'string' ? got.body.name : undefined
+      },
       updateIntervalMs: current.streamUpdateIntervalMs,
       typingIntervalMs: current.typingIntervalMs,
       approvalTimeoutMs: current.approvalTimeoutMs,
@@ -809,10 +803,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             expiresAtMs: input.expiresAtMs,
             state: 'pending',
           })
-          const registry = runtimeRef.current?.registry
-          if (registry === undefined) return
           const payload = renderApprovalControls({
-            registry,
+            registry: sharedRegistry,
             sessionId: input.sessionId,
             rpcId: input.rpcId,
             approvalId: input.approvalId,
@@ -863,17 +855,34 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             rpcLog('discord_question_open_rejected', { error: opened.error })
             return
           }
-          const registry = runtimeRef.current?.registry
-          if (registry === undefined) return
-          const payload = renderQuestionControls({ registry, batch: input as never })
+          const payload = renderQuestionControls({ registry: sharedRegistry, batch: input as never })
+          // Kimaki discipline: controls that never reached Discord can never
+          // be answered, so cancel the owning Turn now instead of letting the
+          // sweep wait out the deadline with DSH's tool call hanging.
+          const abandonQuestion = (cause: string): void => {
+            rpcLog('discord_question_render_failed', cause)
+            void abandonUnrenderableQuestion(
+              { store: questionsStore, cancelPort: questionCancelPort, nowMs: () => Date.now() },
+              input.rpcId,
+            ).catch(() => {})
+          }
           void (async () => {
             const rest = await sharedRest()
-            if (rest === undefined) return
+            if (rest === undefined) {
+              abandonQuestion('rest unavailable')
+              return
+            }
             const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${input.threadId}/messages`, payload)
             if (sent.outcome === 'completed' && typeof sent.body?.id === 'string') {
               controlMessages.set(input.rpcId, { channelId: input.threadId, messageId: sent.body.id })
+              return
             }
-          })().catch((cause: unknown) => { rpcLog('discord_question_render_failed', String(cause)) })
+            abandonQuestion(sent.outcome === 'completed'
+              ? `HTTP ${String(sent.status)}: response missing message id`
+              : sent.outcome === 'rejected'
+                ? `HTTP ${String(sent.status)} ${sent.error.message}`
+                : sent.reason)
+          })().catch((cause: unknown) => { abandonQuestion(String(cause)) })
         },
         onQuestionResolved: (input) => {
           void handleRemoteResolution(questionRoutingDeps, {

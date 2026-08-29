@@ -49,6 +49,7 @@ async function drive(frames: LiveFrame[], options: {
   onQueueSnapshot?: (sessionId: string, items: Array<{ id: string; summary: string }>) => void
   onTurnEnded?: (sessionId: string) => void
   updateIntervalMs?: number
+  threadName?: (channelId: string) => Promise<string | undefined>
 }): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }>> {
   const { delivery, calls } = createDelivery()
   let release!: () => void
@@ -72,6 +73,7 @@ async function drive(frames: LiveFrame[], options: {
     questionTimeoutMs: 1_800_000,
     ...(options.onQueueSnapshot === undefined ? {} : { onQueueSnapshot: options.onQueueSnapshot }),
     ...(options.onTurnEnded === undefined ? {} : { onTurnEnded: options.onTurnEnded }),
+    ...(options.threadName === undefined ? {} : { threadName: options.threadName }),
   })
   await gate
   await new Promise(resolve => { setTimeout(resolve, 10) })
@@ -280,5 +282,29 @@ describe('live render: session-title rename', () => {
       { type: 'session/projection', sessionId: 'sess-unknown', key: 'title', value: 'x' } as LiveFrame,
     ], { threadForSession: () => undefined })
     expect(calls.filter(call => call.kind === 'rename')).toHaveLength(0)
+  })
+
+  it('after a restart, skips the rename when the thread already carries the title', async () => {
+    const calls = await drive([
+      { type: 'session/projection', sessionId: 'sess-1', key: 'title', value: '阅读 main 分支当前状态' } as LiveFrame,
+    ], {
+      threadForSession: () => 'thread-1',
+      threadName: () => Promise.resolve('阅读 main 分支当前状态'),
+    })
+    expect(calls.filter(call => call.kind === 'rename')).toHaveLength(0)
+  })
+
+  it('after a restart, renames when the wire name differs or lookup fails', async () => {
+    for (const threadName of [
+      () => Promise.resolve('stale name'),
+      () => Promise.reject(new Error('lookup failed')),
+    ]) {
+      const calls = await drive([
+        { type: 'session/projection', sessionId: 'sess-1', key: 'title', value: '阅读 main 分支当前状态' } as LiveFrame,
+      ], { threadForSession: () => 'thread-1', threadName })
+      expect(calls.filter(call => call.kind === 'rename')).toEqual([
+        { kind: 'rename', channelId: 'thread-1', content: '阅读 main 分支当前状态' },
+      ])
+    }
   })
 })
