@@ -30,6 +30,9 @@ import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThrea
 import { createBindingStore } from './state/bindings.js'
 import { createIntentStore, type InboundIntentRecord } from './state/intents.js'
 import { createTurnTracker } from './features/turn-ownership.js'
+import { planSteer } from './features/steer-control.js'
+import { planStop } from './features/stop-control.js'
+import { cancelSessionViaProxy, removeQueueItemViaProxy, steerSession } from './dsh/api-proxy-face.js'
 import { createThreadCreationFlow, type DiscordThreadPort } from './features/thread-creation.js'
 import { createSessionCreationFlow, type DshSessionPort } from './features/session-creation.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from './features/prompt-submission.js'
@@ -605,6 +608,129 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
               return
             }
             await followUp('未知子命令。')
+            return
+          }
+          // ── Session control commands (session-control spec) ─────────────
+          // Every control path resolves the calling thread's session binding
+          // first; ownership comes from the turn tracker's request IDs, never
+          // from a session's running status.
+          if (event.commandName === 'stop' || event.commandName === 'steer') {
+            const sessionId = bindings.sessionForThread(event.guildId, event.channelId)
+            if (sessionId === undefined) {
+              await followUp('此频道不是适配器拥有的会话线程。')
+              return
+            }
+            if (event.commandName === 'stop') {
+              const result = await planStop(
+                {
+                  cancel: async ({ sessionId: id }) => {
+                    const cancelled = await cancelSessionViaProxy(apiProxy, { sessionId: id }, { log: rpcLog })
+                    return cancelled.outcome === 'accepted'
+                      ? { outcome: 'accepted' as const, pendingPreserved: true }
+                      : cancelled.outcome === 'rejected'
+                        ? { outcome: 'rejected' as const, reason: cancelled.reason }
+                        : { outcome: 'unknown' as const }
+                  },
+                },
+                turnTracker,
+                { sessionId, threadId: event.channelId },
+              )
+              if (result.outcome === 'refused') {
+                await followUp(result.reason === 'no-active-turn'
+                  ? '此线程当前没有可停止的运行中任务。'
+                  : '⛔ 当前运行中的任务不是由此线程提交的，无法停止。')
+                return
+              }
+              if (result.outcome === 'cancelled') {
+                await followUp(result.pendingPreserved ? '✅ 已停止；队列中的待处理消息已保留。' : '✅ 已停止。')
+                return
+              }
+              await followUp(result.outcome === 'rejected'
+                ? '⚠️ DSH 拒绝了停止请求。'
+                : '⚠️ 停止结果未知，请到 DSH Web 确认。')
+              return
+            }
+            // /steer <prompt>
+            const steerText = typeof event.data['options'] === 'object'
+              ? (event.data['options'] as Array<{ name?: unknown; value?: unknown }>).find(option => option.name === 'prompt')?.value
+              : undefined
+            const prompt = typeof steerText === 'string' ? steerText.trim() : ''
+            if (prompt === '') {
+              await followUp('用法：/steer prompt:<插话内容>')
+              return
+            }
+            const result = await planSteer(
+              {
+                steer: async ({ sessionId: id }) => {
+                  const steered = await steerSession(apiProxy, { sessionId: id, prompt }, { log: rpcLog })
+                  return steered.outcome === 'accepted'
+                    ? { outcome: 'accepted' as const }
+                    : steered.outcome === 'rejected'
+                      ? { outcome: 'rejected' as const, reason: steered.reason }
+                      : { outcome: 'unknown' as const }
+                },
+              },
+              turnTracker,
+              { sessionId, threadId: event.channelId, prompt },
+            )
+            if (result.outcome === 'refused') {
+              await followUp(result.reason === 'no-active-turn'
+                ? '此线程当前没有运行中的任务可插话。'
+                : '⛔ 当前任务不是由此线程提交的，无法插话。')
+              return
+            }
+            await followUp(result.outcome === 'accepted'
+              ? '✅ 已插话。'
+              : result.outcome === 'rejected'
+                ? '⚠️ DSH 拒绝了插话。'
+                : '⚠️ 插话结果未知。')
+            return
+          }
+          if (event.commandName === 'queue') {
+            const sessionId = bindings.sessionForThread(event.guildId, event.channelId)
+            if (sessionId === undefined) {
+              await followUp('此频道不是适配器拥有的会话线程。')
+              return
+            }
+            const wireOptions = event.data['options'] as Array<{ name?: unknown; options?: Array<{ name?: unknown; value?: unknown }> }> | undefined
+            const sub = Array.isArray(wireOptions) ? wireOptions[0] : undefined
+            if (sub?.name === 'remove') {
+              const raw = Array.isArray(sub.options) ? sub.options.find(option => option.name === 'item')?.value : undefined
+              const reference = typeof raw === 'string' ? raw.trim() : ''
+              if (reference === '') {
+                await followUp('用法：/queue remove item:</queue list 中的编号>')
+                return
+              }
+              const snapshot = queueSnapshots.get(sessionId)
+              const byPosition = /^\d+$/.test(reference)
+                ? snapshot?.[Number.parseInt(reference, 10) - 1]
+                : snapshot?.find(item => item.id === reference)
+              if (byPosition === undefined) {
+                await followUp('未找到该队列项；请先运行 /queue list 获取最新编号。')
+                return
+              }
+              const removed = await removeQueueItemViaProxy(apiProxy, { sessionId, itemId: byPosition.id }, { log: rpcLog })
+              if (removed.outcome === 'accepted') {
+                await followUp(`✅ 已移除：${byPosition.summary}`)
+                return
+              }
+              await followUp(removed.outcome === 'rejected'
+                ? '⚠️ DSH 拒绝了移除请求（该项可能已被处理）。'
+                : '⚠️ 移除结果未知；请用 /queue list 确认后再试。')
+              return
+            }
+            // /queue list — the mux snapshot cache is the data source.
+            const snapshot = queueSnapshots.get(sessionId)
+            if (snapshot === undefined) {
+              await followUp('⚠️ 暂无队列数据（进程可能刚重启）；等待会话活动后会自动同步。')
+              return
+            }
+            if (snapshot.length === 0) {
+              await followUp('（队列为空）')
+              return
+            }
+            const rows = snapshot.map((item, index) => `${String(index + 1)}. ${item.summary}`)
+            await followUp(['**队列**', ...rows, '', '用 `/queue remove <编号>` 移除。'].join('\n'))
             return
           }
         } catch (cause) {
