@@ -3,19 +3,21 @@
  * through one narrow port (satisfied by the apiProxy adapter in production,
  * by fakes in tests): every registered Workspace is selectable, labels come
  * from the least-disclosure policy (safe titles, opaque `ws:` references,
- * duplicate disambiguation, never a canonical path), and large catalogs page
- * inside Discord's component limit with interaction-scoped navigation values.
+ * duplicate disambiguation); per amended design §3 the bind autocomplete
+ * appends the abbreviated canonical path to each candidate label, and large
+ * catalogs page inside Discord's component limit with interaction-scoped
+ * navigation values.
  * Catalog failures surface as sanitized outcomes — no raw provider detail
  * ever reaches Discord.
  */
 
 import { filterAutocomplete, paginateSelector, type SelectorOption } from '../discord/selector.js'
-import { safeTitle, workspaceLabels, workspaceReference } from '../policy/disclosure.js'
+import { abbreviatePath, safeTitle, workspaceLabels, workspaceReference } from '../policy/disclosure.js'
 
 /** How the feature reads the DSH Workspace catalog. */
 export interface ProjectListPort {
   listWorkspaces(): Promise<
-    | { outcome: 'completed'; workspaces: ReadonlyArray<{ id: string; title: string }> }
+    | { outcome: 'completed'; workspaces: ReadonlyArray<{ id: string; title: string; path?: string | undefined }> }
     | { outcome: 'failed' }
     | { outcome: 'unknown' }
   >
@@ -99,22 +101,35 @@ export interface AutocompleteChoice {
 /**
  * Build the autocomplete choices for a workspace reference option (the
  * Kimaki `/resume` pattern: the option lists live candidates as you type,
- * so no id is ever copy-pasted). Label work comes from the same sanitized
- * labels as `/project list`; the query narrows via the shared filter.
+ * so no id is ever copy-pasted). Labels carry the same sanitized base as
+ * `/project list` plus the Kimaki-style abbreviated canonical path when the
+ * Host supplies one; the query narrows via the shared filter and matches
+ * path text too. Labels exceeding Discord's 100-character choice-name
+ * limit fall back to the bare sanitized label rather than truncating.
  */
 export function workspaceAutocompleteChoices(
-  catalog: ReadonlyArray<{ id: string; title: string }>,
+  catalog: ReadonlyArray<{ id: string; title: string; path?: string | undefined }>,
   query: string,
+  options: { home?: string } = {},
 ): AutocompleteChoice[] {
   const entries = catalog.map(workspace => ({
     id: workspace.id,
     title: safeTitle(workspace.title),
   }))
   const labeled = workspaceLabels(entries)
-  const selectable: SelectorOption[] = labeled.map(entry => ({
-    label: entry.label,
+  const selectable: SelectorOption[] = labeled.map((entry, index) => ({
+    label: withAbbreviatedPath(entry.label, catalog[index]?.path, options.home),
     value: workspaceReference(entry.id),
   }))
   const matches = filterAutocomplete(selectable, query, Number.POSITIVE_INFINITY)
   return matches.map(match => ({ name: match.label, value: match.value }))
+}
+
+/** Discord caps autocomplete choice names at 100 characters. */
+const DISCORD_CHOICE_NAME_MAX = 100
+
+function withAbbreviatedPath(label: string, path: string | undefined, home: string | undefined): string {
+  if (path === undefined || path === '') return label
+  const candidate = `${label} (${abbreviatePath(path, home)})`
+  return candidate.length <= DISCORD_CHOICE_NAME_MAX ? candidate : label
 }

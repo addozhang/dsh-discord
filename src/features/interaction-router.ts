@@ -204,9 +204,9 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           return
         }
         if (subName === 'info') {
-          // Info describes THIS channel's bound workspace. Members see
-          // the sanitized identity; the path renders only for proven
-          // workspace administrators (ephemeral either way).
+          // Info describes THIS channel's bound workspace. Any authorized
+          // member sees the identity plus the canonical path (amended
+          // design §3 / 16.1); the response is ephemeral either way.
           const decision = authorize(event)
           const binding = deps.channelBinding(event.guildId, event.channelId)
           if (binding === undefined) {

@@ -1,14 +1,16 @@
 /**
  * `/project list` discovery tests (7.1) against a fake DSH port: every
  * registered Workspace is selectable with safe duplicate-title labels and
- * opaque values (never a filesystem path), a query narrows results, large
- * catalogs paginate within Discord's component limit, and port failures
- * surface as sanitized outcomes without raw provider detail.
+ * opaque values, a query narrows results, large catalogs paginate within
+ * Discord's component limit, and port failures surface as sanitized
+ * outcomes. Autocomplete labels additionally carry the abbreviated
+ * canonical path per amended design §3 (16.1).
  */
 
 import { describe, expect, it } from 'vitest'
 
-import { createProjectListView, type ProjectListPort } from '../src/features/project-list.js'
+import { createProjectListView, workspaceAutocompleteChoices, type ProjectListPort } from '../src/features/project-list.js'
+import { abbreviatePath } from '../src/policy/disclosure.js'
 
 function okPort(items: Array<{ id: string; title: string }>): ProjectListPort {
   return {
@@ -91,5 +93,33 @@ describe('/project list', () => {
     }
     const view = await createProjectListView(port, { selectionId: 'sel-1' })
     expect(view).toEqual({ outcome: 'failed', reason: 'workspace-catalog-unknown' })
+  })
+})
+
+describe('bind autocomplete labels (16.1)', () => {
+  it('appends the abbreviated canonical path when the Host supplies one', () => {
+    const choices = workspaceAutocompleteChoices([
+      { id: 'aaaaaaaa-1234', title: 'fiber', path: '/Users/addo/Workspaces/private_w/fiber' },
+      { id: 'bbbbbbbb-5678', title: 'beta' },
+    ], '', { home: '/Users/addo' })
+    expect(choices).toEqual([
+      { name: 'fiber (~/Workspaces/private_w/fiber)', value: 'ws:aaaaaaaa-1234' },
+      { name: 'beta', value: 'ws:bbbbbbbb-5678' },
+    ])
+  })
+
+  it('lets the query match path text and falls back past the 100-character cap', () => {
+    const longPath = `/Users/addo/${'x'.repeat(120)}`
+    const choices = workspaceAutocompleteChoices([
+      { id: 'aaaaaaaa-1234', title: 'huge', path: longPath },
+      { id: 'bbbbbbbb-5678', title: 'beta', path: '/Users/addo/code/beta' },
+    ], 'code/beta', { home: '/Users/addo' })
+    expect(choices).toEqual([{ name: 'beta (~/code/beta)', value: 'ws:bbbbbbbb-5678' }])
+  })
+
+  it('abbreviates only an exact home-directory prefix', () => {
+    expect(abbreviatePath('/Users/addo/Workspaces/x', '/Users/addo')).toBe('~/Workspaces/x')
+    expect(abbreviatePath('/srv/elsewhere/x', '/Users/addo')).toBe('/srv/elsewhere/x')
+    expect(abbreviatePath('/Users/addoish/x', '/Users/addo')).toBe('/Users/addoish/x')
   })
 })

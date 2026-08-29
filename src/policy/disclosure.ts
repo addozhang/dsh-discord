@@ -1,12 +1,16 @@
 /**
- * Least-disclosure labels and output policy. Workspace lists show titles
- * disambiguated by short opaque id suffixes — never filesystem paths; the
- * canonical path is disclosed only inside an administrator-scoped detail
- * object. User-controlled text is sanitized before it can forge Discord
- * mentions or overflow component limits, and every outbound message carries
- * the SUPPRESS_MENTIONS flag so assistant, tool, title, and error content can
- * never ping anyone.
+ * Least-disclosure labels and output policy (amended design §3, 16.1).
+ * Workspace lists show titles disambiguated by short opaque id suffixes.
+ * Paths are not treated as sensitive for this self-hosted, trusted-Guild
+ * product: the canonical path renders in the ephemeral detail response and
+ * an abbreviated form may appear in autocomplete labels — but a path never
+ * reaches channel metadata or public (non-ephemeral) messages. User-controlled
+ * text is sanitized before it can forge Discord mentions or overflow
+ * component limits, and every outbound message carries the SUPPRESS_MENTIONS
+ * flag so assistant, tool, title, and error content can never ping anyone.
  */
+
+import { homedir } from 'node:os'
 
 import { suppressMentionSyntax } from './suppress.js'
 
@@ -14,8 +18,22 @@ import { suppressMentionSyntax } from './suppress.js'
 export interface WorkspaceEntry {
   id: string
   title: string
-  /** Canonical path; disclosed only to administrators, never in lists. */
+  /** Canonical path; rendered in ephemeral details, abbreviated in autocomplete labels. */
   path?: string | undefined
+}
+
+/**
+ * Kimaki-style path abbreviation (16.1): the user's home directory collapses
+ * to a `~` prefix — `/Users/addo/Workspaces/x` → `~/Workspaces/x` — so
+ * autocomplete labels stay short without hiding the directory structure.
+ * Unlike Kimaki's `startsWith` check, the home path must end at a segment
+ * boundary: `/Users/addoish/x` is NOT under `/Users/addo`. Display-only;
+ * never persisted to Discord metadata.
+ */
+export function abbreviatePath(fullPath: string, home: string = homedir()): string {
+  if (fullPath === home) return '~'
+  if (fullPath.startsWith(`${home}/`)) return `~${fullPath.slice(home.length)}`
+  return fullPath
 }
 
 /** One rendered row of a Workspace list. */
@@ -125,14 +143,15 @@ export interface WorkspaceDetail {
   id: string
   title: string
   label: string
-  /** Canonical path; present only when the caller proved administrator scope. */
+  /** Canonical path; rendered when the caller is an authorized member. */
   path?: string | undefined
 }
 
 /**
- * Project one workspace for display. `includePath` is reserved for the
- * administrator-only ephemeral detail response; list surfaces always pass
- * false, so a path never reaches channel metadata or public messages.
+ * Project one workspace for display. `includePath` is for the ephemeral
+ * detail response (any authorized member per amended design §3); list
+ * surfaces always pass false, so a path never reaches channel metadata or
+ * public messages.
  */
 export function describeWorkspace(entry: WorkspaceEntry, options: { includePath: boolean }): WorkspaceDetail {
   const [labeled] = workspaceLabels([entry])
