@@ -162,3 +162,45 @@ describe('live render', () => {
     expect(edited?.content).not.toContain('raw-output')
   })
 })
+
+describe('live render: per-step answer separation', () => {
+  it('opens a new answer message for a later step instead of overwriting', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'first answer' } }),
+      sessionEvent('sess-1', 'assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'first answer' }] },
+      }),
+      // Step 2 begins: its answer must land on a fresh message.
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 2 }),
+      sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 2, chunk: { type: 'text-delta', index: 0, text: 'second answer' } }),
+    ], { threadForSession: () => 'thread-1' })
+
+    const sends = calls.filter(call => call.kind === 'send' && call.content !== undefined)
+    const firstHead = sends.find(call => call.content?.includes('first'))
+    const secondHead = sends.find(call => call.content?.includes('second'))
+    expect(firstHead).toBeDefined()
+    expect(secondHead).toBeDefined()
+    // The second step's chunks created a NEW message, not an edit of the first.
+    const secondEdits = calls.filter(call => call.kind === 'edit' && call.content?.includes('second'))
+    for (const edit of secondEdits) {
+      expect(edit.messageId).not.toBe('dm-1')
+    }
+  })
+
+  it('sends the authoritative text as a fresh head when no chunks flushed', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'instant answer' }] },
+      }),
+    ], { threadForSession: () => 'thread-1' })
+
+    const sends = calls.filter(call => call.kind === 'send' && call.content === 'instant answer')
+    expect(sends).toHaveLength(1)
+  })
+})

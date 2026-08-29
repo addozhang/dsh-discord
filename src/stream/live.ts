@@ -63,9 +63,6 @@ interface ThreadRuntime {
   toolNames: Map<string, string>
 }
 
-/** Discord's outbound content ceiling lives in the splitter's constant. */
-import { DISCORD_MESSAGE_LIMIT } from './splitter.js'
-
 const ANSWER_MARKER = (interrupted: boolean): string => interrupted ? '\n\n*（已被中断）*' : ''
 
 /** Extract the visible text of one assistant message (text blocks only). */
@@ -171,6 +168,16 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       }
       case 'step/start': {
         if (turnId !== undefined && stepId !== undefined) runtime.render.beginStep({ turnId, stepId })
+        // A new step opens a NEW logical answer message: the previous
+        // step's completed head is never overwritten (stream-renderer spec).
+        runtime.headMessageId = undefined
+        // The previous step's finalize disposed the scheduler; a fresh one
+        // carries the new step's chunk coalescing.
+        runtime.scheduler?.dispose()
+        runtime.scheduler = createUpdateScheduler({
+          minIntervalMs: deps.updateIntervalMs,
+          onFlush: flushAnswer(threadId, runtime),
+        })
         return
       }
       case 'assistant/chunk': {
@@ -197,6 +204,16 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
           delivery: {
             editHead: async ({ messageId, content }) => {
               const payload = buildOutboundMessage({ kind: 'assistant', content })
+              // No head exists (text arrived without flushed chunks): the
+              // first finalize send IS the head, recorded for continuations.
+              if (messageId === '') {
+                const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+                if (sent.outcome === 'completed') {
+                  runtime.headMessageId = sent.messageId
+                  return { outcome: 'completed' as const }
+                }
+                return { outcome: 'failed' as const }
+              }
               const edited = await deps.delivery.edit({ channelId: threadId, messageId, content: payload.content })
               return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
             },
@@ -208,7 +225,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
           },
           headMessageId: runtime.headMessageId ?? '',
         })
-        const finalText = text.slice(0, Math.max(text.length, DISCORD_MESSAGE_LIMIT)) + ANSWER_MARKER(interrupted)
+        const finalText = text + ANSWER_MARKER(interrupted)
         void runtime.finalizer.finalize(finalText).catch((cause: unknown) => {
           deps.log?.('discord_live_finalize_threw', { threadId, cause: String(cause) })
         })
