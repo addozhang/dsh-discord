@@ -527,10 +527,19 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     // DSH approval respond face: the client-response echoes the ask's rpcId.
     const approvalRespondPort: DshApprovalRespondPort = {
       respond: async ({ rpcId, sessionId, approvalId, outcome }) => {
-        const answer = await (apiProxy.respond as (
+        // apiProxy.respond resolves with an RpcReceipt: {accepted: true} on
+        // delivery, {accepted: false, reason} when the ask is gone
+        // (not-pending = the Host already timed it out or resolved it).
+        const receipt = await (apiProxy.respond as (
           rpcId: string, payload: { sessionId: string; approvalId: string; outcome: string },
         ) => Promise<unknown>)(rpcId, { sessionId, approvalId, outcome })
-        return answer === undefined ? { outcome: 'unknown' } : { outcome: 'confirmed' }
+        rpcLog('discord_approval_respond_receipt', { rpcId, approvalId, outcome, receipt })
+        const accepted = (receipt as { accepted?: unknown } | undefined)?.accepted
+        if (accepted === true) return { outcome: 'confirmed' }
+        if (accepted === false) {
+          return { outcome: 'rejected', reason: 'respond-refused' }
+        }
+        return { outcome: 'unknown' }
       },
     }
     const approvals = createApprovalStore({ get: () => undefined, put: async () => {} })
@@ -552,7 +561,13 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         const receipt = await (apiProxy.respond as (
           rpcId: string, payload: unknown,
         ) => Promise<unknown>)(input.rpcId, { sessionId: input.sessionId, answer: input.answer })
-        return receipt === undefined || receipt === null ? { outcome: 'unknown' as const } : { outcome: 'confirmed' as const }
+        rpcLog('discord_question_respond_receipt', { rpcId: input.rpcId, receipt })
+        const accepted = (receipt as { accepted?: unknown } | undefined)?.accepted
+        if (accepted === true) return { outcome: 'confirmed' as const }
+        if (accepted === false) {
+          return { outcome: 'rejected' as const, reason: 'respond-refused' }
+        }
+        return { outcome: 'unknown' as const }
       },
     }
     const questionRoutingDeps = {
