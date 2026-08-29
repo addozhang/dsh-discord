@@ -592,6 +592,13 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         return
       }
       if (isApprovalControl) {
+        // Ack the click BEFORE the DSH round-trip: component interactions
+        // must receive an initial response within 3s or every followup 404s.
+        const rest0 = await deps.rest()
+        if (rest0 !== undefined) {
+          const acked = await rest0.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
+          if (acked.outcome !== 'completed') deps.log('discord_ack_failed', acked.outcome)
+        }
         let outcome: ApprovalClickOutcome
         try {
           outcome = await handleApprovalClick(
