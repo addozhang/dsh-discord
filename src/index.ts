@@ -591,6 +591,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       store: questionsStore,
       port: questionRespondPort,
       nowMs: () => Date.now(),
+      log: rpcLog,
       controls: { disable: disableControl },
     } as unknown as Parameters<typeof handleSelectInput>[0]
     const interactionRouter = createInteractionRouter({
@@ -855,7 +856,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           const { actorUserId, actorSource } = resolveAskActor(input.sessionId, input.threadId)
           const requestId = turnTracker.active(input.sessionId)?.requestId ?? ''
           rpcLog('discord_question_opened', { questionRpcId: input.rpcId, requestId, actorUserId, actorSource, sessionId: input.sessionId, threadId: input.threadId })
-          const opened = questionsStore.open({
+          const batch = {
             questionRpcId: input.rpcId,
             sessionId: input.sessionId,
             threadId: input.threadId,
@@ -875,12 +876,13 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
                 : undefined,
               multiSelect: question['multiSelect'] === true,
             })),
-          })
+          }
+          const opened = questionsStore.open(batch)
           if (!opened.ok) {
             rpcLog('discord_question_open_rejected', { error: opened.error })
             return
           }
-          const payload = renderQuestionControls({ registry: sharedRegistry, batch: input as never })
+          const payload = renderQuestionControls({ registry: sharedRegistry, batch })
           // Kimaki discipline: controls that never reached Discord can never
           // be answered, so cancel the owning Turn now instead of letting the
           // sweep wait out the deadline with DSH's tool call hanging.

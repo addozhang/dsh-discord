@@ -39,7 +39,8 @@ export interface QuestionRoutingDeps {
   store: QuestionStore
   port: DshQuestionRespondPort
   nowMs: () => number
-  /** Retires the rendered controls (required for remote resolution). */
+  /** Optional observability sink for resolve-miss diagnosis. */
+  log?: ((event: string, detail?: unknown) => void) | undefined
   controls?: { disable(questionRpcId: string): Promise<void> } | undefined
 }
 
@@ -104,11 +105,20 @@ function resolveContext(
   customId: string,
 ): { context: RegistryContext; record: QuestionRecord } | { outcome: 'unknown-control' } {
   const resolution = deps.registry.resolve(customId, deps.nowMs())
-  if (!resolution.found) return { outcome: 'unknown-control' as const }
+  if (!resolution.found) {
+    deps.log?.('discord_question_resolve_miss', { customId: customId.slice(0, 14), stage: 'registry' })
+    return { outcome: 'unknown-control' as const }
+  }
   const context = parseContext(resolution.context)
-  if (context === undefined) return { outcome: 'unknown-control' as const }
+  if (context === undefined) {
+    deps.log?.('discord_question_resolve_miss', { customId: customId.slice(0, 14), stage: 'context', context: JSON.stringify(resolution.context) })
+    return { outcome: 'unknown-control' as const }
+  }
   const record = deps.store.get(context.questionRpcId)
-  if (record === undefined) return { outcome: 'unknown-control' as const }
+  if (record === undefined) {
+    deps.log?.('discord_question_resolve_miss', { customId: customId.slice(0, 14), stage: 'store', questionRpcId: context.questionRpcId })
+    return { outcome: 'unknown-control' as const }
+  }
   return { context, record }
 }
 
