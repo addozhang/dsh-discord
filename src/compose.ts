@@ -22,11 +22,41 @@ import type { QuestionStore } from './features/question-store.js'
 /** Discord Gateway wss endpoint (Milestone 1: fixed v10 surface). */
 export const GATEWAY_URL = 'wss://gateway.discord.gg/?v=10&encoding=json'
 
-/** The DSH prompt-submission face the mention flow submits through. */
-export interface PromptSubmitPort {
-  submit(request: { requestId: string; sessionId: string; prompt: string }): Promise<
-    | { outcome: 'accepted' }
-    | { outcome: 'rejected'; reason: string }
+/**
+ * The session mainline (src/features/session-mainline.ts): the orchestrator
+ * behind both message paths — bound-channel mentions create thread/session,
+ * adapter-owned thread messages queue continuations.
+ */
+export interface SessionMainlinePort {
+  admitMention(request: {
+    applicationId: string
+    guildId: string
+    channelId: string
+    messageId: string
+    authorId: string
+    workspaceId: string
+    prompt: string
+  }): Promise<
+    | { outcome: 'admitted'; threadId: string; sessionId: string }
+    | { outcome: 'thread-conflict' }
+    | { outcome: 'thread-failed' }
+    | { outcome: 'session-rejected' }
+    | { outcome: 'session-unknown' }
+    | { outcome: 'prompt-rejected' }
+    | { outcome: 'prompt-unknown' }
+  >
+  continueInThread(request: {
+    applicationId: string
+    guildId: string
+    threadId: string
+    sessionId: string
+    messageId: string
+    prompt: string
+  }): Promise<
+    | { outcome: 'queued' }
+    | { outcome: 'already-submitted' }
+    | { outcome: 'conflict' }
+    | { outcome: 'rejected' }
     | { outcome: 'unknown' }
   >
 }
@@ -46,7 +76,9 @@ export interface CompositionDeps {
   selfUserIdProvider: () => Promise<string>
   /** Gateway intent bitmask (Milestone 1 fixed set). */
   intents: number
-  submitPrompt: PromptSubmitPort
+  /** Live accessor for the adapter's Discord application id (binding keys). */
+  applicationId: () => string
+  mainline: SessionMainlinePort
   bindings: BindingsProbe
   approvals: ApprovalStore
   questions: QuestionStore
@@ -88,6 +120,32 @@ export interface DiscordAdapterRuntime {
 /** Business routing over one normalized, already-authorized event. */
 export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent, decision: AccessDecision): void {
   if (event.kind === 'message') {
+    const prompt = event.content.trim()
+
+    // Adapter-owned thread: ordinary continuation, no mention required.
+    const sessionId = deps.bindings.sessionForThread(event.guildId, event.channelId)
+    if (sessionId !== undefined) {
+      if (prompt === '') return
+      const request = {
+        applicationId: deps.applicationId(),
+        guildId: event.guildId,
+        threadId: event.channelId,
+        sessionId,
+        messageId: event.messageId,
+        prompt,
+      }
+      void deps.mainline.continueInThread(request)
+        .then((result) => {
+          if (result.outcome === 'rejected' || result.outcome === 'unknown') {
+            deps.logger?.warn('discord_continuation_not_queued', { ...result, messageId: event.messageId })
+          }
+        })
+        .catch((cause: unknown) => {
+          deps.logger?.warn('discord_continuation_failed', { messageId: event.messageId, cause: String(cause) })
+        })
+      return
+    }
+
     // Mention-gated prompt flow: bindings decide admit vs ignore.
     const workspaceId = deps.bindings.workspaceForChannel(event.guildId, event.channelId)
     if (!event.mentionedBot) return
@@ -108,13 +166,23 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
       }
       return
     }
-    const prompt = event.content.trim()
     if (prompt === '') return
-    const requestId = `discord:${event.messageId}`
-    void deps.submitPrompt
-      .submit({ requestId, sessionId: `pending:${workspaceId}`, prompt })
-      .catch(() => {
-        deps.logger?.warn('discord_prompt_submit_failed', { requestId })
+    void deps.mainline.admitMention({
+      applicationId: deps.applicationId(),
+      guildId: event.guildId,
+      channelId: event.channelId,
+      messageId: event.messageId,
+      authorId: event.authorId,
+      workspaceId,
+      prompt,
+    })
+      .then((result) => {
+        if (result.outcome !== 'admitted') {
+          deps.logger?.warn('discord_mention_not_admitted', { result, messageId: event.messageId })
+        }
+      })
+      .catch((cause: unknown) => {
+        deps.logger?.warn('discord_mention_admit_failed', { messageId: event.messageId, cause: String(cause) })
       })
     return
   }

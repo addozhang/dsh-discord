@@ -17,17 +17,24 @@ import {
 } from './features/adapter-status.js'
 import { describeDiscordCredential, resolveDiscordBotToken, type DiscordCredentialProvider } from './credential.js'
 import { createSharedRestClient, type SharedRestClient } from './discord/rest.js'
+import { createRestThreadPort } from './discord/thread-port.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
-import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, type DshApiProxyFace } from './dsh/api-proxy-face.js'
+import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, type DshApiProxyFace } from './dsh/api-proxy-face.js'
 import { createProjectListView, workspaceAutocompleteChoices } from './features/project-list.js'
 import { projectInfo } from './features/project-info.js'
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
 import { handleApprovalClick, type DshApprovalRespondPort } from './features/approval-routing.js'
-import { channelBindingKey, parseChannelBindingKey } from './state/domain.js'
+import { channelBindingKey, parseChannelBindingKey, threadBindingKey } from './state/domain.js'
 import { createBindingStore } from './state/bindings.js'
-import type { ChannelBinding } from './state/records.js'
+import { createIntentStore, type InboundIntentRecord } from './state/intents.js'
+import { createTurnTracker } from './features/turn-ownership.js'
+import { createThreadCreationFlow, type DiscordThreadPort } from './features/thread-creation.js'
+import { createSessionCreationFlow, type DshSessionPort } from './features/session-creation.js'
+import { createPromptSubmissionFlow, type DshPromptPort } from './features/prompt-submission.js'
+import { createSessionMainline } from './features/session-mainline.js'
+import type { ChannelBinding, ThreadBinding } from './state/records.js'
 import { evaluateAuthorization, levelAtLeast, type PolicyTable } from './policy/authorization.js'
 import { planWorkspaceChannel, workspaceChannelName, type ChannelBindingState } from './features/workspace-channel.js'
 import type { GatewaySocket } from './gateway/gateway.js'
@@ -114,9 +121,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     hostOperatorUserIds: [...current.hostOperatorUserIds],
   })
 
-  // Channel→Workspace bindings. M1 keeps the store process-local; the
-  // durable domain table backing is exercised in the 15.9 profile pass.
-  // The Discord application id equals the bot user id, resolved at start.
+  // Channel→Workspace and Thread→Session bindings, plus the inbound-intent
+  // records and the adapter-owned turn tracker. M1 keeps these process-local
+  // Maps; the storage-domain KvTable backing lands with the persistence
+  // milestone (Phase 2). The Discord application id equals the bot user id,
+  // resolved at start.
   const applicationIdRef: { current: string } = { current: 'dsh-discord' }
   const rows = new Map<string, ChannelBinding>()
   const bindingStore = createBindingStore<ChannelBinding>({
@@ -124,12 +133,101 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     put: (key, record) => { rows.set(key, record); return Promise.resolve() },
     delete: key => Promise.resolve(rows.delete(key)),
   })
+  const threadRows = new Map<string, ThreadBinding>()
+  const threadBindingStore = createBindingStore<ThreadBinding>({
+    get: key => threadRows.get(key),
+    put: (key, record) => { threadRows.set(key, record); return Promise.resolve() },
+    delete: key => Promise.resolve(threadRows.delete(key)),
+  })
+  const intentRows = new Map<string, InboundIntentRecord>()
+  const intents = createIntentStore({
+    get: key => intentRows.get(key),
+    put: (key, record) => { intentRows.set(key, record); return Promise.resolve() },
+  })
+  const turnTracker = createTurnTracker()
   const bindings: BindingsProbe = {
     workspaceForChannel: (guildId, channelId) =>
       bindingStore.get(channelBindingKey({
         applicationId: applicationIdRef.current, guildId, channelId,
       }))?.workspaceId,
-    sessionForThread: () => undefined,
+    sessionForThread: (guildId, threadId) =>
+      threadBindingStore.get(threadBindingKey({
+        applicationId: applicationIdRef.current, guildId, threadId,
+      }))?.sessionId,
+  }
+
+  // ── Session mainline: mention → thread → session → prompt → turn ──────
+  const restThreadPort: DiscordThreadPort = createRestThreadPort({
+    request: async (method, path, body) => {
+      const rest = await sharedRest()
+      if (rest === undefined) return { outcome: 'unknown', reason: 'network-unreachable' }
+      return rest.request(method, path, body)
+    },
+  })
+  const dshSessionPort: DshSessionPort = {
+    createSession: request => createSessionViaProxy(apiProxy, request, { log: rpcLog }),
+  }
+  const dshPromptPort: DshPromptPort = {
+    submit: request => promptSession(
+      apiProxy,
+      { sessionId: request.sessionId, prompt: request.prompt },
+      { log: rpcLog, rpcId: request.requestId },
+    ),
+  }
+  const composedMainline = createSessionMainline({
+    threads: createThreadCreationFlow({
+      intents,
+      discord: restThreadPort,
+      nowMs: () => Date.now(),
+    }),
+    sessions: createSessionCreationFlow({
+      sessions: dshSessionPort,
+      threadBindings: threadBindingStore,
+      newSessionId: () => crypto.randomUUID(),
+    }),
+    prompts: createPromptSubmissionFlow({
+      prompts: dshPromptPort,
+      intents,
+      nowMs: () => Date.now(),
+    }),
+    turns: turnTracker,
+  })
+  /** Visible failure feedback for mainline outcomes (posted to the source channel). */
+  const mainlineFailureCopy: Record<string, string> = {
+    'thread-conflict': '⚠️ 这条消息已被用于另一个会话任务，无法重复创建线程。',
+    'thread-failed': '⚠️ 线程创建失败，请稍后重试。',
+    'session-rejected': '⚠️ DSH 拒绝了会话创建（工作区可能已失效）；请稍后重试或重新 /project bind。',
+    'session-unknown': '⚠️ 会话创建结果未知；请到 DSH Web 确认后再重试，不会自动重复创建。',
+    'prompt-rejected': '⚠️ DSH 拒绝了任务提交。',
+    'prompt-unknown': '⚠️ 任务提交结果未知；为避免重复执行不会自动重发，请确认后重试。',
+  }
+  const mainline = {
+    admitMention: async (request: Parameters<typeof composedMainline.admitMention>[0]) => {
+      const result = await composedMainline.admitMention(request)
+      if (result.outcome === 'admitted') {
+        rpcLog('discord_mention_admitted', { messageId: request.messageId, threadId: result.threadId, sessionId: result.sessionId })
+      } else {
+        rpcLog('discord_mention_not_admitted', { messageId: request.messageId, outcome: result.outcome })
+        const copy = mainlineFailureCopy[result.outcome]
+        if (copy !== undefined) {
+          void withRest(rest => rest.request('POST', `/channels/${request.channelId}/messages`, { content: copy }))
+            .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
+        }
+      }
+      return result
+    },
+    continueInThread: async (request: Parameters<typeof composedMainline.continueInThread>[0]) => {
+      const result = await composedMainline.continueInThread(request)
+      if (result.outcome === 'rejected' || result.outcome === 'unknown') {
+        rpcLog('discord_continuation_not_queued', { messageId: request.messageId, outcome: result.outcome })
+        const copy = result.outcome === 'rejected'
+          ? '⚠️ 消息提交被 DSH 拒绝。'
+          : '⚠️ 消息提交结果未知；不会自动重发，请确认后重试。'
+        void withRest(rest => rest.request('POST', `/channels/${request.threadId}/messages`, { content: copy }))
+          .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
+      }
+      return result
+    },
   }
 
   // Bind provision resolves the selection against the live catalog; the
@@ -288,6 +386,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     },
     intents: GATEWAY_INTENTS,
     allowedGuildIds: [...current.allowedGuildIds],
+    applicationId: () => applicationIdRef.current,
+    mainline,
     bindings,
     unboundNotice: (request) => {
       const content = request.audience === 'administrator'
@@ -311,13 +411,6 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (hasControl) return
         await rest.request('POST', `/guilds/${guildId}/channels`, { name: 'general', type: 0, parent_id: ensured.categoryId })
       })
-    },
-    submitPrompt: {
-      submit: async (request) => {
-        // Definitive Host errors surface as rejections (the sanitized code);
-        // a timeout or transport throw is `unknown` — never auto-resubmitted.
-        return promptSession(apiProxy, request, { log: rpcLog })
-      },
     },
     approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
     questions: createQuestionStore(),

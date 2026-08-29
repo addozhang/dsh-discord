@@ -15,9 +15,14 @@ export interface DiscordThreadPort {
   createThread(request: {
     parentChannelId: string
     name: string
+    /** The source message anchors the thread (its durable first message). */
+    sourceMessageId: string
   }): Promise<{ outcome: 'completed'; threadId: string } | { outcome: 'failed' } | { outcome: 'unknown' }>
   /** Deterministic recovery: find the thread created for this source message. */
-  findThreadBySource(sourceMessageId: string): Promise<{ outcome: 'found'; threadId: string } | { outcome: 'not-found' }>
+  findThreadBySource(request: {
+    parentChannelId: string
+    sourceMessageId: string
+  }): Promise<{ outcome: 'found'; threadId: string } | { outcome: 'not-found' }>
 }
 
 export interface ThreadCreationDeps {
@@ -60,7 +65,10 @@ export function createThreadCreationFlow(deps: ThreadCreationDeps): {
         }
         // Intent exists without a thread id: a previous attempt crashed
         // mid-flow. Recover deterministically from Discord.
-        const found = await deps.discord.findThreadBySource(request.sourceMessageId)
+        const found = await deps.discord.findThreadBySource({
+          parentChannelId: request.parentChannelId,
+          sourceMessageId: request.sourceMessageId,
+        })
         if (found.outcome === 'found') {
           await deps.intents.resolve(request.sourceMessageId, 'succeeded', deps.nowMs())
           return { outcome: 'recovered', threadId: found.threadId }
@@ -72,6 +80,7 @@ export function createThreadCreationFlow(deps: ThreadCreationDeps): {
       const created = await deps.discord.createThread({
         parentChannelId: request.parentChannelId,
         name: request.threadName,
+        sourceMessageId: request.sourceMessageId,
       })
       if (created.outcome !== 'completed') {
         await deps.intents.resolve(request.sourceMessageId, 'failed', deps.nowMs())

@@ -9,10 +9,14 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  cancelSessionViaProxy,
+  createSessionViaProxy,
   createWorkspaceCatalogPort,
   createWorkspaceResolver,
   promptSession,
+  removeQueueItemViaProxy,
   RpcTimeoutError,
+  steerSession,
   withRpcTimeout,
   type DshApiProxyFace,
   type RpcResponseShape,
@@ -36,6 +40,9 @@ function face(
     },
     sessions: {
       prompt: () => (prompt ?? Promise.resolve(ok({ accepted: true }))) as ReturnType<DshApiProxyFace['sessions']['prompt']>,
+      create: () => Promise.resolve(ok({ sessionId: 'sess-1' })) as ReturnType<DshApiProxyFace['sessions']['create']>,
+      cancel: () => Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['cancel']>,
+      updateQueue: () => Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['updateQueue']>,
     },
   }
 }
@@ -142,5 +149,86 @@ describe('promptSession', () => {
       sessionId: 's-1',
       prompt: 'hi',
     }, { timeoutMs: 10 })).resolves.toEqual({ outcome: 'unknown' })
+  })
+
+  it('submits the adapter-owned requestId as the RPC id', async () => {
+    const seen: Array<{ rpcId: string; payload: unknown }> = []
+    const capturing = face(undefined, Promise.resolve(ok({ accepted: true })))
+    capturing.sessions.prompt = (request) => {
+      seen.push({ rpcId: request.rpcId, payload: request.payload })
+      return Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['prompt']>
+    }
+    await promptSession(capturing, { sessionId: 's-1', prompt: 'hi' }, { rpcId: 'discord:m-1' })
+    expect(seen[0]?.rpcId).toBe('discord:m-1')
+    expect(seen[0]?.payload).toEqual({
+      sessionId: 's-1',
+      mode: 'queue',
+      content: [{ type: 'text', text: 'hi' }],
+    })
+  })
+})
+
+describe('createSessionViaProxy', () => {
+  it('completes with the Host-adopted session id', async () => {
+    const f = face()
+    f.sessions.create = () => Promise.resolve(ok({ sessionId: 'sess-1' })) as ReturnType<DshApiProxyFace['sessions']['create']>
+    await expect(createSessionViaProxy(f, { sessionId: 'sess-1', workspaceId: 'ws-1' }))
+      .resolves.toEqual({ outcome: 'completed', sessionId: 'sess-1' })
+  })
+
+  it('rejects with the sanitized code', async () => {
+    const f = face()
+    f.sessions.create = () => Promise.resolve(err('session-conflict', 'cwd mismatch')) as ReturnType<DshApiProxyFace['sessions']['create']>
+    await expect(createSessionViaProxy(f, { sessionId: 'sess-1', workspaceId: 'ws-1' }))
+      .resolves.toEqual({ outcome: 'rejected', reason: 'session-conflict' })
+  })
+
+  it('maps a hung Host onto unknown', async () => {
+    const f = face()
+    f.sessions.create = () => new Promise<never>(() => {}) as ReturnType<DshApiProxyFace['sessions']['create']>
+    await expect(createSessionViaProxy(f, { sessionId: 'sess-1', workspaceId: 'ws-1' }, { timeoutMs: 10 }))
+      .resolves.toEqual({ outcome: 'unknown' })
+  })
+})
+
+describe('steerSession / cancelSessionViaProxy / removeQueueItemViaProxy', () => {
+  it('steers with mode steer and a stable rpcId', async () => {
+    const seen: Array<{ rpcId: string; payload: unknown }> = []
+    const f = face(undefined, Promise.resolve(ok({ accepted: true })))
+    f.sessions.prompt = (request) => {
+      seen.push({ rpcId: request.rpcId, payload: request.payload })
+      return Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['prompt']>
+    }
+    await expect(steerSession(f, { sessionId: 's-1', prompt: 'focus' }, { rpcId: 'req-9' }))
+      .resolves.toEqual({ outcome: 'accepted' })
+    expect(seen[0]?.rpcId).toBe('req-9')
+    expect(seen[0]?.payload).toEqual({
+      sessionId: 's-1',
+      mode: 'steer',
+      content: [{ type: 'text', text: 'focus' }],
+    })
+  })
+
+  it('cancels a session turn', async () => {
+    const f = face()
+    f.sessions.cancel = () => Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['cancel']>
+    await expect(cancelSessionViaProxy(f, { sessionId: 's-1' })).resolves.toEqual({ outcome: 'accepted' })
+  })
+
+  it('maps cancel rejection to rejected', async () => {
+    const f = face()
+    f.sessions.cancel = () => Promise.resolve(err('agent-busy', 'not running')) as ReturnType<DshApiProxyFace['sessions']['cancel']>
+    await expect(cancelSessionViaProxy(f, { sessionId: 's-1' })).resolves.toEqual({ outcome: 'rejected', reason: 'agent-busy' })
+  })
+
+  it('removes one queue item', async () => {
+    const seen: Array<unknown> = []
+    const f = face()
+    f.sessions.updateQueue = (request) => {
+      seen.push(request.payload)
+      return Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['updateQueue']>
+    }
+    await expect(removeQueueItemViaProxy(f, { sessionId: 's-1', itemId: 'm-2' })).resolves.toEqual({ outcome: 'accepted' })
+    expect(seen[0]).toEqual({ sessionId: 's-1', itemId: 'm-2', action: { kind: 'remove' } })
   })
 })

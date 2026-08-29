@@ -66,8 +66,8 @@ describe('thread creation intent', () => {
         counter += 1
         return Promise.resolve({ outcome: 'completed', threadId: `thread-${String(counter)}` })
       },
-      findThreadBySource: (sourceMessageId: string) =>
-        Promise.resolve({ outcome: 'found', threadId: `recovered-for-${sourceMessageId}` }),
+      findThreadBySource: (request: { sourceMessageId: string }) =>
+        Promise.resolve({ outcome: 'found', threadId: `recovered-for-${request.sourceMessageId}` }),
     }
     const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
 

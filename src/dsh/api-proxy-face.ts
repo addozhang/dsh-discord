@@ -32,8 +32,19 @@ export interface DshApiProxyFace {
   sessions: {
     prompt(request: RpcRequestShape<{
       sessionId: string
-      mode: 'queue'
+      mode: 'queue' | 'steer'
       content: Array<{ type: 'text'; text: string }>
+    }>): Promise<RpcResponseShape<{ accepted: true }>>
+    create(request: RpcRequestShape<{
+      workspaceId?: string
+      sessionId?: string
+      agentPreset?: string
+    }>): Promise<RpcResponseShape<{ sessionId: string }>>
+    cancel(request: RpcRequestShape<{ sessionId: string }>): Promise<RpcResponseShape<{ accepted: true }>>
+    updateQueue(request: RpcRequestShape<{
+      sessionId: string
+      itemId: string
+      action: { kind: 'remove' }
     }>): Promise<RpcResponseShape<{ accepted: true }>>
   }
 }
@@ -83,8 +94,8 @@ export interface ApiProxyFaceOptions {
 }
 
 /** Mint a request envelope the way every client shape does. */
-function mintRequest<P>(payload: P): RpcRequestShape<P> {
-  return { rpcId: crypto.randomUUID(), payload }
+function mintRequest<P>(payload: P, rpcId?: string): RpcRequestShape<P> {
+  return { rpcId: rpcId ?? crypto.randomUUID(), payload }
 }
 
 /**
@@ -233,11 +244,33 @@ export type PromptOutcome =
  * Submit one prompt turn through the in-process apiProxy. A definitive Host
  * error is a rejection carrying the sanitized code; a timeout is `unknown` —
  * the turn may or may not have been admitted, so callers must not resubmit.
+ * `options.rpcId` pins the adapter-owned stable request id, which the Host
+ * records on the durable `user/message` (`source.rpcId`) for reconciliation.
  */
 export async function promptSession(
   dsh: DshApiProxyFace,
   request: { sessionId: string; prompt: string },
-  options: ApiProxyFaceOptions = {},
+  options: ApiProxyFaceOptions & { rpcId?: string } = {},
+): Promise<PromptOutcome> {
+  return submitPromptTurn(dsh, { ...request, mode: 'queue' }, options)
+}
+
+/**
+ * Steer the session's active turn: `session.prompt` with `mode: 'steer'`,
+ * carrying the same stable request-id discipline as the queue path.
+ */
+export async function steerSession(
+  dsh: DshApiProxyFace,
+  request: { sessionId: string; prompt: string },
+  options: ApiProxyFaceOptions & { rpcId?: string } = {},
+): Promise<PromptOutcome> {
+  return submitPromptTurn(dsh, { ...request, mode: 'steer' }, options)
+}
+
+async function submitPromptTurn(
+  dsh: DshApiProxyFace,
+  request: { sessionId: string; prompt: string; mode: 'queue' | 'steer' },
+  options: ApiProxyFaceOptions & { rpcId?: string },
 ): Promise<PromptOutcome> {
   const timeoutMs = options.timeoutMs ?? PROMPT_TIMEOUT_MS
   const log = options.log
@@ -246,9 +279,9 @@ export async function promptSession(
     response = await withRpcTimeout(
       dsh.sessions.prompt(mintRequest({
         sessionId: request.sessionId,
-        mode: 'queue',
+        mode: request.mode,
         content: [{ type: 'text', text: request.prompt }],
-      })),
+      }, options.rpcId)),
       timeoutMs,
     )
   } catch (cause) {
@@ -275,5 +308,129 @@ export async function promptSession(
     code: result.error.code,
     sessionId: request.sessionId,
   })
+  return { outcome: 'rejected', reason: result.error.code }
+}
+
+export type CreateSessionOutcome =
+  | { outcome: 'completed'; sessionId: string }
+  | { outcome: 'rejected'; reason: string }
+  | { outcome: 'unknown' }
+
+/**
+ * Create one DSH Session against a preallocated id (design.md §10): DSH
+ * adopts the same session id idempotently, so an uncertain response never
+ * forks a second Session. Same outcome discipline as the prompt path.
+ */
+export async function createSessionViaProxy(
+  dsh: DshApiProxyFace,
+  request: { sessionId: string; workspaceId: string },
+  options: ApiProxyFaceOptions = {},
+): Promise<CreateSessionOutcome> {
+  const timeoutMs = options.timeoutMs ?? PROMPT_TIMEOUT_MS
+  const log = options.log
+  let response: RpcResponseShape<{ sessionId: string }>
+  try {
+    response = await withRpcTimeout(
+      dsh.sessions.create(mintRequest({
+        workspaceId: request.workspaceId,
+        sessionId: request.sessionId,
+      })),
+      timeoutMs,
+    )
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      log?.('discord_session_create_timeout', { timeoutMs, sessionId: request.sessionId })
+      return { outcome: 'unknown' }
+    }
+    log?.('discord_session_create_threw', { cause: String(cause), sessionId: request.sessionId })
+    return { outcome: 'unknown' }
+  }
+  const result = (response as Partial<RpcResponseShape<{ sessionId: string }>> | undefined)?.result
+  if (result === undefined) {
+    log?.('discord_session_create_malformed', { sessionId: request.sessionId })
+    return { outcome: 'unknown' }
+  }
+  if (result.ok) {
+    return { outcome: 'completed', sessionId: result.value.sessionId }
+  }
+  log?.('discord_session_create_rejected', { code: result.error.code, sessionId: request.sessionId })
+  return { outcome: 'rejected', reason: result.error.code }
+}
+
+export type CancelOutcome =
+  | { outcome: 'accepted' }
+  | { outcome: 'rejected'; reason: string }
+  | { outcome: 'unknown' }
+
+/** Cancel the session's active turn (`session.cancel`); DSH preserves the pending inbox. */
+export async function cancelSessionViaProxy(
+  dsh: DshApiProxyFace,
+  request: { sessionId: string },
+  options: ApiProxyFaceOptions = {},
+): Promise<CancelOutcome> {
+  const timeoutMs = options.timeoutMs ?? CATALOG_TIMEOUT_MS
+  const log = options.log
+  let response: RpcResponseShape<{ accepted: true }>
+  try {
+    response = await withRpcTimeout(
+      dsh.sessions.cancel(mintRequest({ sessionId: request.sessionId })),
+      timeoutMs,
+    )
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      log?.('discord_session_cancel_timeout', { timeoutMs, sessionId: request.sessionId })
+      return { outcome: 'unknown' }
+    }
+    log?.('discord_session_cancel_threw', { cause: String(cause), sessionId: request.sessionId })
+    return { outcome: 'unknown' }
+  }
+  const result = (response as Partial<RpcResponseShape<{ accepted: true }>> | undefined)?.result
+  if (result === undefined) {
+    log?.('discord_session_cancel_malformed', { sessionId: request.sessionId })
+    return { outcome: 'unknown' }
+  }
+  if (result.ok) return { outcome: 'accepted' }
+  log?.('discord_session_cancel_rejected', { code: result.error.code, sessionId: request.sessionId })
+  return { outcome: 'rejected', reason: result.error.code }
+}
+
+export type QueueRemoveOutcome =
+  | { outcome: 'accepted' }
+  | { outcome: 'rejected'; reason: string }
+  | { outcome: 'unknown' }
+
+/** Remove one pending inbox item (`session.updateQueue`, action remove). */
+export async function removeQueueItemViaProxy(
+  dsh: DshApiProxyFace,
+  request: { sessionId: string; itemId: string },
+  options: ApiProxyFaceOptions = {},
+): Promise<QueueRemoveOutcome> {
+  const timeoutMs = options.timeoutMs ?? CATALOG_TIMEOUT_MS
+  const log = options.log
+  let response: RpcResponseShape<{ accepted: true }>
+  try {
+    response = await withRpcTimeout(
+      dsh.sessions.updateQueue(mintRequest({
+        sessionId: request.sessionId,
+        itemId: request.itemId,
+        action: { kind: 'remove' },
+      })),
+      timeoutMs,
+    )
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      log?.('discord_queue_remove_timeout', { timeoutMs, sessionId: request.sessionId })
+      return { outcome: 'unknown' }
+    }
+    log?.('discord_queue_remove_threw', { cause: String(cause), sessionId: request.sessionId })
+    return { outcome: 'unknown' }
+  }
+  const result = (response as Partial<RpcResponseShape<{ accepted: true }>> | undefined)?.result
+  if (result === undefined) {
+    log?.('discord_queue_remove_malformed', { sessionId: request.sessionId })
+    return { outcome: 'unknown' }
+  }
+  if (result.ok) return { outcome: 'accepted' }
+  log?.('discord_queue_remove_rejected', { code: result.error.code, sessionId: request.sessionId })
   return { outcome: 'rejected', reason: result.error.code }
 }
