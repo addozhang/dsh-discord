@@ -5,7 +5,8 @@
  * surface, and the turn's head message. Frames for sessions with no bound
  * thread are dropped (reconciliation owns recovery, not the live path);
  * `assistant/message` finalizes exactly once with ordered continuations;
- * `turn/end` stops typing and releases the adapter-owned turn.
+ * `turn/end` stops typing, releases the adapter-owned turn, and deletes the
+ * turn's tool activity message.
  */
 
 import { createThreadRenderModel, type ThreadRenderModel } from './render-model.js'
@@ -14,13 +15,13 @@ import { createTypingLifecycle, type TypingLifecycle } from './typing.js'
 import { createToolActivitySurface, type ToolActivitySurface } from './tool-view.js'
 import { createAnswerFinalizer, type AnswerFinalizer } from './finalizer.js'
 import { buildOutboundMessage } from './outbound.js'
-import { toolCategoryIcon, toolStateIcon } from './icons.js'
+import { toolCategoryIcon } from './icons.js'
 import { safeTitle } from '../policy/disclosure.js'
 import type { DiscordVerbosity } from '../settings.js'
 
 /** The mux frames the live path consumes (narrow, defensive shape). */
 export type LiveFrame =
-  | { type: 'session/event'; sessionId: string; event: { type: string; data: Record<string, unknown> } }
+  | { type: 'session/event'; sessionId: string; event: { type: string; data: Record<string, unknown> }; view?: unknown }
   | { type: 'session/subscribed'; sessionId: string }
   | { type: 'session/queue'; sessionId: string; items: Array<{ id: string; summary: string }> }
   | { type: string }
@@ -32,6 +33,10 @@ export interface LiveDeliveryPort {
     | { outcome: 'failed' }
   >
   edit(request: { channelId: string; messageId: string; content: string }): Promise<
+    | { outcome: 'completed' }
+    | { outcome: 'failed' }
+  >
+  delete(request: { channelId: string; messageId: string }): Promise<
     | { outcome: 'completed' }
     | { outcome: 'failed' }
   >
@@ -48,6 +53,8 @@ export interface LiveRenderDeps {
   delivery: LiveDeliveryPort
   updateIntervalMs: number
   typingIntervalMs: number
+  /** Coalescing budget for tool-activity edits (default 1s). */
+  activityCoalesceMs?: number
   verbosity?: DiscordVerbosity
   log?: (event: string, detail?: unknown) => void
   /** Queue snapshot cache (the /queue surface's data source). */
@@ -56,17 +63,26 @@ export interface LiveRenderDeps {
   onTurnEnded?: (sessionId: string) => void
 }
 
+/** Coalescing budget for activity-message edits under parallel tools. */
+const DEFAULT_ACTIVITY_COALESCE_MS = 1_000
+/** Row budget: a presentation title is truncated before it reaches Discord. */
+const ACTIVITY_TITLE_MAX = 80
+
 interface ThreadRuntime {
   render: ThreadRenderModel
   tools: ToolActivitySurface
   typing: TypingLifecycle
   scheduler: UpdateScheduler | undefined
+  /** The activity message's coalescing scheduler (row edits share one edit). */
+  activityScheduler: UpdateScheduler | undefined
   finalizer: AnswerFinalizer | undefined
   headMessageId: string | undefined
   activityMessageId: string | undefined
   turnId: string | undefined
   /** Safe correlation for tool/result rows: the label stays the call's own. */
   toolNames: Map<string, string>
+  /** Host-presented titles by callId (terminal command / call title). */
+  toolTitles: Map<string, string>
   /** Last title this thread was renamed to (dedupes repeat projections). */
   lastTitle: string | undefined
 }
@@ -88,9 +104,22 @@ function assistantText(message: unknown): string {
 /** The callId of a tool/result event (block-carried, defensive). */
 function resultCallId(data: Record<string, unknown>): string | undefined {
   if (typeof data['callId'] === 'string') return data['callId']
-  const message = data['message'] as { content?: Array<{ type?: unknown; callId?: unknown }> } | undefined
+  const message = data['message'] as { content?: Array<{ type?: unknown; toolCallId?: unknown }> } | undefined
   const block = Array.isArray(message?.content) ? message.content[0] : undefined
-  return typeof block?.callId === 'string' ? block.callId : undefined
+  return typeof block?.toolCallId === 'string' ? block.toolCallId : undefined
+}
+
+/**
+ * The Host presentation view's title for one tool event: a terminal call's
+ * title IS the command; generic/diff cards title the call. Host-curated
+ * disclosure — never raw arguments.
+ */
+function presentationTitle(frameView: unknown): string | undefined {
+  if (typeof frameView !== 'object' || frameView === null) return undefined
+  const view = (frameView as { view?: unknown }).view
+  if (typeof view !== 'object' || view === null) return undefined
+  const title = (view as { title?: unknown }).title
+  return typeof title === 'string' && title !== '' ? title : undefined
 }
 
 export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
@@ -110,11 +139,13 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         intervalMs: deps.typingIntervalMs,
       }),
       scheduler: undefined,
+      activityScheduler: undefined,
       finalizer: undefined,
       headMessageId: undefined,
       activityMessageId: undefined,
       turnId: undefined,
       toolNames: new Map<string, string>(),
+      toolTitles: new Map<string, string>(),
       lastTitle: undefined,
     }
     runtimes.set(threadId, runtime)
@@ -141,10 +172,18 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     runtime.activityMessageId = undefined
     runtime.tools = createToolActivitySurface({ verbosity })
     runtime.toolNames = new Map<string, string>()
+    runtime.toolTitles = new Map<string, string>()
     runtime.scheduler?.dispose()
     runtime.scheduler = createUpdateScheduler({
       minIntervalMs: deps.updateIntervalMs,
       onFlush: flushAnswer(threadId, runtime),
+    })
+    // The activity message's own coalescer: row changes share one edit per
+    // interval, so parallel tools cannot exceed the channel's edit budget.
+    runtime.activityScheduler?.dispose()
+    runtime.activityScheduler = createUpdateScheduler({
+      minIntervalMs: deps.activityCoalesceMs ?? DEFAULT_ACTIVITY_COALESCE_MS,
+      onFlush: renderActivity(threadId, runtime),
     })
     runtime.finalizer = undefined
     // A fresh lifecycle per turn: start() no-ops on a stopped one, so a
@@ -158,22 +197,30 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
   }
 
   /** Render the tool rows into one bounded activity message (create once, edit after). */
-  async function renderActivity(threadId: string, runtime: ThreadRuntime): Promise<void> {
-    const rows = runtime.tools.render()
-    if (rows.length === 0) return
-    const content = rows.map(row => {
-      const marks = [toolStateIcon(row.state), toolCategoryIcon(row.label)].filter(Boolean)
-      return `> ${marks.join(' ')} ${row.label}`
-    }).join('\n')
-    if (runtime.activityMessageId === undefined) {
-      const sent = await deps.delivery.send({ channelId: threadId, content })
-      if (sent.outcome === 'completed') runtime.activityMessageId = sent.messageId
-      return
+  function renderActivity(threadId: string, runtime: ThreadRuntime): () => Promise<void> {
+    return async () => {
+      const rows = runtime.tools.render()
+      if (rows.length === 0) return
+      const content = rows.map(row => {
+        const title = (row.title ?? row.label).slice(0, ACTIVITY_TITLE_MAX)
+        return `> ${toolCategoryIcon(row.label)} ${title}`
+      }).join('\n')
+      if (runtime.activityMessageId === undefined) {
+        const sent = await deps.delivery.send({ channelId: threadId, content })
+        if (sent.outcome === 'completed') runtime.activityMessageId = sent.messageId
+        return
+      }
+      await deps.delivery.edit({ channelId: threadId, messageId: runtime.activityMessageId, content })
     }
-    await deps.delivery.edit({ channelId: threadId, messageId: runtime.activityMessageId, content })
   }
 
-  function handleSessionEvent(sessionId: string, threadId: string, runtime: ThreadRuntime, event: { type: string; data: Record<string, unknown> }): void {
+  function handleSessionEvent(
+    sessionId: string,
+    threadId: string,
+    runtime: ThreadRuntime,
+    event: { type: string; data: Record<string, unknown> },
+    frameView: unknown,
+  ): void {
     const data = event.data
     const turnId = typeof data['turn'] === 'number' ? String(data['turn']) : undefined
     const stepId = typeof data['step'] === 'number' ? String(data['step']) : undefined
@@ -250,29 +297,63 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       }
       case 'tool/call': {
         if (typeof data['callId'] !== 'string' || typeof data['name'] !== 'string') return
+        const title = presentationTitle(frameView)
         runtime.toolNames.set(data['callId'], data['name'])
-        runtime.tools.record({ callId: data['callId'], toolName: data['name'], state: 'running', rawArguments: typeof data['arguments'] === 'string' ? data['arguments'] : undefined })
-        void renderActivity(threadId, runtime)
+        if (title !== undefined) runtime.toolTitles.set(data['callId'], title)
+        runtime.tools.record({
+          callId: data['callId'],
+          toolName: data['name'],
+          state: 'running',
+          title,
+          rawArguments: typeof data['arguments'] === 'string' ? data['arguments'] : undefined,
+        })
+        runtime.activityScheduler?.schedule(renderActivityContent(runtime))
         return
       }
       case 'tool/result': {
         const callId = resultCallId(data)
         if (callId === undefined) return
         const failed = data['error'] !== undefined
-        runtime.tools.record({ callId, toolName: runtime.toolNames.get(callId) ?? 'tool', state: failed ? 'failed' : 'succeeded' })
-        void renderActivity(threadId, runtime)
+        runtime.tools.record({
+          callId,
+          toolName: runtime.toolNames.get(callId) ?? 'tool',
+          state: failed ? 'failed' : 'succeeded',
+          title: runtime.toolTitles.get(callId),
+        })
+        runtime.activityScheduler?.schedule(renderActivityContent(runtime))
         return
       }
       case 'turn/end': {
         runtime.typing.stop('completed')
         runtime.scheduler?.dispose()
         runtime.scheduler = undefined
+        runtime.activityScheduler?.dispose()
+        runtime.activityScheduler = undefined
+        // The activity message is the live "what's happening" surface only:
+        // at turn end it is deleted — the durable record is the Session log
+        // and the assistant's answer.
+        const activityMessageId = runtime.activityMessageId
+        runtime.activityMessageId = undefined
+        if (activityMessageId !== undefined) {
+          void deps.delivery.delete({ channelId: threadId, messageId: activityMessageId }).catch((cause: unknown) => {
+            deps.log?.('discord_live_activity_delete_threw', { threadId, cause: String(cause) })
+          })
+        }
         deps.onTurnEnded?.(sessionId)
         return
       }
       default:
         return
     }
+  }
+
+  /** The activity message body: one icon + presentation title per call row. */
+  function renderActivityContent(runtime: ThreadRuntime): string {
+    const rows = runtime.tools.render()
+    return rows.map(row => {
+      const title = (row.title ?? row.label).slice(0, 80)
+      return `> ${toolCategoryIcon(row.label)} ${title}`
+    }).join('\n')
   }
 
   /** A bounded one-line summary of a queued message: text blocks only. */
@@ -337,7 +418,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     if (threadId === undefined) return
     const eventWrapper = frame['event'] as { type?: unknown; data?: Record<string, unknown> } | undefined
     if (eventWrapper === undefined || typeof eventWrapper.type !== 'string') return
-    handleSessionEvent(sessionId, threadId, runtimeFor(threadId), { type: eventWrapper.type, data: eventWrapper.data ?? {} })
+    handleSessionEvent(sessionId, threadId, runtimeFor(threadId), { type: eventWrapper.type, data: eventWrapper.data ?? {} }, frame['view'])
   }
 
   async function runLoop(): Promise<void> {
@@ -378,6 +459,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       controller.abort()
       for (const runtime of runtimes.values()) {
         runtime.scheduler?.dispose()
+        runtime.activityScheduler?.dispose()
         runtime.typing.dispose()
       }
       runtimes.clear()

@@ -1,32 +1,18 @@
 /**
  * Iconography table tests (stream-renderer "Fixed adapter-owned iconography").
- * The table is exception-only (running 🟡, failed ❌, succeeded quiet),
- * category icons ride the tool-label allowlist's first word, and notice
- * kinds map to fixed prefixes. This module is the ONLY source of icons.
+ * Tool rows carry exactly one category icon (never a run-state mark), and
+ * notice kinds map to fixed prefixes. This module is the ONLY source of icons.
  */
 
 import { describe, expect, it } from 'vitest'
 
-import { noticeIcon, toolCategoryIcon, toolStateIcon } from '../src/stream/icons.js'
+import { noticeIcon, toolCategoryIcon } from '../src/stream/icons.js'
 
-describe('tool state icons', () => {
-  it('marks only the exceptions: running amber, failed red', () => {
-    expect(toolStateIcon('running')).toBe('🟡')
-    expect(toolStateIcon('failed')).toBe('❌')
-  })
 
-  it('leaves succeeded rows quiet — the disappearing amber is the signal', () => {
-    expect(toolStateIcon('succeeded')).toBe('')
-  })
-
-  it('treats an interrupted row as an exception', () => {
-    expect(toolStateIcon('interrupted')).toBe('❌')
-  })
-})
 
 describe('tool category icons', () => {
   it('rides the label allowlist by first word', () => {
-    expect(toolCategoryIcon('Shell')).toBe('⌨️')
+    expect(toolCategoryIcon('Shell')).toBe('💻')
     expect(toolCategoryIcon('Read file')).toBe('📖')
     expect(toolCategoryIcon('Write file')).toBe('✍️')
     expect(toolCategoryIcon('Edit file')).toBe('✏️')

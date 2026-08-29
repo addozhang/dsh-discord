@@ -16,6 +16,8 @@ export interface ToolRow {
   callId: string
   label: string
   state: ToolState
+  /** Host-presented title (command / call title); falls back to the label. */
+  title: string | undefined
 }
 
 /** Safe, category-level labels for allowlisted tools. */
@@ -41,6 +43,11 @@ export interface ToolRecordInput {
   /** Accepted for correlation only; never rendered. */
   rawArguments?: string | undefined
   rawOutput?: string | undefined
+  /**
+   * The Host presentation view's title (a terminal call's command, or the
+   * call title) — Host-curated disclosure, rendered sanitized + truncated.
+   */
+  title?: string | undefined
 }
 
 export interface ToolActivitySurface {
@@ -54,7 +61,12 @@ export function createToolActivitySurface(options: { verbosity: DiscordVerbosity
   return {
     record(input) {
       if (options.verbosity === 'text-only') return
-      rows.set(input.callId, { callId: input.callId, label: toolLabel(input.toolName), state: input.state })
+      rows.set(input.callId, {
+        callId: input.callId,
+        label: toolLabel(input.toolName),
+        state: input.state,
+        title: input.title,
+      })
     },
     render: () => [...rows.values()],
   }

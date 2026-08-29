@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { startLiveRender, type LiveDeliveryPort, type LiveFrame } from '../src/stream/live.js'
 
 function createDelivery() {
-  const calls: Array<{ kind: 'send' | 'edit' | 'typing' | 'rename'; channelId: string; messageId?: string; content?: string }> = []
+  const calls: Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }> = []
   let messageCounter = 0
   const delivery: LiveDeliveryPort = {
     send: (request) => {
@@ -31,6 +31,10 @@ function createDelivery() {
       calls.push({ kind: 'rename', channelId: request.channelId, content: request.name })
       return Promise.resolve({ outcome: 'completed' })
     },
+    delete: (request) => {
+      calls.push({ kind: 'delete', channelId: request.channelId, messageId: request.messageId })
+      return Promise.resolve({ outcome: 'completed' })
+    },
   }
   return { delivery, calls }
 }
@@ -45,7 +49,7 @@ async function drive(frames: LiveFrame[], options: {
   onQueueSnapshot?: (sessionId: string, items: Array<{ id: string; summary: string }>) => void
   onTurnEnded?: (sessionId: string) => void
   updateIntervalMs?: number
-}): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename'; channelId: string; messageId?: string; content?: string }>> {
+}): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }>> {
   const { delivery, calls } = createDelivery()
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
@@ -62,6 +66,7 @@ async function drive(frames: LiveFrame[], options: {
     threadForSession: options.threadForSession,
     delivery,
     updateIntervalMs: options.updateIntervalMs ?? 0,
+    activityCoalesceMs: 0,
     typingIntervalMs: 60_000,
     ...(options.onQueueSnapshot === undefined ? {} : { onQueueSnapshot: options.onQueueSnapshot }),
     ...(options.onTurnEnded === undefined ? {} : { onTurnEnded: options.onTurnEnded }),
@@ -145,26 +150,41 @@ describe('live render', () => {
     expect(snapshots).toEqual([{ sessionId: 'sess-1', count: 2 }])
   })
 
-  it('renders tool activity rows as a bounded activity message', async () => {
+  it('renders presentation-view titles as activity rows and deletes them at turn end', async () => {
     const calls = await drive([
       sessionEvent('sess-1', 'turn/start', { turn: 1 }),
-      sessionEvent('sess-1', 'tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'bash' }),
+      // bash with a terminal view: the row IS the command (Host-curated).
+      {
+        type: 'session/event',
+        sessionId: 'sess-1',
+        event: { type: 'tool/call', data: { turn: 1, step: 1, callId: 'call-1', name: 'bash', arguments: '{"command":"df -h"}' } },
+        view: { for: 'call', view: { card: 'terminal', title: 'df -h' } },
+      },
+      // A tool WITHOUT a presentation view falls back to the generic label.
+      sessionEvent('sess-1', 'tool/call', { turn: 1, step: 1, callId: 'call-2', name: 'mystery' }),
+      // The result correlates through the block's toolCallId.
       sessionEvent('sess-1', 'tool/result', {
         turn: 1,
         step: 1,
-        callId: 'call-1',
-        message: { role: 'user', content: [{ type: 'tool-result', callId: 'call-1' }] },
+        message: { role: 'user', content: [{ type: 'tool-result', toolCallId: 'call-1' }] },
       }),
+      sessionEvent('sess-1', 'turn/end', { turn: 1, reason: { kind: 'stop' } }),
     ], { threadForSession: () => 'thread-1' })
 
-    // Icon-prefixed rows (inline-snapshot style): exception-only state
-    // marks — running amber, then the quiet completed row in the SAME
-    // activity message (the disappearing 🟡 is the completion signal).
-    const runningRow = calls.find(call => call.kind === 'send' && call.content?.includes('Shell'))
-    expect(runningRow?.content).toBe('> 🟡 ⌨️ Shell')
-    const doneRow = calls.find(call => call.kind === 'edit' && call.content?.includes('Shell'))
-    expect(doneRow?.content).toBe('> ⌨️ Shell')
-    expect(doneRow?.content).not.toContain('raw-output')
+    const activity = calls.filter(call => (call.kind === 'send' || call.kind === 'edit') && call.content?.startsWith('>'))
+    expect(activity.length).toBeGreaterThanOrEqual(1)
+    const body = activity.at(-1)?.content ?? ''
+    // The terminal command is Host-curated disclosure — shown, never the raw args.
+    expect(body).toContain('df -h')
+    expect(body).not.toContain('{"command"')
+    // The un-viewed tool falls back to the generic icon + label.
+    expect(body).toContain('🧩 Tool')
+    // No state marks of any kind.
+    expect(body).not.toContain('🟡')
+    expect(body).not.toContain('❌')
+    // Turn end deletes the activity message exactly once.
+    const deletions = calls.filter(call => call.kind === 'delete')
+    expect(deletions).toHaveLength(1)
   })
 })
 

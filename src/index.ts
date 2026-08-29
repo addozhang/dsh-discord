@@ -552,6 +552,12 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (rest === undefined) return
         await rest.request('POST', `/channels/${channelId}/typing`)
       },
+      delete: async (request) => {
+        const rest = await sharedRest()
+        if (rest === undefined) return { outcome: 'failed' }
+        const deleted = await rest.request('DELETE', `/channels/${request.channelId}/messages/${request.messageId}`)
+        return deleted.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
+      },
       renameThread: async (request) => {
         const rest = await sharedRest()
         if (rest === undefined) return { outcome: 'failed' }

@@ -16,19 +16,23 @@ The adapter SHALL derive Discord answer output from DSH Session events. Each DSH
 - **THEN** the adapter preserves its emitted text prefix and marks it interrupted rather than discarding or presenting it as a normal completion
 
 ### Requirement: Minimal tool progress presentation
-The adapter SHALL present `tool/call` and `tool/result` as bounded progress keyed by `callId`. Milestone 1 SHALL expose only a sanitized title/category and running, succeeded, or failed status; it SHALL NOT expose raw arguments, terminal output, absolute cwd, full file content, or full diffs.
+The adapter SHALL present `tool/call` and `tool/result` as one bounded activity message per turn, keyed by `callId`. A row's content SHALL be the Host-computed presentation view's title (for a terminal call, the command itself; otherwise the call title) next to the category icon, truncated to the adapter's row budget; rows SHALL NOT carry run-state marks. The adapter SHALL NOT expose raw arguments beyond the Host-presented title, terminal output, absolute cwd, full file content, or full diffs, and SHALL delete the activity message when the Turn ends — the durable record of what happened is the Session log and the assistant's answer, not a live status message.
 
 #### Scenario: Tool has a presentation view
 - **WHEN** a tool event includes a Host-computed presentation view
-- **THEN** the adapter derives only an allowlisted title/category and terminal status from that view
+- **THEN** the row shows the view's title (for a terminal call, the command) beside the category icon, sanitized and truncated
 
 #### Scenario: Tool has no presentation view
 - **WHEN** a tool event has no recognized presentation view
-- **THEN** the adapter shows a generic bounded status using the escaped tool name and does not dump raw arguments or results
+- **THEN** the row shows the generic category icon with the escaped tool label and never dumps raw arguments or results
 
 #### Scenario: Parallel tool calls
 - **WHEN** multiple tool calls overlap or finish out of order
-- **THEN** each visible status remains correlated by `callId` and one result cannot complete another call's row
+- **THEN** each row stays correlated by `callId` and one result cannot mutate another call's row
+
+#### Scenario: Activity message is removed at Turn end
+- **WHEN** the Turn ends
+- **THEN** the adapter deletes the turn's activity message exactly once; a turn with no tool activity deletes nothing
 
 ### Requirement: Discord-safe content splitting
 The adapter SHALL split final output within Discord limits while preserving Unicode code points and maintaining balanced Markdown code fences. Every outbound message SHALL disable automatic mention parsing.
@@ -71,15 +75,11 @@ The adapter SHALL allow a project channel to choose between text-only, essential
 - **THEN** tool progress is omitted from Discord while assistant text and terminal status remain available
 
 ### Requirement: Fixed adapter-owned iconography
-Tool activity rows and adapter notices SHALL carry fixed emoji prefixes chosen from an adapter-owned constant table. State marking SHALL be exception-only: a running row is prefixed 🟡 and a failed row ❌, while a succeeded row SHALL NOT carry a state icon — the disappearing amber marker is the completion signal, and a column of identical ✅ marks is noise. Tool categories reuse the label allowlist (Shell ⌨️, Read 📖, Write ✍️, Edit ✏️, Search 🔍, Find 🗂️, Web 🌐, generic fallback 🧩), and notices use kind-fixed prefixes (⚠️ failure/unknown, 💡 guidance, 🛑 stop, ↪️ steer, ⏳ queued). Assistant answer text SHALL NOT carry icon prefixes. The table SHALL live in one module and SHALL be the only source of iconography; icons SHALL never be derived from model output, tool output, or Host presentation views, and the sanitized text labels SHALL remain unchanged beside them.
+Adapter notices SHALL carry fixed emoji prefixes chosen from an adapter-owned constant table (⚠️ failure/unknown, 💡 guidance, 🛑 stop, ↪️ steer, ⏳ queued). Tool activity rows carry a single category icon per row — Shell 💻, Read 📖, Write ✍️, Edit ✏️, Search 🔍, Find 🗂️, Web 🌐, generic fallback 🧩 — and never a run-state mark: state flips would require one message edit per tool transition, which does not survive Discord's edit budget under parallel tools. Assistant answer text SHALL NOT carry icon prefixes. The table SHALL live in one module and SHALL be the only source of iconography; icons SHALL never be derived from model output, tool output, or Host presentation views, and the sanitized text labels SHALL remain unchanged beside them.
 
-#### Scenario: Running and failed rows are marked
-- **WHEN** a tool activity row is rendered for a running or failed call
-- **THEN** the row is prefixed by the state icon (🟡 or ❌) followed by the category icon and the unchanged sanitized label
-
-#### Scenario: Succeeded rows stay quiet
-- **WHEN** a tool call completes successfully
-- **THEN** its row renders the category icon and label without any state icon, and the earlier 🟡 marker disappears through the coalesced edit of the same activity message
+#### Scenario: Rows carry only the category icon
+- **WHEN** a tool activity row is rendered
+- **THEN** the row is the category icon followed by the presentation-view title (or generic label), with no state mark of any kind
 
 #### Scenario: Unknown tool falls back
 - **WHEN** a tool name is outside the category allowlist

@@ -1,32 +1,16 @@
 /**
  * The adapter's fixed iconography table (stream-renderer "Fixed
  * adapter-owned iconography"). This module is the ONLY source of icons:
- * tool-state marks are exception-only (running 🟡, failed ❌, succeeded
- * quiet — the disappearing amber marker is the completion signal), category
- * icons ride the tool-label allowlist's first word, and notices use
+ * tool rows carry one category icon each (never a run-state mark — state
+ * flips would cost one message edit per tool transition), and notices use
  * kind-fixed prefixes. Icons are never derived from model output, tool
  * output, or Host presentation views; sanitized text labels stay unchanged
  * beside them, and assistant answer text carries no icon prefix.
  */
 
-import type { ToolState } from './tool-view.js'
-
-/** Exception-only state marks: only outcomes that need attention are marked. */
-const TOOL_STATE_ICONS: Readonly<Record<ToolState, string>> = {
-  running: '🟡',
-  failed: '❌',
-  interrupted: '❌',
-  succeeded: '',
-}
-
-/** The tool state mark for a row ('' when the row stays quiet). */
-export function toolStateIcon(state: ToolState): string {
-  return TOOL_STATE_ICONS[state]
-}
-
 /** Category icon by the sanitized label's first word (the label allowlist). */
 const TOOL_CATEGORY_ICONS: Readonly<Record<string, string>> = {
-  Shell: '⌨️',
+  Shell: '💻',
   Read: '📖',
   Write: '✍️',
   Edit: '✏️',
