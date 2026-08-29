@@ -19,6 +19,21 @@ The adapter SHALL create a Discord Thread and an ordinary DSH Session in the par
 - **WHEN** an authorized user mentions the bot with a task in a channel without a Workspace binding
 - **THEN** the adapter creates no Session and posts a minimal non-sensitive notice directing a Workspace administrator to invoke the ephemeral `/project bind` flow
 
+### Requirement: Kimaki thread surface
+The adapter SHALL create a new task's Thread independently under the parent channel (not anchored to the source message), named after the deterministic task title, and SHALL mirror the author's channel message once into the fresh Thread as its opener through a webhook that renders as the author. Mirrored content SHALL suppress automatic mention parsing. The mirror SHALL be best-effort: a failed mirror SHALL NOT fail the task. Crash-window recovery SHALL match the task's Thread deterministically among the parent's active threads by its task title. When DSH publishes a model-generated Session title (derived from the user's first input), the adapter SHALL rename the Thread to it at most once per distinct title.
+
+#### Scenario: Thread opens with the author's task
+- **WHEN** an authorized user's mention creates a new Thread
+- **THEN** the Thread's first message shows the author's own identity and their task text, and the source channel keeps the original message
+
+#### Scenario: Session title renames the Thread
+- **WHEN** DSH's session-title projection lands a non-empty title different from the Thread's current one
+- **THEN** the adapter renames the Thread to that title exactly once per distinct title
+
+#### Scenario: Title projection without a bound thread
+- **WHEN** a title projection arrives for a Session with no bound Discord Thread
+- **THEN** the adapter drops it without touching Discord
+
 ### Requirement: Resume Sessions
 The adapter SHALL list resumable ordinary Sessions within the current Channel's Workspace and SHALL create a new Discord Thread when one is resumed. Milestone 1 SHALL filter the bounded Workspace Session list by ID and title only and SHALL NOT promise full-text content search.
 
