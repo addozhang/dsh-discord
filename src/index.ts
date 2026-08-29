@@ -591,7 +591,6 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       store: questionsStore,
       port: questionRespondPort,
       nowMs: () => Date.now(),
-      log: rpcLog,
       controls: { disable: disableControl },
     } as unknown as Parameters<typeof handleSelectInput>[0]
     const interactionRouter = createInteractionRouter({
