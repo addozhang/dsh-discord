@@ -17,7 +17,7 @@ import { createApprovalStore } from '../src/features/approval-store.js'
 import { createClientRespondPort, type RespondReceipt } from '../src/dsh/api-proxy-face.js'
 import { createComponentRegistry } from '../src/discord/components.js'
 import { startLiveRender } from '../src/stream/live.js'
-import { renderQuestionControls } from '../src/features/question-view.js'
+import { CUSTOM_ANSWER_VALUE, renderQuestionControls } from '../src/features/question-view.js'
 import { handleRemoteResolution } from '../src/features/question-routing.js'
 import { handleSelectInput, handleModalSubmit } from '../src/features/question-routing.js'
 import { startDiscordAdapter, type DiscordAdapterRuntime } from '../src/compose.js'
@@ -804,6 +804,8 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
   /** Host-side pending asks: an rpcId leaves the map when answered. */
   const pendingAsks = new Map<string, { sessionId: string; kind: 'approval' | 'question' }>()
   const respondCalls: Array<Record<string, unknown>> = []
+  /** Type-9 (show-modal) interaction callbacks, for minted modal custom_id capture. */
+  const interactionCallbacks: Array<Record<string, unknown>> = []
   const controlMessages = new Map<string, { channelId: string; messageId: string }>()
   let pushFrames: (frames: unknown[]) => void = () => {}
   let turnTracker: ReturnType<typeof createTurnTracker>
@@ -926,7 +928,14 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
       findBoundChannelFor: () => undefined,
       sessionForThread: () => undefined,
       ensureWorkspaceChannel: () => Promise.resolve(undefined),
-      rest: () => Promise.resolve(rest),
+      rest: () => Promise.resolve({
+        request: async (method: string, path: string, body?: unknown) => {
+          if (method === 'POST' && path.includes('/interactions/') && (body as { type?: number } | undefined)?.type === 9) {
+            interactionCallbacks.push(body as Record<string, unknown>)
+          }
+          return rest.request(method as never, path as never, body)
+        },
+      } as never),
       log: () => {},
       warn: () => {},
     })
@@ -1186,7 +1195,7 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
       const row = (control.components?.[0] as { components?: Array<{ custom_id?: string }> } | undefined)?.components ?? []
       return { control, allowId: row[0]?.custom_id ?? '' }
     })()
-    await discord.simulateButtonClick({ channelId: 'thread-1', userId: USER, messageId: first.control.id, customId: first.allowId })
+    await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: first.control.id, customId: first.allowId })
     await new Promise(resolve => { setTimeout(resolve, 300) })
 
     const before = respondCalls.length
@@ -1196,6 +1205,122 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
       return port.respond('ask-dupe', {})
     })()
     expect(strict).toEqual({ outcome: 'rejected', reason: 'not-pending' })
+    expect(respondCalls.length).toBe(before)
+  }, 20_000)
+
+  it('carries a Reject click into outcome rejected', async () => {
+    pendingAsks.set('ask-reject', { sessionId: 'sess-1', kind: 'approval' })
+    pushFrames([{
+      rpcId: 'ask-reject',
+      payload: { type: 'approval/requested', sessionId: 'sess-1', approvalId: 'rej-1', toolName: 'edit' },
+    }])
+    const scope = discord.channel(threadId)
+    const control = await scope.waitForMessage({
+      predicate: message => message.content.includes('Approval required — Edit'),
+    })
+    const row = (control.components?.[0] as { components?: Array<{ custom_id?: string; label?: string }> } | undefined)?.components ?? []
+    const rejectId = row.find(button => button.label === 'Reject')?.custom_id
+    if (typeof rejectId !== 'string') throw new TypeError('reject control missing custom_id')
+
+    await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: control.id, customId: rejectId })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+
+    const sent = respondCalls.filter(message => message.rpcId === 'ask-reject')
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      type: 'client-response',
+      result: { ok: true, value: { sessionId: 'sess-1', approvalId: 'rej-1', outcome: 'rejected' } },
+    })
+  }, 20_000)
+
+  it('carries the Other modal answer through modal submit into the batch', async () => {
+    pendingAsks.set('ask-modal', { sessionId: 'sess-1', kind: 'question' })
+    pushFrames([{
+      rpcId: 'ask-modal',
+      payload: {
+        type: 'question/requested',
+        sessionId: 'sess-1',
+        questions: [{ id: 'q1', question: '部署策略怎么选', options: [{ label: 'Option A' }] }],
+      },
+    }])
+    const scope = discord.channel(threadId)
+    const control = await scope.waitForMessage({
+      predicate: message => message.content.includes('部署策略怎么选'),
+    })
+    const rows = control.components as Array<{ components: Array<{ custom_id?: string }> }>
+    const selectCustomId = rows[0]?.components[0]?.custom_id
+    if (typeof selectCustomId !== 'string') throw new TypeError('select control missing custom_id')
+
+    // The reserved Other value opens the modal instead of recording.
+    await discord.simulateSelectMenu({
+      channelId: threadId, userId: USER, messageId: control.id, customId: selectCustomId,
+      values: [CUSTOM_ANSWER_VALUE],
+    })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+    const modal = interactionCallbacks.at(-1) as { data?: { custom_id?: string } } | undefined
+    const modalCustomId = modal?.data?.custom_id
+    if (typeof modalCustomId !== 'string') throw new TypeError('modal callback missing custom_id')
+
+    await discord.simulateModalSubmit({
+      channelId: threadId, userId: USER, customId: modalCustomId,
+      fields: [{ customId: 'answer', value: '改为只读挂载' }],
+    })
+    await new Promise(resolve => { setTimeout(resolve, 200) })
+
+    const submitCustomId = rows.at(-1)?.components[0]?.custom_id
+    if (typeof submitCustomId !== 'string') throw new TypeError('submit control missing custom_id')
+    await discord.simulateButtonClick({
+      channelId: threadId, userId: USER, messageId: control.id, customId: submitCustomId,
+    })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+
+    const sent = respondCalls.filter(message => message.rpcId === 'ask-modal')
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      type: 'client-response',
+      result: { ok: true, value: { sessionId: 'sess-1', answer: { answers: [{ id: 'q1', selected: [], custom: '改为只读挂载' }] } } },
+    })
+  }, 20_000)
+
+  it('retires question controls on a remote resolution without submitting', async () => {
+    pendingAsks.set('ask-remote', { sessionId: 'sess-1', kind: 'question' })
+    pushFrames([{
+      rpcId: 'ask-remote',
+      payload: {
+        type: 'question/requested',
+        sessionId: 'sess-1',
+        questions: [{ id: 'q1', question: 'Remote resolution target', options: [{ label: 'A' }, { label: 'B' }] }],
+      },
+    }])
+    const scope = discord.channel(threadId)
+    const control = await scope.waitForMessage({
+      predicate: message => message.content.includes('Remote resolution target'),
+    })
+    const rows = control.components as Array<{ components: Array<{ custom_id?: string }> }>
+    const selectCustomId = rows[0]?.components[0]?.custom_id
+    if (typeof selectCustomId !== 'string') throw new TypeError('select control missing custom_id')
+    const submitCustomId = rows.at(-1)?.components[0]?.custom_id
+    if (typeof submitCustomId !== 'string') throw new TypeError('submit control missing custom_id')
+
+    pushFrames([{
+      rpcId: 'ask-remote',
+      payload: { type: 'question/resolved', sessionId: 'sess-1', questionRpcId: 'ask-remote', outcome: 'answered' },
+    }])
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+
+    // Controls retired; later clicks settle as already-resolved, never a respond.
+    const edited = await discord.thread(threadId).getMessages()
+    const controlAfter = edited.find(message => message.id === control.id)
+    expect(controlAfter?.components ?? []).toHaveLength(0)
+
+    const before = respondCalls.length
+    await discord.simulateSelectMenu({
+      channelId: threadId, userId: USER, messageId: control.id, customId: selectCustomId,
+      values: ['A'],
+    })
+    await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: control.id, customId: submitCustomId })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+    expect(respondCalls.filter(message => message.rpcId === 'ask-remote')).toHaveLength(0)
     expect(respondCalls.length).toBe(before)
   }, 20_000)
 })

@@ -547,6 +547,29 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         await routeSlashCommand(event, interactionToken)
         return
       }
+      if (event.interactionType === 5 && interactionToken !== undefined) {
+        const modalCustomId = event.data['custom_id']
+        if (typeof modalCustomId !== 'string') return
+        try {
+          const text = event.modalFields.find(field => field.customId === 'answer')?.value ?? ''
+          const outcome = deps.handleQuestionModal({
+            customId: modalCustomId,
+            userId: event.actorId,
+            threadId: event.channelId,
+            text,
+          })
+          deps.log('discord_question_modal_submit', { outcome: outcome.outcome, userId: event.actorId })
+          await settleQuestionInteraction(event, interactionToken, outcome)
+        } catch (cause) {
+          deps.warn('discord_question_modal_failed', String(cause))
+          const rest = await deps.rest()
+          if (rest !== undefined) {
+            await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 }).catch(() => {})
+            await deps.componentFollowUp(event.interactionId, interactionToken, '⚠️ 命令处理失败，请稍后重试。').catch(() => {})
+          }
+        }
+        return
+      }
       if (event.interactionType !== 3) return
       const customId = event.data['custom_id']
       if (typeof customId !== 'string') return
