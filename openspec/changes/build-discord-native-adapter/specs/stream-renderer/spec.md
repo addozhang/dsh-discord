@@ -67,11 +67,15 @@ The adapter SHALL allow a project channel to choose between text-only, essential
 - **THEN** tool progress is omitted from Discord while assistant text and terminal status remain available
 
 ### Requirement: Fixed adapter-owned iconography
-Tool activity rows and adapter notices SHALL carry fixed emoji prefixes chosen from an adapter-owned constant table: tool state uses the traffic-light set (running 🟡, succeeded ✅, failed ❌), tool categories reuse the label allowlist (Shell ⌨️, Read 📖, Write ✍️, Edit ✏️, Search 🔍, Find 🗂️, Web 🌐, generic fallback 🧩), and notices use kind-fixed prefixes (⚠️ failure/unknown, 💡 guidance, 🛑 stop, ↪️ steer, ⏳ queued). Assistant answer text SHALL NOT carry icon prefixes. The table SHALL live in one module and SHALL be the only source of iconography; icons SHALL never be derived from model output, tool output, or Host presentation views, and the sanitized text labels SHALL remain unchanged beside them.
+Tool activity rows and adapter notices SHALL carry fixed emoji prefixes chosen from an adapter-owned constant table. State marking SHALL be exception-only: a running row is prefixed 🟡 and a failed row ❌, while a succeeded row SHALL NOT carry a state icon — the disappearing amber marker is the completion signal, and a column of identical ✅ marks is noise. Tool categories reuse the label allowlist (Shell ⌨️, Read 📖, Write ✍️, Edit ✏️, Search 🔍, Find 🗂️, Web 🌐, generic fallback 🧩), and notices use kind-fixed prefixes (⚠️ failure/unknown, 💡 guidance, 🛑 stop, ↪️ steer, ⏳ queued). Assistant answer text SHALL NOT carry icon prefixes. The table SHALL live in one module and SHALL be the only source of iconography; icons SHALL never be derived from model output, tool output, or Host presentation views, and the sanitized text labels SHALL remain unchanged beside them.
 
-#### Scenario: Tool rows render state and category icons
-- **WHEN** a tool activity row is rendered for a running, succeeded, or failed call
-- **THEN** the row is prefixed by the state icon and the category icon from the constant table, followed by the unchanged sanitized label
+#### Scenario: Running and failed rows are marked
+- **WHEN** a tool activity row is rendered for a running or failed call
+- **THEN** the row is prefixed by the state icon (🟡 or ❌) followed by the category icon and the unchanged sanitized label
+
+#### Scenario: Succeeded rows stay quiet
+- **WHEN** a tool call completes successfully
+- **THEN** its row renders the category icon and label without any state icon, and the earlier 🟡 marker disappears through the coalesced edit of the same activity message
 
 #### Scenario: Unknown tool falls back
 - **WHEN** a tool name is outside the category allowlist
