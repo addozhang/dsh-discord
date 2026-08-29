@@ -208,3 +208,54 @@ describe('live render: per-step answer separation', () => {
     expect(sends).toHaveLength(1)
   })
 })
+
+describe('live render: admission-time typing (Kimaki pattern)', () => {
+  it('starts typing when a prompt is queued, before any turn event', async () => {
+    const calls = await drive([
+      { type: 'session/queue', sessionId: 'sess-1', items: [{ id: 'm-1', summary: 'hello' }] } as LiveFrame,
+    ], { threadForSession: () => 'thread-1' })
+
+    expect(calls.filter(call => call.kind === 'typing')).toHaveLength(1)
+  })
+
+  it('stops typing when the queue drains with no open turn', async () => {
+    const calls = await drive([
+      { type: 'session/queue', sessionId: 'sess-1', items: [{ id: 'm-1', summary: 'hello' }] } as LiveFrame,
+      { type: 'session/queue', sessionId: 'sess-1', items: [] } as LiveFrame,
+      // A later turn must still start typing: the lifecycle was reset, not stuck.
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+    ], { threadForSession: () => 'thread-1' })
+
+    // admission typing → stop → turn typing: two pulses reach the wire.
+    expect(calls.filter(call => call.kind === 'typing').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('restarts typing on a later turn after a previous turn ended', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'turn/end', { turn: 1, reason: { kind: 'stop' } }),
+      sessionEvent('sess-1', 'turn/start', { turn: 2 }),
+    ], { threadForSession: () => 'thread-1' })
+
+    expect(calls.filter(call => call.kind === 'typing').length).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('live render: session-title rename', () => {
+  it('renames the thread when the DSH session title lands, once per distinct title', async () => {
+    const calls = await drive([
+      { type: 'session/projection', sessionId: 'sess-1', key: 'title', value: '阅读 main 分支当前状态' } as LiveFrame,
+      { type: 'session/projection', sessionId: 'sess-1', key: 'title', value: '阅读 main 分支当前状态' } as LiveFrame,
+    ], { threadForSession: () => 'thread-1' })
+
+    const renames = calls.filter(call => call.kind === 'rename')
+    expect(renames).toEqual([{ kind: 'rename', channelId: 'thread-1', content: '阅读 main 分支当前状态' }])
+  })
+
+  it('ignores title projections for sessions without a bound thread', async () => {
+    const calls = await drive([
+      { type: 'session/projection', sessionId: 'sess-unknown', key: 'title', value: 'x' } as LiveFrame,
+    ], { threadForSession: () => undefined })
+    expect(calls.filter(call => call.kind === 'rename')).toHaveLength(0)
+  })
+})

@@ -53,7 +53,11 @@ The adapter SHALL treat `assistant/message` as the authoritative completion of i
 - **THEN** the adapter closes typing and activity state exactly once without inventing an assistant answer
 
 ### Requirement: Typing lifecycle
-The adapter SHALL refresh Discord typing state while a Turn is actively producing work and SHALL stop refreshing it on terminal completion, cancellation, interaction wait, failure, or plugin disposal.
+The adapter SHALL refresh Discord typing state while a Turn is actively producing work and also while a submitted prompt is queued for one (the admission-to-first-event window), and SHALL stop refreshing it on terminal completion, cancellation, interaction wait, failure, or plugin disposal.
+
+#### Scenario: Prompt queues before the turn starts
+- **WHEN** DSH accepts a prompt and its queue snapshot becomes non-empty with no turn open
+- **THEN** typing refresh starts immediately and keeps the processing state visible until the turn starts or the queue drains
 
 #### Scenario: Agent waits for approval
 - **WHEN** DSH emits an approval or question request

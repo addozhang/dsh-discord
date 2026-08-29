@@ -146,6 +146,13 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       onFlush: flushAnswer(threadId, runtime),
     })
     runtime.finalizer = undefined
+    // A fresh lifecycle per turn: start() no-ops on a stopped one, so a
+    // second turn in the same thread would otherwise never type again.
+    runtime.typing.dispose()
+    runtime.typing = createTypingLifecycle({
+      trigger: () => deps.delivery.typing(threadId),
+      intervalMs: deps.typingIntervalMs,
+    })
     runtime.typing.start()
   }
 
@@ -288,6 +295,18 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     if (type === 'session/queue') {
       const items = Array.isArray(frame['items']) ? frame['items'] : []
       deps.onQueueSnapshot?.(sessionId, items.map(item => queueSummary(item)))
+      // Kimaki admission-time typing: typing starts when the prompt is
+      // ENQUEUED — covering the queue wait, agent startup, and first-token
+      // latency before the first turn event — and stops when the queue
+      // drains with no turn open (never wedges the indicator on).
+      const threadId = deps.threadForSession(sessionId)
+      if (threadId === undefined) return
+      const runtime = runtimeFor(threadId)
+      if (items.length > 0) {
+        runtime.typing.start()
+        return
+      }
+      if (!runtime.render.snapshot().turnOpen) runtime.typing.stop()
       return
     }
     if (type === 'session/projection') {
