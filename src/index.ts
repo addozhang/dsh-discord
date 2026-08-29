@@ -20,26 +20,22 @@ import { createSharedRestClient, type SharedRestClient } from './discord/rest.js
 import { createRestThreadPort } from './discord/thread-port.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
-import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, type DshApiProxyFace } from './dsh/api-proxy-face.js'
-import { createProjectListView, workspaceAutocompleteChoices } from './features/project-list.js'
-import { projectInfo } from './features/project-info.js'
+import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, type DshApiProxyFace } from './dsh/api-proxy-face.js'
 import { createApprovalStore } from './features/approval-store.js'
 import { createQuestionStore } from './features/question-store.js'
-import { handleApprovalClick, type DshApprovalRespondPort } from './features/approval-routing.js'
+import type { DshApprovalRespondPort } from './features/approval-routing.js'
+import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey } from './state/domain.js'
 import { createBindingStore } from './state/bindings.js'
 import { createIntentStore, type InboundIntentRecord } from './state/intents.js'
 import { createTurnTracker } from './features/turn-ownership.js'
-import { planSteer } from './features/steer-control.js'
-import { planStop } from './features/stop-control.js'
-import { cancelSessionViaProxy, removeQueueItemViaProxy, steerSession } from './dsh/api-proxy-face.js'
 import { createThreadCreationFlow, type DiscordThreadPort } from './features/thread-creation.js'
 import { createSessionCreationFlow, type DshSessionPort } from './features/session-creation.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from './features/prompt-submission.js'
 import { createSessionMainline } from './features/session-mainline.js'
 import { startLiveRender } from './stream/live.js'
 import type { ChannelBinding, ThreadBinding } from './state/records.js'
-import { evaluateAuthorization, levelAtLeast, type PolicyTable } from './policy/authorization.js'
+import type { PolicyTable } from './policy/authorization.js'
 import { planWorkspaceChannel, workspaceChannelName, type ChannelBindingState } from './features/workspace-channel.js'
 import type { GatewaySocket } from './gateway/gateway.js'
 
@@ -375,6 +371,34 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       return answer === undefined ? { outcome: 'unknown' } : { outcome: 'confirmed' }
     },
   }
+  const approvals = createApprovalStore({ get: () => undefined, put: async () => {} })
+  const queueSnapshots: Map<string, Array<{ id: string; summary: string }>> = new Map()
+  const interactionRouter = createInteractionRouter({
+    policy,
+    applicationId: () => applicationIdRef.current,
+    registry: () => runtimeRef.current?.registry,
+    approvals,
+    approvalRespondPort,
+    turnTracker,
+    queueSnapshots,
+    dsh: {
+      cancel: sessionId => cancelSessionViaProxy(apiProxy, { sessionId }, { log: rpcLog }),
+      steer: (sessionId, prompt) => steerSession(apiProxy, { sessionId, prompt }, { log: rpcLog }),
+      removeQueueItem: (sessionId, itemId) => removeQueueItemViaProxy(apiProxy, { sessionId, itemId }, { log: rpcLog }),
+      readWorkspaceDetail: reference => readWorkspaceDetail(apiProxy, reference, { log: rpcLog }),
+    },
+    catalogPort,
+    resolver,
+    channelBinding: (guildId, channelId) => bindingStore.get(bindChannelKey(guildId, channelId)),
+    findBoundChannelFor,
+    sessionForThread: (guildId, threadId) => bindings.sessionForThread(guildId, threadId),
+    ensureWorkspaceChannel,
+    rest: sharedRest,
+    log: rpcLog,
+    warn: (event, detail) => {
+      emitLog(ctx, 'warn', { event, detail: typeof detail === 'string' ? detail : JSON.stringify(detail ?? null) })
+    },
+  })
   runtimeRef.current = startDiscordAdapter({
     tokenProvider: async () => (await resolveDiscordBotToken(credentials)) ?? undefined,
     socketFactory: (url): GatewaySocket => {
@@ -439,404 +463,14 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         await rest.request('POST', `/guilds/${guildId}/channels`, { name: 'general', type: 0, parent_id: ensured.categoryId })
       })
     },
-    approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
+    approvals,
     questions: createQuestionStore(),
     status: statusTracker,
-    routeInteraction: async (event, interactionToken) => {
-      const runtime = runtimeRef.current
-      if (runtime === undefined) return
-      // Slash commands (type 2): deferred ephemeral ack, then the feature
-      // result as an ephemeral followup. /project list+bind close the loop.
-      rpcLog('discord_slash_dispatch', {
-        interactionId: (event as { interactionId?: string }).interactionId,
-        commandName: (event as { commandName?: string }).commandName,
-        hasToken: interactionToken !== undefined,
-      })
-      // Autocomplete (type 4, the Kimaki /resume pattern): live choices for
-      // workspace options so no id is ever copy-pasted. Discovery is gated
-      // by membership — non-members get zero choices.
-      if (event.kind === 'interaction' && event.interactionType === 4 && interactionToken !== undefined) {
-        if (event.commandName !== 'project') return
-        const decision = evaluateAuthorization(policy(), {
-          guildId: event.guildId,
-          userId: event.actorId,
-          roleIds: event.roleIds,
-          memberPermissions: event.memberPermissions,
-          isBot: event.isBot,
-        })
-        const choices: Array<{ name: string; value: string }> = []
-        if (decision.allowed) {
-          const wireOptions = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string; focused?: boolean }> }> | undefined
-          const sub = Array.isArray(wireOptions) ? wireOptions[0] : undefined
-          const focused = Array.isArray(sub?.options) ? sub.options.find(option => option.focused === true) : undefined
-          const query = typeof focused?.value === 'string' ? focused.value : ''
-          const catalog = await catalogPort.listWorkspaces()
-          if (catalog.outcome === 'completed') {
-            choices.push(...workspaceAutocompleteChoices(catalog.workspaces, query).slice(0, 25))
-          }
-        }
-        await withRest(async (rest) => {
-          const posted = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, {
-            type: 8,
-            data: { choices },
-          })
-          if (posted.outcome !== 'completed') {
-            rpcLog('discord_autocomplete_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
-          }
-        })
-        return
-      }
-      if (event.kind === 'interaction' && event.interactionType === 2 && interactionToken !== undefined) {
-        const rest = await sharedRest()
-        if (rest === undefined) { rpcLog('discord_ack_failed', 'missing-token'); return }
-        const ack = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 5, data: { flags: 64 } })
-        if (ack.outcome !== 'completed') { rpcLog('discord_ack_failed', ack.outcome); return }
-        // Deferred-ack followups must never fail silently: the REST client
-        // resolves (never rejects) 4xx outcomes, so a void'ed call would drop
-        // the failure without a trace.
-        const followUp = async (
-          content: string,
-          components?: Array<unknown>,
-        ): Promise<void> => {
-          const posted = await rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, {
-            content,
-            flags: 64,
-            ...(components === undefined ? {} : { components }),
-          })
-          if (posted.outcome !== 'completed') {
-            rpcLog('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
-          }
-        }
-        const buttonRow = (confirmId: string, cancelId: string): Array<unknown> => [{
-          type: 1,
-          components: [
-            { type: 2, style: 3, label: '确认绑定', custom_id: confirmId },
-            { type: 2, style: 4, label: '取消', custom_id: cancelId },
-          ],
-        }]
-        try {
-          if (event.commandName === 'project') {
-            const options = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string }> }> | undefined
-            const subcommand = Array.isArray(options) ? options[0] : undefined
-            const subName = subcommand?.name
-            if (subName === 'bind') {
-              // Kimaki add-project semantics: bind provisions (or reuses)
-              // the Workspace's home channel under the adapter category.
-              // The current channel — e.g. the control channel — is never
-              // captured; only the opaque ws: reference crosses the wire.
-              const decision = evaluateAuthorization(policy(), {
-                guildId: event.guildId,
-                userId: event.actorId,
-                roleIds: event.roleIds,
-                memberPermissions: event.memberPermissions,
-                isBot: event.isBot,
-              })
-              if (!decision.allowed || !levelAtLeast(decision.level, 'workspace-administrator')) {
-                await followUp('⛔ 只有工作区管理员可以绑定频道。')
-                return
-              }
-              const wireOptions = Array.isArray(subcommand?.options) ? subcommand.options : []
-              const reference = wireOptions.find(option => option.name === 'workspace')?.value
-              if (typeof reference !== 'string' || reference === '') {
-                await followUp('用法：/project bind workspace:<从候选中选择>')
-                return
-              }
-              const resolvedWorkspace = await resolver.resolve(reference)
-              if (resolvedWorkspace.outcome !== 'found') {
-                await followUp(resolvedWorkspace.outcome === 'stale'
-                  ? '⚠️ 该工作区已不存在，请用 /project bind 的候选重新选择。'
-                  : resolvedWorkspace.outcome === 'unknown'
-                    ? '⚠️ 工作区目录未在限时内确认（结果未知），请稍后重试。'
-                    : '⚠️ 工作区目录暂时不可用，请稍后重试。')
-                return
-              }
-              const { id: workspaceId, title } = resolvedWorkspace.workspace
-              const existing = findBoundChannelFor(event.guildId, workspaceId)
-              if (existing !== undefined) {
-                // Idempotent, Kimaki-style: one workspace, one channel.
-                await followUp(`工作区「${title}」的频道已存在于：<#${existing}>`)
-                return
-              }
-              const expiresAtMs = Date.now() + 15 * 60 * 1000
-              const confirmId = runtime.registry.register({ kind: 'project-bind', action: 'confirm', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
-              const cancelId = runtime.registry.register({ kind: 'project-bind', action: 'cancel', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
-              rpcLog('discord_project_bind_planned', { interactionId: event.interactionId, workspaceId })
-              await followUp(`将为工作区「${title}」创建专属频道（DeepSeek Harness 分类下）？`, buttonRow(confirmId, cancelId))
-              return
-            }
-            if (subName === 'list') {
-              rpcLog('discord_project_list_start', { interactionId: event.interactionId })
-              const view = await createProjectListView(catalogPort, { selectionId: event.interactionId })
-              if (view.outcome !== 'ok') {
-                await followUp(view.reason === 'workspace-catalog-unknown'
-                  ? '⚠️ 工作区目录未在限时内确认（结果未知），请稍后重试。'
-                  : '⚠️ 无法读取工作区目录，请稍后重试。')
-                return
-              }
-              // Names only: the bind option autocompletes live candidates,
-              // so ids never need to be read, copied, or typed.
-              const rows = view.items.map(item => `• ${item.label}`)
-              const pager = view.pageCount > 1 ? `\n（第 ${String(view.pageIndex + 1)}/${String(view.pageCount)} 页）` : ''
-              await followUp(rows.length === 0 ? '（没有已注册的工作区）' : ['**可用工作区**', ...rows].join('\n') + pager)
-              return
-            }
-            if (subName === 'info') {
-              // Info describes THIS channel's bound workspace. Members see
-              // the sanitized identity; the path renders only for proven
-              // workspace administrators (ephemeral either way).
-              const decision = evaluateAuthorization(policy(), {
-                guildId: event.guildId,
-                userId: event.actorId,
-                roleIds: event.roleIds,
-                memberPermissions: event.memberPermissions,
-                isBot: event.isBot,
-              })
-              const binding = bindingStore.get(bindChannelKey(event.guildId, event.channelId))
-              if (binding === undefined) {
-                // Bind provisions the Workspace's home channel — most
-                // channels, including the control channel, are unbound.
-                await followUp(decision.allowed
-                  ? '此频道未绑定工作区；请到工作区的专属频道中使用（/project bind 可创建）。'
-                  : '⛔ 此频道未绑定工作区。')
-                return
-              }
-              const detail = await readWorkspaceDetail(apiProxy, binding.workspaceId, { log: rpcLog })
-              if (!decision.allowed) {
-                // Refuse identity disclosure to non-members even when bound.
-                await followUp('⛔ 只有成员可以查看此频道的绑定。')
-                return
-              }
-              if (detail.outcome !== 'found') {
-                await followUp(detail.outcome === 'unknown'
-                  ? '⚠️ 工作区目录未在限时内确认（结果未知），请稍后重试。'
-                  : detail.outcome === 'stale'
-                    ? '⚠️ 绑定的工作区已不存在；请用 /project bind 重新选择。'
-                    : '⚠️ 无法读取工作区目录，请稍后重试。')
-                return
-              }
-              const view = projectInfo({
-                decision,
-                workspace: { id: detail.workspace.id, title: detail.workspace.title, path: detail.workspace.path },
-              })
-              if (view.outcome !== 'info') {
-                await followUp('⛔ 只有成员可以查看此频道的绑定。')
-                return
-              }
-              const lines = [
-                `**${view.workspace.label}**`,
-                `修订 ${String(binding.revision)}（由 <@${binding.boundBy}> 绑定）`,
-              ]
-              if (view.workspace.path !== undefined) lines.push(`路径：\`${view.workspace.path}\``)
-              await followUp(lines.join('\n'))
-              return
-            }
-            await followUp('未知子命令。')
-            return
-          }
-          // ── Session control commands (session-control spec) ─────────────
-          // Every control path resolves the calling thread's session binding
-          // first; ownership comes from the turn tracker's request IDs, never
-          // from a session's running status.
-          if (event.commandName === 'stop' || event.commandName === 'steer') {
-            const sessionId = bindings.sessionForThread(event.guildId, event.channelId)
-            if (sessionId === undefined) {
-              await followUp('此频道不是适配器拥有的会话线程。')
-              return
-            }
-            if (event.commandName === 'stop') {
-              const result = await planStop(
-                {
-                  cancel: async ({ sessionId: id }) => {
-                    const cancelled = await cancelSessionViaProxy(apiProxy, { sessionId: id }, { log: rpcLog })
-                    return cancelled.outcome === 'accepted'
-                      ? { outcome: 'accepted' as const, pendingPreserved: true }
-                      : cancelled.outcome === 'rejected'
-                        ? { outcome: 'rejected' as const, reason: cancelled.reason }
-                        : { outcome: 'unknown' as const }
-                  },
-                },
-                turnTracker,
-                { sessionId, threadId: event.channelId },
-              )
-              if (result.outcome === 'refused') {
-                await followUp(result.reason === 'no-active-turn'
-                  ? '此线程当前没有可停止的运行中任务。'
-                  : '⛔ 当前运行中的任务不是由此线程提交的，无法停止。')
-                return
-              }
-              if (result.outcome === 'cancelled') {
-                await followUp(result.pendingPreserved ? '✅ 已停止；队列中的待处理消息已保留。' : '✅ 已停止。')
-                return
-              }
-              await followUp(result.outcome === 'rejected'
-                ? '⚠️ DSH 拒绝了停止请求。'
-                : '⚠️ 停止结果未知，请到 DSH Web 确认。')
-              return
-            }
-            // /steer <prompt>
-            const steerText = typeof event.data['options'] === 'object'
-              ? (event.data['options'] as Array<{ name?: unknown; value?: unknown }>).find(option => option.name === 'prompt')?.value
-              : undefined
-            const prompt = typeof steerText === 'string' ? steerText.trim() : ''
-            if (prompt === '') {
-              await followUp('用法：/steer prompt:<插话内容>')
-              return
-            }
-            const result = await planSteer(
-              {
-                steer: async ({ sessionId: id }) => {
-                  const steered = await steerSession(apiProxy, { sessionId: id, prompt }, { log: rpcLog })
-                  return steered.outcome === 'accepted'
-                    ? { outcome: 'accepted' as const }
-                    : steered.outcome === 'rejected'
-                      ? { outcome: 'rejected' as const, reason: steered.reason }
-                      : { outcome: 'unknown' as const }
-                },
-              },
-              turnTracker,
-              { sessionId, threadId: event.channelId, prompt },
-            )
-            if (result.outcome === 'refused') {
-              await followUp(result.reason === 'no-active-turn'
-                ? '此线程当前没有运行中的任务可插话。'
-                : '⛔ 当前任务不是由此线程提交的，无法插话。')
-              return
-            }
-            await followUp(result.outcome === 'accepted'
-              ? '✅ 已插话。'
-              : result.outcome === 'rejected'
-                ? '⚠️ DSH 拒绝了插话。'
-                : '⚠️ 插话结果未知。')
-            return
-          }
-          if (event.commandName === 'queue') {
-            const sessionId = bindings.sessionForThread(event.guildId, event.channelId)
-            if (sessionId === undefined) {
-              await followUp('此频道不是适配器拥有的会话线程。')
-              return
-            }
-            const wireOptions = event.data['options'] as Array<{ name?: unknown; options?: Array<{ name?: unknown; value?: unknown }> }> | undefined
-            const sub = Array.isArray(wireOptions) ? wireOptions[0] : undefined
-            if (sub?.name === 'remove') {
-              const raw = Array.isArray(sub.options) ? sub.options.find(option => option.name === 'item')?.value : undefined
-              const reference = typeof raw === 'string' ? raw.trim() : ''
-              if (reference === '') {
-                await followUp('用法：/queue remove item:</queue list 中的编号>')
-                return
-              }
-              const snapshot = queueSnapshots.get(sessionId)
-              const byPosition = /^\d+$/.test(reference)
-                ? snapshot?.[Number.parseInt(reference, 10) - 1]
-                : snapshot?.find(item => item.id === reference)
-              if (byPosition === undefined) {
-                await followUp('未找到该队列项；请先运行 /queue list 获取最新编号。')
-                return
-              }
-              const removed = await removeQueueItemViaProxy(apiProxy, { sessionId, itemId: byPosition.id }, { log: rpcLog })
-              if (removed.outcome === 'accepted') {
-                await followUp(`✅ 已移除：${byPosition.summary}`)
-                return
-              }
-              await followUp(removed.outcome === 'rejected'
-                ? '⚠️ DSH 拒绝了移除请求（该项可能已被处理）。'
-                : '⚠️ 移除结果未知；请用 /queue list 确认后再试。')
-              return
-            }
-            // /queue list — the mux snapshot cache is the data source.
-            const snapshot = queueSnapshots.get(sessionId)
-            if (snapshot === undefined) {
-              await followUp('⚠️ 暂无队列数据（进程可能刚重启）；等待会话活动后会自动同步。')
-              return
-            }
-            if (snapshot.length === 0) {
-              await followUp('（队列为空）')
-              return
-            }
-            const rows = snapshot.map((item, index) => `${String(index + 1)}. ${item.summary}`)
-            await followUp(['**队列**', ...rows, '', '用 `/queue remove <编号>` 移除。'].join('\n'))
-            return
-          }
-        } catch (cause) {
-          console.error('[dsh-discord] slash handler failed:', cause)
-          await followUp('⚠️ 命令处理失败，请稍后重试。').catch(() => {})
-        }
-        return
-      }
-      // Component clicks (type 3) carry the opaque custom_id. Bind
-      // confirmations resolve first; everything else falls through to the
-      // approval routing, which owns its own registry contexts.
-      if (event.kind !== 'interaction' || event.interactionType !== 3) return
-      const customId = event.data['custom_id']
-      if (typeof customId !== 'string') return
-      const activeRuntime = runtime
-      const resolved = activeRuntime.registry.resolve(customId, Date.now())
-      const bindContext = resolved.found ? resolved.context : undefined
-      if (bindContext?.['kind'] === 'project-bind') {
-        if (interactionToken === undefined) return
-        const rest = await sharedRest()
-        if (rest === undefined) { rpcLog('discord_ack_failed', 'missing-token'); return }
-        // Deferred update ack (type 6): keeps the ephemeral visible while the
-        // commit resolves; the result arrives as a fresh ephemeral followup.
-        const clicked = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
-        if (clicked.outcome !== 'completed') { rpcLog('discord_ack_failed', clicked.outcome); return }
-        const followUpResult = async (content: string): Promise<void> => {
-          const posted = await rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: 64 })
-          if (posted.outcome !== 'completed') {
-            rpcLog('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
-          }
-        }
-        const owner = bindContext['actorId']
-        const workspaceId = bindContext['workspaceId']
-        const workspaceTitle = bindContext['workspaceTitle']
-        const boundGuildId = bindContext['guildId']
-        if (
-          owner !== event.actorId
-          || typeof workspaceId !== 'string'
-          || typeof workspaceTitle !== 'string'
-          || typeof boundGuildId !== 'string'
-        ) {
-          // Another member's button (or a malformed context): deny
-          // ephemerally and leave the control pending for its rightful owner.
-          await followUpResult('⛔ 此确认不属于你。')
-          return
-        }
-        if (bindContext['action'] !== 'confirm') {
-          await followUpResult('已取消，未创建频道。')
-          return
-        }
-        // The write happens only now, on explicit confirmation: provision
-        // (or reuse) the Workspace's home channel and bind it — the channel
-        // the command was typed in is never captured.
-        const ensuredChannel = await ensureWorkspaceChannel({
-          guildId: boundGuildId,
-          workspaceId,
-          title: workspaceTitle,
-          actorId: event.actorId,
-        }).catch((cause: unknown) => {
-          rpcLog('discord_workspace_channel_ensure_threw', String(cause))
-          return undefined
-        })
-        if (ensuredChannel === undefined) {
-          await followUpResult('⚠️ 频道创建失败，请稍后重试。')
-          return
-        }
-        rpcLog('discord_project_bind_commit', { workspaceId, channelId: ensuredChannel.channelId, created: ensuredChannel.created })
-        await followUpResult(ensuredChannel.created
-          ? `✅ 已为工作区「${workspaceTitle}」创建频道：<#${ensuredChannel.channelId}>`
-          : `工作区「${workspaceTitle}」的频道已存在于：<#${ensuredChannel.channelId}>`)
-        return
-      }
-      void handleApprovalClick(
-        {
-          registry: activeRuntime.registry,
-          store: activeRuntime.approvals,
-          port: approvalRespondPort,
-          nowMs: () => Date.now(),
-        },
-        { customId, userId: event.actorId, threadId: event.channelId },
-      ).catch((cause: unknown) => {
-        emitLog(ctx, 'warn', { event: 'discord_approval_click_failed', cause: String(cause) })
-      })
+    routeInteraction: (event, token) => {
+      // The router speaks the interaction dialect only (compose forwards
+      // interactions exclusively).
+      if (event.kind !== 'interaction') return
+      return interactionRouter.route(event, token)
     },
     logger: {
       warn: (event, detail) => {
@@ -874,9 +508,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   })
 
   // ── Live streaming: DSH events.mux → per-thread Discord rendering ─────
-  // The queue snapshot cache is the /queue surface's data source: DSH 0.1.1
-  // has no queue-list RPC, only the authoritative whole-snapshot mux frame.
-  const queueSnapshots = new Map<string, Array<{ id: string; summary: string }>>()
+  // The queue snapshot cache (declared with the interaction router) is the
+  // /queue surface's data source: DSH 0.1.1 has no queue-list RPC, only the
+  // authoritative whole-snapshot mux frame.
   const threadForSession = (sessionId: string): string | undefined => {
     for (const [key, record] of threadRows) {
       if (record.sessionId !== sessionId) continue
