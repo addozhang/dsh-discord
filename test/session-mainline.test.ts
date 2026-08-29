@@ -30,6 +30,7 @@ interface Fixture {
 
 function createFixture(options: {
   createThread?: DiscordThreadPort['createThread']
+  joinThread?: DiscordThreadPort['joinThread']
   createSession?: DshSessionPort['createSession']
   submit?: DshPromptPort['submit']
 } = {}): Fixture {
@@ -39,6 +40,7 @@ function createFixture(options: {
   const threads: DiscordThreadPort = {
     createThread: options.createThread ?? (() => Promise.resolve({ outcome: 'completed', threadId: 'thread-1' })),
     findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
+    joinThread: options.joinThread ?? (() => Promise.resolve()),
   }
   const sessions: DshSessionPort = {
     createSession: options.createSession ?? ((request) => Promise.resolve({ outcome: 'completed', sessionId: request.sessionId })),

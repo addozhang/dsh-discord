@@ -93,6 +93,7 @@ export function createSessionMainline(deps: SessionMainlineDeps): {
         guildId: request.guildId,
         parentChannelId: request.channelId,
         threadName: safeTitle(request.prompt),
+        creatorUserId: request.authorId,
       })
       if (thread.outcome === 'conflict') return { outcome: 'thread-conflict' }
       if (thread.outcome !== 'created' && thread.outcome !== 'recovered') {

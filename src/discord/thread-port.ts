@@ -59,6 +59,12 @@ export function createRestThreadPort(rest: ThreadPortRest): DiscordThreadPort {
       }
       return { outcome: 'not-found' }
     },
+
+    async joinThread(request) {
+      // Idempotent per Discord (joining an existing member answers 2xx);
+      // callers treat this as best-effort and never fail the task on it.
+      await rest.request('PUT', `/channels/${request.threadId}/thread-members/${request.userId}`)
+    },
   }
 }
 

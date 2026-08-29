@@ -17,6 +17,7 @@ function threadPort(): DiscordThreadPort & { created: string[] } {
   let counter = 0
   return {
     created,
+    joinThread: () => Promise.resolve(),
     createThread: () => {
       counter += 1
       const threadId = `thread-${String(counter)}`
@@ -68,6 +69,7 @@ describe('thread creation intent', () => {
       },
       findThreadBySource: (request: { sourceMessageId: string }) =>
         Promise.resolve({ outcome: 'found', threadId: `recovered-for-${request.sourceMessageId}` }),
+      joinThread: () => Promise.resolve(),
     }
     const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
 
@@ -89,9 +91,74 @@ describe('thread creation intent', () => {
     const discord: DiscordThreadPort = {
       createThread: () => Promise.resolve({ outcome: 'failed' }),
       findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
+      joinThread: () => Promise.resolve(),
     }
     const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
     const result = await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x' })
     expect(result).toEqual({ outcome: 'failed' })
+  })
+})
+
+describe('author join', () => {
+  it('joins the task author on a freshly created thread', async () => {
+    const intents = createIntentStore(createKvTableStub())
+    const joined: Array<{ threadId: string; userId: string }> = []
+    const discord: DiscordThreadPort = {
+      createThread: () => Promise.resolve({ outcome: 'completed', threadId: 'thread-1' }),
+      findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
+      joinThread: (request) => {
+        joined.push(request)
+        return Promise.resolve()
+      },
+    }
+    const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
+
+    await flow.ensureThread({
+      sourceMessageId: 'm-1', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1',
+      threadName: 'x', creatorUserId: 'member-9',
+    })
+
+    expect(joined).toEqual([{ threadId: 'thread-1', userId: 'member-9' }])
+  })
+
+  it('joins the author on the recovery path too, and a join throw stays non-fatal', async () => {
+    const intents = createIntentStore(createKvTableStub())
+    // Simulated crash window: intent claimed, no thread id recorded.
+    await intents.claim({ messageId: 'm-crash', contentHash: 'h', claimedAtMs: 1 })
+    const joined: string[] = []
+    const discord: DiscordThreadPort = {
+      createThread: () => Promise.resolve({ outcome: 'failed' }),
+      findThreadBySource: () => Promise.resolve({ outcome: 'found', threadId: 'recovered-1' }),
+      joinThread: (request) => {
+        joined.push(request.threadId)
+        return Promise.reject(new Error('join refused'))
+      },
+    }
+    const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
+
+    const result = await flow.ensureThread({
+      sourceMessageId: 'm-crash', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1',
+      threadName: 'x', creatorUserId: 'member-9',
+    })
+
+    expect(result).toEqual({ outcome: 'recovered', threadId: 'recovered-1' })
+    expect(joined).toEqual(['recovered-1'])
+  })
+
+  it('skips the join when no author id is provided', async () => {
+    const intents = createIntentStore(createKvTableStub())
+    let joins = 0
+    const discord: DiscordThreadPort = {
+      createThread: () => Promise.resolve({ outcome: 'completed', threadId: 'thread-1' }),
+      findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
+      joinThread: () => {
+        joins += 1
+        return Promise.resolve()
+      },
+    }
+    const flow = createThreadCreationFlow({ intents, discord, nowMs: () => 1_000 })
+
+    await flow.ensureThread({ sourceMessageId: 'm-1', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x' })
+    expect(joins).toBe(0)
   })
 })

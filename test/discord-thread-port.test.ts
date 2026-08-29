@@ -96,3 +96,16 @@ describe('createRestThreadPort', () => {
     })).resolves.toEqual({ outcome: 'not-found' })
   })
 })
+
+describe('thread membership', () => {
+  it('PUTs the author into the thread members', async () => {
+    const { rest, requests } = createRest([
+      { outcome: 'completed', body: {} },
+    ])
+    await createRestThreadPort(rest).joinThread({ threadId: 't-1', userId: 'u-9' })
+    expect(requests[0]).toMatchObject({
+      method: 'PUT',
+      path: '/channels/t-1/thread-members/u-9',
+    })
+  })
+})
