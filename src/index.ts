@@ -168,7 +168,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (rest === undefined) return { outcome: 'unknown', reason: 'network-unreachable' }
         return rest.request(method, path, body)
       },
-    })
+    }, { autoArchiveMinutes: () => current.threadAutoArchiveMinutes })
     return {
       ...port,
       // The join only affects sidebar visibility, but a silent refusal is

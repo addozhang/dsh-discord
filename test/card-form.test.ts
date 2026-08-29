@@ -206,3 +206,51 @@ describe('DiscordCardForm status surface (2.3)', () => {
     expect(store.getSnapshot().status?.connectionKey).toBe('discordStatusInvalidToken')
   })
 })
+
+describe('archive select field', () => {
+  it('stages a supported duration as a number write and clears back to the layer', async () => {
+    const host = fakeScope()
+    const form = new DiscordCardForm(host.scope)
+    const store = form.bind()
+    const actions = form.actions()
+
+    actions.edit('threadAutoArchiveMinutes', '4320')
+    let state = store.getSnapshot()
+    expect(state.dirty).toBe(true)
+    expect(state.invalid).toBe(false)
+    expect(state.threadAutoArchiveMinutes.overridden).toBe(true)
+    expect(state.threadAutoArchiveMinutes.text).toBe('4320')
+
+    actions.save()
+    await vi.waitFor(() => {
+      state = store.getSnapshot()
+      expect(state.dirty).toBe(false)
+    })
+    expect(host.user.threadAutoArchiveMinutes).toBe(4320)
+
+    // Reset stages a clear: the field re-inherits the composition layer.
+    actions.edit('threadAutoArchiveMinutes', '10080')
+    actions.resetField('threadAutoArchiveMinutes')
+    actions.save()
+    await vi.waitFor(() => {
+      state = store.getSnapshot()
+      expect(state.dirty).toBe(false)
+    })
+    expect(host.user.threadAutoArchiveMinutes).toBeUndefined()
+  })
+
+  it('marks unsupported durations invalid and refuses to save them', () => {
+    const host = fakeScope()
+    const form = new DiscordCardForm(host.scope)
+    const store = form.bind()
+    const actions = form.actions()
+
+    actions.edit('threadAutoArchiveMinutes', '999')
+    const state = store.getSnapshot()
+    expect(state.invalid).toBe(true)
+    expect(state.threadAutoArchiveMinutes.invalid).toBe(true)
+
+    actions.save()
+    expect(host.user.threadAutoArchiveMinutes).toBeUndefined()
+  })
+})

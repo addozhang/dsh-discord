@@ -33,6 +33,54 @@ export interface FieldProps {
   onReset: () => void
 }
 
+/** One choice in a SelectField. */
+export interface SelectOption {
+  value: string
+  label: string
+}
+
+/**
+ * A staged single-choice field (native select) sharing the ID field's
+ * head layout: label, override badge, reset, and a hint/invalid note.
+ */
+export function SelectField(props: FieldProps & { options: readonly SelectOption[] }): ReactNode {
+  return (
+    <div data-dsh-discord-field="">
+      <div data-dsh-discord-field-head="">
+        <label htmlFor={props.id}>{props.label}</label>
+        {props.overridden
+          ? (
+              <span data-dsh-discord-badges="">
+                <span data-dsh-discord-badge="overridden">{props.overriddenLabel}</span>
+                <button
+                  type="button"
+                  disabled={props.disabled}
+                  onClick={props.onReset}
+                >
+                  {props.resetLabel}
+                </button>
+              </span>
+            )
+          : null}
+      </div>
+      <select
+        id={props.id}
+        aria-invalid={props.invalid}
+        value={props.text}
+        disabled={props.disabled}
+        onChange={event => { props.onEdit(event.currentTarget.value); }}
+      >
+        {props.options.map(option => (
+          <option key={option.value} value={option.value}>{option.label}</option>
+        ))}
+      </select>
+      <p data-dsh-discord-field-note={props.invalid ? 'invalid' : 'hint'}>
+        {props.invalid ? props.invalidLabel : props.hint}
+      </p>
+    </div>
+  )
+}
+
 /**
  * A staged multi-line Discord ID field.
  * @param props - the field's copy, its staged text, and the edit actions.

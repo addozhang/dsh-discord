@@ -34,7 +34,10 @@ interface DiscordPluginsLocale {
   discordDeniedRoleIdsHint: string
   discordHostOperatorUserIds: string
   discordHostOperatorUserIdsHint: string
+  discordThreadAutoArchive: string
+  discordThreadAutoArchiveHint: string
   discordInvalidIds: string
+  discordInvalidArchive: string
   discordStatusConnected: string
   discordStatusConnecting: string
   discordStatusDisconnected: string

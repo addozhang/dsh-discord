@@ -23,7 +23,13 @@ export interface DiscordSettings {
   typingIntervalMs: number
   approvalTimeoutMs: number
   questionTimeoutMs: number
+  /** Task-thread auto-archive; Discord supports exactly these four values. */
+  threadAutoArchiveMinutes: ThreadAutoArchiveMinutes
 }
+
+/** The archive durations Discord's API accepts (minutes). */
+export type ThreadAutoArchiveMinutes = 60 | 1440 | 4320 | 10080
+export const THREAD_AUTO_ARCHIVE_OPTIONS: readonly ThreadAutoArchiveMinutes[] = [60, 1440, 4320, 10080]
 
 export const DEFAULT_DISCORD_SETTINGS: DiscordSettings = Object.freeze({
   enabled: false,
@@ -40,6 +46,7 @@ export const DEFAULT_DISCORD_SETTINGS: DiscordSettings = Object.freeze({
   typingIntervalMs: 7_000,
   approvalTimeoutMs: 10 * 60_000,
   questionTimeoutMs: 30 * 60_000,
+  threadAutoArchiveMinutes: 1440,
 })
 
 const discordIdList = z.array(z.string()).default([])
@@ -56,6 +63,8 @@ export const DiscordSettingsSchema: z<DiscordSettings> = z.object({
   hostOperatorUserIds: discordIdList,
   defaultVerbosity: z.union(['text-only', 'essential-tools', 'full-tools'] as const)
     .default('essential-tools'),
+  threadAutoArchiveMinutes: z.union([60, 1440, 4320, 10080] as const)
+    .default(1440),
   streamUpdateIntervalMs: z.number().step(1).min(250).max(10_000).default(800),
   typingIntervalMs: z.number().step(1).min(1_000).max(30_000).default(7_000),
   approvalTimeoutMs: z.number().step(1).min(30_000).max(86_400_000).default(600_000),
@@ -107,6 +116,9 @@ export function validateDiscordSettings(input: DiscordSettings): void {
     if (!Number.isSafeInteger(input[field]) || input[field] < 30_000 || input[field] > 86_400_000) {
       throw new TypeError(`${field} must be between 30000 and 86400000`)
     }
+  }
+  if (!THREAD_AUTO_ARCHIVE_OPTIONS.includes(input.threadAutoArchiveMinutes)) {
+    throw new TypeError('threadAutoArchiveMinutes must be one of 60, 1440, 4320, 10080')
   }
 }
 

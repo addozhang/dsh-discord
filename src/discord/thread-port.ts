@@ -26,16 +26,21 @@ export interface ThreadPortRest {
 /** Bound the crash-recovery scan: never walk an unbounded thread list. */
 const MAX_THREADS_SCANNED = 25
 
-/** Kimaki's OneDay auto-archive keeps abandoned task threads out of the way. */
-const AUTO_ARCHIVE_ONE_DAY = 1440
+/** Kimaki's OneDay archive is the default; the deployment can widen or narrow it. */
+const DEFAULT_AUTO_ARCHIVE_MINUTES = 1440
 
-export function createRestThreadPort(rest: ThreadPortRest): DiscordThreadPort {
+export interface ThreadPortOptions {
+  /** Live archive-duration reader (Discord accepts 60/1440/4320/10080). */
+  autoArchiveMinutes?: () => number | undefined
+}
+
+export function createRestThreadPort(rest: ThreadPortRest, options: ThreadPortOptions = {}): DiscordThreadPort {
   return {
     async createThread(request) {
       const made = await rest.request<{ id?: string } | undefined>('POST', `/channels/${request.parentChannelId}/threads`, {
         name: request.name,
         type: 11,
-        auto_archive_duration: AUTO_ARCHIVE_ONE_DAY,
+        auto_archive_duration: options.autoArchiveMinutes?.() ?? DEFAULT_AUTO_ARCHIVE_MINUTES,
         message_id: request.sourceMessageId,
       })
       if (made.outcome === 'completed' && typeof made.body?.id === 'string') {

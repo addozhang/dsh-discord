@@ -1,8 +1,9 @@
 /** The Discord adapter's plugin settings card: authorization lists and output behavior. */
 
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { ValueField } from './fields.js'
+import { SelectField, ValueField } from './fields.js'
 import { PluginCard, type PluginCardCopy } from './PluginCard.js'
+import { ARCHIVE_CHOICES, ARCHIVE_FIELD } from './card-form.js'
 import type { DiscordCardFace } from './card-controller.js'
 import type {} from './slot-contract.js'
 
@@ -73,6 +74,19 @@ export function DiscordSettingsCard(props: DiscordSettingsCardProps) {
           onReset={() => { props.resetField(field) }}
         />
       ))}
+      <SelectField
+        id={`plugin-config-discord-${ARCHIVE_FIELD}`}
+        label={t('discordThreadAutoArchive')}
+        hint={t('discordThreadAutoArchiveHint')}
+        overriddenLabel={t('overridden')}
+        resetLabel={t('reset')}
+        invalidLabel={t('discordInvalidArchive')}
+        disabled={disabled}
+        options={ARCHIVE_CHOICES}
+        {...state[ARCHIVE_FIELD]}
+        onEdit={(text) => { props.edit(ARCHIVE_FIELD, text) }}
+        onReset={() => { props.resetField(ARCHIVE_FIELD) }}
+      />
     </PluginCard>
   )
 }
