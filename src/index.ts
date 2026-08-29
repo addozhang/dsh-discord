@@ -161,13 +161,27 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   }
 
   // ── Session mainline: mention → thread → session → prompt → turn ──────
-  const restThreadPort: DiscordThreadPort = createRestThreadPort({
-    request: async (method, path, body) => {
-      const rest = await sharedRest()
-      if (rest === undefined) return { outcome: 'unknown', reason: 'network-unreachable' }
-      return rest.request(method, path, body)
-    },
-  })
+  const restThreadPort: DiscordThreadPort = (() => {
+    const port = createRestThreadPort({
+      request: async (method, path, body) => {
+        const rest = await sharedRest()
+        if (rest === undefined) return { outcome: 'unknown', reason: 'network-unreachable' }
+        return rest.request(method, path, body)
+      },
+    })
+    return {
+      ...port,
+      // The join only affects sidebar visibility, but a silent refusal is
+      // still indistinguishable from a working one — log it (runbook rule).
+      joinThread: async (request) => {
+        const joined = await port.joinThread(request)
+        if (joined.outcome !== 'completed') {
+          rpcLog('discord_thread_join_failed', request)
+        }
+        return joined
+      },
+    }
+  })()
   const dshSessionPort: DshSessionPort = {
     createSession: request => createSessionViaProxy(apiProxy, request, { log: rpcLog }),
   }

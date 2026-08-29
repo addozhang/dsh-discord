@@ -30,6 +30,7 @@ interface Fixture {
 
 function createFixture(options: {
   createThread?: DiscordThreadPort['createThread']
+  joinThread?: DiscordThreadPort['joinThread']
   createSession?: DshSessionPort['createSession']
   submit?: DshPromptPort['submit']
 } = {}): Fixture {
@@ -39,6 +40,7 @@ function createFixture(options: {
   const threads: DiscordThreadPort = {
     createThread: options.createThread ?? (() => Promise.resolve({ outcome: 'completed', threadId: 'thread-1' })),
     findThreadBySource: () => Promise.resolve({ outcome: 'not-found' }),
+    joinThread: options.joinThread ?? (() => Promise.resolve({ outcome: 'completed' })),
   }
   const sessions: DshSessionPort = {
     createSession: options.createSession ?? ((request) => Promise.resolve({ outcome: 'completed', sessionId: request.sessionId })),
@@ -79,8 +81,6 @@ describe('session mainline', () => {
       channelId: 'channel-1',
       messageId: 'm-1',
       authorId: 'member-1',
-      authorName: 'Addo',
-      authorAvatarUrl: 'https://cdn.discordapp.com/avatars/member-1/a.png',
       workspaceId: 'ws-1',
       prompt: 'fix the bug',
     })
@@ -109,8 +109,6 @@ describe('session mainline', () => {
       channelId: 'channel-1',
       messageId: 'm-1',
       authorId: 'member-1',
-      authorName: 'Addo',
-      authorAvatarUrl: undefined,
       workspaceId: 'ws-1',
       prompt: 'fix the bug',
     }
@@ -127,7 +125,7 @@ describe('session mainline', () => {
 
     const result = await f.mainline.admitMention({
       applicationId: APP, guildId: GUILD, channelId: 'channel-1',
-      messageId: 'm-1', authorId: 'member-1', authorName: 'Addo', authorAvatarUrl: undefined,
+      messageId: 'm-1', authorId: 'member-1',
       workspaceId: 'ws-1', prompt: 'fix the bug',
     })
 
@@ -141,7 +139,7 @@ describe('session mainline', () => {
 
     const result = await f.mainline.admitMention({
       applicationId: APP, guildId: GUILD, channelId: 'channel-1',
-      messageId: 'm-1', authorId: 'member-1', authorName: 'Addo', authorAvatarUrl: undefined,
+      messageId: 'm-1', authorId: 'member-1',
       workspaceId: 'ws-1', prompt: 'fix the bug',
     })
 
@@ -155,7 +153,7 @@ describe('session mainline', () => {
 
     const result = await f.mainline.admitMention({
       applicationId: APP, guildId: GUILD, channelId: 'channel-1',
-      messageId: 'm-1', authorId: 'member-1', authorName: 'Addo', authorAvatarUrl: undefined,
+      messageId: 'm-1', authorId: 'member-1',
       workspaceId: 'ws-1', prompt: 'fix the bug',
     })
 
@@ -167,7 +165,7 @@ describe('session mainline', () => {
     const f = createFixture()
     await f.mainline.admitMention({
       applicationId: APP, guildId: GUILD, channelId: 'channel-1',
-      messageId: 'm-1', authorId: 'member-1', authorName: 'Addo', authorAvatarUrl: undefined,
+      messageId: 'm-1', authorId: 'member-1',
       workspaceId: 'ws-1', prompt: 'fix the bug',
     })
 
