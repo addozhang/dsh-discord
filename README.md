@@ -1,6 +1,7 @@
 # @addozhang/dsh-discord
 
 [![npm](https://img.shields.io/npm/v/@addozhang/dsh-discord)](https://www.npmjs.com/package/@addozhang/dsh-discord)
+[![CI](https://img.shields.io/github/actions/workflow/status/addozhang/dsh-discord/ci.yml?branch=main&label=CI)](https://github.com/addozhang/dsh-discord/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/@addozhang/dsh-discord)](./LICENSE)
 [![node](https://img.shields.io/node/v/@addozhang/dsh-discord)](./package.json)
 
