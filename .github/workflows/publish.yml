@@ -24,6 +24,12 @@ jobs:
           cache: pnpm
           registry-url: https://registry.npmjs.org
 
+      # OIDC trusted publishing needs npm >= 11.5.1; the bundled npm on
+      # node 22 predates it and would PUT without credentials (registry
+      # answers 404 to hide the package's existence).
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
       - name: Install
         run: pnpm install --ignore-scripts --frozen-lockfile
 
