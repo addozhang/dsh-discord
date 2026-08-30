@@ -105,16 +105,13 @@ export interface CompositionDeps {
     actorId: string
     audience: 'administrator' | 'member'
   }) => void | Promise<void>
-  /** Idempotently ensure the category + control channel exist in a guild. */
-  ensureGuildChannels?: (guildId: string) => Promise<void>
   /**
-   * Runs once per READY after channel provisioning: the reconciliation
-   * sweep's trigger (startup mapping verification precedes accepting
-   * writes for those mappings — reconciliation spec).
+   * Runs once per READY: the reconciliation sweep — which also self-heals
+   * the adapter's guild surface (category, control channel, bound home
+   * channels) — and the trigger for startup mapping verification preceding
+   * accepted writes for those mappings (reconciliation spec).
    */
   onReady?: () => void | Promise<void>
-  /** Allowlist snapshot used to provision channels on READY. */
-  allowedGuildIds?: readonly string[] | undefined
   /**
    * Registry override so the composition root shares ONE registry instance
    * across the runtime and every feature handler (question controls,
@@ -232,9 +229,6 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
     accept(dispatch: GatewayDispatch): { accepted: boolean; event?: NormalizedInboundEvent; reason?: string; response?: 'silent' | 'ephemeral-denial' }
   } | undefined
 
-  // provisioning style: one category + one control channel per
-  // allowed guild, created idempotently on the first READY.
-  const provisioned = new Set<string>()
   function handleDispatch(dispatch: GatewayDispatch): void {
     if (dispatch.t === 'READY') status.setGateway('connected')
     const accepted = ingress?.accept(dispatch)
@@ -250,15 +244,6 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
       void Promise.resolve(deps.routeInteraction?.(accepted.event, token)).catch((cause: unknown) => {
         console.error('[dsh-discord] interaction handler failed:', cause)
       })
-    }
-    if (dispatch.t === 'READY' && deps.ensureGuildChannels !== undefined) {
-      for (const guildId of deps.allowedGuildIds ?? []) {
-        if (provisioned.has(guildId)) continue
-        provisioned.add(guildId)
-        deps.ensureGuildChannels(guildId).catch((cause: unknown) => {
-          deps.logger?.warn('discord_channel_provision_failed', { guildId, cause: String(cause) })
-        })
-      }
     }
     if (dispatch.t === 'READY' && deps.onReady !== undefined) {
       void Promise.resolve(deps.onReady()).catch((cause: unknown) => {

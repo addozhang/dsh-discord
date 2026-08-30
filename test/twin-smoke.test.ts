@@ -42,6 +42,7 @@ const BOT = '111111111111111111'
 const USER = '222222222222222222'
 const GUILD = '333333333333333333'
 const CHANNEL = '444444444444444444'
+const FREE_CHANNEL = '444444444444444445'
 
 /** Translate the browser-style WebSocket events onto the adapter contract. */
 function twinSocket(url: string): GatewaySocket {
@@ -335,6 +336,10 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
         return { channelId: made.body.id, created: true }
       },
       rest: () => Promise.resolve(rest),
+      purgeChannelBinding: (guildId: string, channelId: string) => {
+        rowMap.delete(channelBindingKey({ applicationId: BOT, guildId, channelId }))
+        return Promise.resolve()
+      },
       log: () => {},
       warn: () => {},
     })
@@ -609,6 +614,64 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     const reply = await discord.channel(threadId).waitForMessage({ predicate: message => message.content.includes('已插话') })
     expect(reply.content).toBe('↪️ 已插话。')
     expect(steerCalls).toEqual([{ sessionId: 'sess-1', prompt: 'focus on auth' }])
+  }, 20_000)
+
+  it('keeps the idempotent bind reply while the bound channel still exists', async () => {
+    // Deterministic seed: ws-1 maps to the live command channel only.
+    for (const [key, binding] of [...rowMap.entries()]) {
+      if (binding.workspaceId === 'ws-1') rowMap.delete(key)
+    }
+    rowMap.set(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }), {
+      workspaceId: 'ws-1', revision: 1, boundBy: USER, boundAtMs: 1,
+    })
+    const interaction = await discord.simulateSlashCommand({
+      channelId: FREE_CHANNEL, userId: USER, name: 'project',
+      options: [{ name: 'bind', type: 1, options: [{ name: 'workspace', type: 3, value: 'ws-1' }] }],
+    })
+    await discord.channel(FREE_CHANNEL).waitForInteractionAck({ interactionId: interaction.id })
+    const reply = await discord.channel(FREE_CHANNEL).waitForMessage({
+      // The precheck reply carries no 💡 prefix — distinct from every
+      // post-ensure copy, so this wait can only match THIS flow's answer.
+      predicate: message => message.content.includes('频道已存在于') && !message.content.includes('💡'),
+    })
+    expect(reply.content).toContain(`<#${CHANNEL}>`)
+    expect(rowMap.has(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }))).toBe(true)
+    rowMap.delete(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }))
+  }, 20_000)
+
+  it('purges a stale channel mapping and binds fresh when the bound channel was deleted', async () => {
+    // The workspace maps to a channel Discord no longer has: a manual
+    // deletion is user intent — the precheck purges and proceeds, never
+    // answering the precheck copy with a <#deleted> mention (未知).
+    const staleChannel = '999999999999999999'
+    rowMap.set(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: staleChannel }), {
+      workspaceId: 'ws-1', revision: 1, boundBy: USER, boundAtMs: 1,
+    })
+    const interaction = await discord.simulateSlashCommand({
+      channelId: FREE_CHANNEL, userId: USER, name: 'project',
+      options: [{ name: 'bind', type: 1, options: [{ name: 'workspace', type: 3, value: 'ws-1' }] }],
+    })
+    await discord.channel(FREE_CHANNEL).waitForInteractionAck({ interactionId: interaction.id })
+    const plan = await discord.channel(FREE_CHANNEL).waitForMessage({
+      predicate: message => message.content.includes('创建专属频道'),
+    })
+    // The stale row was purged at the precheck, before any confirm.
+    expect(rowMap.has(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: staleChannel }))).toBe(false)
+
+    const row = (plan.components?.[0] as { components?: Array<{ custom_id?: string; label?: string }> } | undefined)?.components ?? []
+    const confirmId = row.find(button => button.label === '确认绑定')?.custom_id
+    expect(typeof confirmId).toBe('string')
+    await discord.simulateButtonClick({ channelId: FREE_CHANNEL, userId: USER, messageId: plan.id, customId: confirmId ?? '' })
+    const done = await discord.channel(FREE_CHANNEL).waitForMessage({
+      // Post-ensure copies carry the 💡 prefix; the idempotent precheck
+      // reply (and the unbound notice's text) never match this wait.
+      predicate: message => message.content.includes('💡') && (message.content.includes('已为工作区') || message.content.includes('已存在于')),
+    })
+    // The landing channel is a live one, never the deleted id.
+    expect(done.content).not.toContain(`<#${staleChannel}>`)
+    const bound = [...rowMap.entries()].find(([, binding]) => binding.workspaceId === 'ws-1')
+    expect(bound).toBeDefined()
+    expect(bound?.[0]).not.toContain(staleChannel)
   }, 20_000)
 })
 
@@ -953,6 +1016,7 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
           return rest.request(method as never, path as never, body)
         },
       } as never),
+      purgeChannelBinding: async () => {},
       log: () => {},
       warn: () => {},
     })
@@ -1438,6 +1502,7 @@ describe('twin smoke: isolation matrix (15.11)', () => {
       sessionForThread: () => undefined,
       ensureWorkspaceChannel: () => Promise.resolve(undefined),
       rest: () => Promise.resolve(rest),
+      purgeChannelBinding: async () => {},
       log: () => {},
       warn: () => {},
     })
@@ -1636,6 +1701,7 @@ describe('twin smoke: English copy path (16.25)', () => {
       sessionForThread: () => undefined,
       ensureWorkspaceChannel: () => Promise.resolve(undefined),
       rest: () => Promise.resolve(rest),
+      purgeChannelBinding: async () => {},
       log: () => {},
       warn: () => {},
     })

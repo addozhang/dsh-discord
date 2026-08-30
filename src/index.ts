@@ -18,7 +18,7 @@ import {
   type ConnectionRpc,
 } from './features/adapter-status.js'
 import { DISCORD_BOT_TOKEN_REF, describeDiscordCredential, resolveDiscordBotToken, type DiscordCredentialProvider } from './credential.js'
-import { createSharedRestClient, type SharedRestClient } from './discord/rest.js'
+import { createSharedRestClient, newNonce, type SharedRestClient } from './discord/rest.js'
 import { createRestThreadPort } from './discord/thread-port.js'
 import { createComponentRegistry } from './discord/components.js'
 import { buildCommandRegistrations } from './discord/commands.js'
@@ -145,11 +145,16 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   // RpcResponse and never throw business errors; boundedness and outcome
   // logging live in src/dsh/api-proxy-face.ts.
   const apiProxy = ctx.get('apiProxy') as unknown as DshApiProxyFace
-  // Every apiProxy outcome is visible on stderr: the live profile pass reads
-  // this channel, and a silent call can never again be misread as a hang.
+  // Default-quiet logging (16.33): flow records ride the Host's debug level
+  // only — the adapter prints nothing into the DSH process at the default
+  // level. Failure-shaped events (…failed/…threw/…blocked/…unknown) escalate
+  // to warn so a default-level Host still surfaces them.
   const rpcLog = (event: string, detail?: unknown): void => {
-    console.error(`[dsh-discord] ${event}:`, typeof detail === 'string' ? detail : JSON.stringify(detail ?? null))
-    emitLog(ctx, 'debug', { event, detail: typeof detail === 'string' ? detail : JSON.stringify(detail ?? null) })
+    const serialized = typeof detail === 'string' ? detail : JSON.stringify(detail ?? null)
+    if (process.env['DSH_DISCORD_TRACE'] === '1') {
+      console.error(`[dsh-discord:trace] ${event}:`, serialized)
+    }
+    emitLog(ctx, /(?:failed|threw|blocked|unknown)/.test(event) ? 'warn' : 'debug', { event, detail: serialized })
   }
   void (async () => {
     // The durable domain gates the whole composition: no adapter starts
@@ -524,23 +529,68 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         }
         for (const guildId of current.allowedGuildIds) {
           const facts: Record<string, 'ok' | 'missing' | 'unknown'> = {}
-          const channels = await rest.request<Array<{ id: string }>>('GET', `/guilds/${guildId}/channels`)
-          if (channels.outcome === 'completed') {
+          const channelRows: GuildChannel[] = []
+          const channels = await rest.request<GuildChannel[]>('GET', `/guilds/${guildId}/channels`)
+          const listed = channels.outcome === 'completed'
+          if (listed) {
+            channelRows.push(...channels.body)
             for (const channel of channels.body) facts[channel.id] = 'ok'
             const threads = await rest.request<{ threads?: Array<{ id: string }> } | undefined>('GET', `/guilds/${guildId}/threads/active`)
             if (threads.outcome === 'completed' && Array.isArray(threads.body?.threads)) {
               for (const thread of threads.body.threads) facts[thread.id] = 'ok'
             }
           }
+          // This guild's bindings only: another guild's pass must never
+          // judge (or retire) this guild's mappings against its own facts.
+          const channelKeyById = new Map<string, string>()
+          const threadKeyById = new Map<string, string>()
+          for (const key of channelTable.keys()) {
+            const scope = parseChannelBindingKey(key)
+            if (scope?.guildId !== guildId || scope.channelId === '') continue
+            channelKeyById.set(scope.channelId, key)
+          }
+          for (const key of threadTable.keys()) {
+            const scope = parseThreadBindingKey(key)
+            if (scope?.guildId !== guildId || scope.threadId === '') continue
+            threadKeyById.set(scope.threadId, key)
+          }
+          // Verified absence: the listing succeeded and the channel is gone.
+          if (listed) {
+            for (const channelId of channelKeyById.keys()) {
+              if (facts[channelId] === undefined) facts[channelId] = 'missing'
+            }
+          }
+
+          // Default surface (16.34/16.37): the adapter's category and the
+          // general control channel are ensured on every READY. Bound home
+          // channels are NOT recreated — a Discord-side deletion is user
+          // intent, so the verified absence marked above retires the
+          // mapping in the plan below instead.
+          const category = channelRows.find(channel => channel.type === 4 && channel.name.toLowerCase() === CATEGORY_NAME.toLowerCase())
+            ?? await (async () => {
+              const made = await rest.request<GuildChannel>('POST', `/guilds/${guildId}/channels`, { name: CATEGORY_NAME, type: 4 })
+              if (made.outcome !== 'completed') {
+                // Usually HTTP 403: the bot's roles lack Manage Channels.
+                rpcLog('discord_category_ensure_failed', { guildId, cause: made.outcome === 'rejected' ? `HTTP ${String(made.status)}` : made.reason })
+                return undefined
+              }
+              return made.body
+            })()
+          if (category !== undefined && channelRows.find(channel => channel.type === 0 && channel.name.toLowerCase() === 'general' && channel.parent_id === category.id) === undefined) {
+            const made = await rest.request('POST', `/guilds/${guildId}/channels`, { name: 'general', type: 0, parent_id: category.id })
+            if (made.outcome === 'completed') rpcLog('discord_control_channel_created', { guildId })
+            else rpcLog('discord_control_channel_create_failed', { guildId, cause: made.outcome === 'rejected' ? `HTTP ${String(made.status)}` : made.reason })
+          }
+
           const plan = planBindingReconciliation({
             channelBindings: [...channelTable.entries()].map(([key, record]) => {
               const scope = parseChannelBindingKey(key)
               return { channelId: scope?.channelId ?? '', ...record }
-            }).filter(binding => binding.channelId !== ''),
+            }).filter(binding => binding.channelId !== '' && channelKeyById.has(binding.channelId)),
             threadBindings: [...threadTable.entries()].map(([key, record]) => {
               const scope = parseThreadBindingKey(key)
               return { threadId: scope?.threadId ?? '', ...record }
-            }).filter(binding => binding.threadId !== ''),
+            }).filter(binding => binding.threadId !== '' && threadKeyById.has(binding.threadId)),
             baseline: {
               workspaces: catalog.workspaces.map(workspace => ({ workspaceId: workspace.id, title: workspace.title, path: '' })),
               sessionIds: sessionIds.ids,
@@ -549,16 +599,16 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           })
           for (const action of plan.channelActions) {
             if (action.action !== 'retire') continue
-            const scope = parseChannelBindingKey(channelBindingKey({ applicationId: applicationIdRef.current, guildId, channelId: action.channelId }))
-            if (scope === undefined) continue
-            await channelTable.delete(channelBindingKey(scope))
+            const key = channelKeyById.get(action.channelId)
+            if (key === undefined) continue
+            await channelTable.delete(key)
             rpcLog('discord_reconcile_channel_retired', { channelId: action.channelId, reason: action.reason })
           }
           for (const action of plan.threadActions) {
             if (action.action !== 'retire') continue
-            const scope = parseThreadBindingKey(threadBindingKey({ applicationId: applicationIdRef.current, guildId, threadId: action.threadId }))
-            if (scope === undefined) continue
-            await threadTable.delete(threadBindingKey(scope))
+            const key = threadKeyById.get(action.threadId)
+            if (key === undefined) continue
+            await threadTable.delete(key)
             rpcLog('discord_reconcile_thread_retired', { threadId: action.threadId, reason: action.reason })
           }
         }
@@ -667,6 +717,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       sessionForThread: (guildId, threadId) => bindings.sessionForThread(guildId, threadId),
       ensureWorkspaceChannel,
       rest: sharedRest,
+      purgeChannelBinding: async (guildId, channelId) => {
+        await channelTable.delete(bindChannelKey(guildId, channelId))
+        rpcLog('discord_reconcile_channel_retired', { channelId, reason: 'discord-deleted' })
+      },
       log: rpcLog,
       warn: (event, detail) => {
         emitLog(ctx, 'warn', { event, detail: typeof detail === 'string' ? detail : JSON.stringify(detail ?? null) })
@@ -709,7 +763,6 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       ...(process.env['DSH_DISCORD_GATEWAY_URL'] === undefined
         ? {}
         : { gatewayUrl: process.env['DSH_DISCORD_GATEWAY_URL'] }),
-      allowedGuildIds: [...current.allowedGuildIds],
       applicationId: () => applicationIdRef.current,
       mainline,
       bindings,
@@ -724,16 +777,6 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           }
         }).catch((cause: unknown) => {
           rpcLog('discord_unbound_notice_threw', String(cause))
-        })
-      },
-      ensureGuildChannels: async (guildId) => {
-        await withRest(async (rest) => {
-          const ensured = await ensureCategory(rest, guildId)
-          if (ensured === undefined) return
-          // Never touch channels outside our category: create our own only.
-          const hasControl = ensured.channels.some((c) => c.type === 0 && c.name.toLowerCase() === 'general' && c.parent_id === ensured.categoryId)
-          if (hasControl) return
-          await rest.request('POST', `/guilds/${guildId}/channels`, { name: 'general', type: 0, parent_id: ensured.categoryId })
         })
       },
       approvals: approvalsStore,
@@ -811,7 +854,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           // The nonce lets an unobservable send be reconciled instead of
           // blindly retried (rest.ts contract): a message that actually
           // landed is found by its nonce and reported completed.
-          const nonce = crypto.randomUUID()
+          const nonce = newNonce()
           const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${request.channelId}/messages`, {
             content: request.content,
             flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG,
@@ -827,7 +870,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             rpcLog('discord_live_send_unknown', { channelId: request.channelId })
             return { outcome: 'unknown' }
           }
-          rpcLog('discord_live_send_failed', { channelId: request.channelId, outcome: sent.outcome })
+          if (sent.outcome === 'rejected') {
+            rpcLog('discord_live_send_failed', { channelId: request.channelId, status: sent.status, error: sent.error })
+          } else {
+            rpcLog('discord_live_send_failed', { channelId: request.channelId, outcome: sent.outcome })
+          }
           return { outcome: 'failed' }
         },
         edit: async (request) => {
@@ -838,6 +885,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG,
             allowed_mentions: ALLOWED_MENTIONS_NONE,
           })
+          if (edited.outcome === 'rejected') {
+            rpcLog('discord_live_edit_failed', { channelId: request.channelId, status: edited.status, error: edited.error })
+          }
           return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
         },
         typing: async (channelId) => {

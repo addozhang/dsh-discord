@@ -77,6 +77,12 @@ export interface InteractionRouterDeps {
     text: string
   }) => QuestionInteractionOutcome
   rest: () => Promise<SharedRestClient | undefined>
+  /**
+   * Delete one channel→Workspace binding row (bind precheck: a bound
+   * channel that Discord no longer has is user intent — purge, then bind
+   * fresh; task 16.37).
+   */
+  purgeChannelBinding: (guildId: string, channelId: string) => Promise<void>
   log: (event: string, detail?: unknown) => void
   warn: (event: string, detail?: unknown) => void
 }
@@ -199,9 +205,22 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           const { id: workspaceId, title } = resolvedWorkspace.workspace
           const existing = deps.findBoundChannelFor(event.guildId, workspaceId)
           if (existing !== undefined) {
-            // Idempotent: one workspace, one channel.
-            await followUp(deps.copy.bindChannelExists(title, existing))
-            return
+            // Idempotent: one workspace, one channel — but only while the
+            // bound channel still exists. A Discord-side deletion is user
+            // intent: purge the stale mapping and bind fresh (16.37). An
+            // unverified surface keeps the idempotent reply, never a purge.
+            const stillLive = await (async (): Promise<boolean | undefined> => {
+              const client = await deps.rest()
+              if (client === undefined) return undefined
+              const listed = await client.request<Array<{ id: string }>>('GET', `/guilds/${event.guildId}/channels`)
+              if (listed.outcome !== 'completed' || !Array.isArray(listed.body)) return undefined
+              return listed.body.some(channel => channel.id === existing)
+            })()
+            if (stillLive === true) {
+              await followUp(deps.copy.bindChannelExists(title, existing))
+              return
+            }
+            if (stillLive === false) await deps.purgeChannelBinding(event.guildId, existing)
           }
           const expiresAtMs = Date.now() + 15 * 60 * 1000
           const confirmId = deps.registry.register({ kind: 'project-bind', action: 'confirm', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
