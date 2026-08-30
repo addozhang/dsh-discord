@@ -1,8 +1,11 @@
 /**
- * The Milestone 1 command contract is fixed by design.md §13: nine top-level
- * commands with their subcommands, arguments, guild-only contexts, and
- * ephemeral response visibility. Registration payloads are built from that
- * one declaration so the wire shape can never drift from the contract table.
+ * The Milestone 1 command contract is fixed by design.md §13: the live
+ * top-level commands with their subcommands, arguments, guild-only contexts,
+ * and ephemeral response visibility. Registration payloads are built from
+ * that one declaration so the wire shape can never drift from the contract
+ * table. Only routed commands are registered (task 16.32): `/preset`,
+ * `/skill`, and `/host` are deregistered until the router wires them, and
+ * `/session new|resume` stays deferred (16.26).
  */
 
 import { describe, expect, it } from 'vitest'
@@ -10,11 +13,12 @@ import { describe, expect, it } from 'vitest'
 import { MILESTONE_ONE_COMMANDS, buildCommandRegistrations } from '../src/discord/commands.js'
 
 describe('milestone one command set', () => {
-  it('declares exactly the nine fixed commands', () => {
-    // `/session new|resume` is deferred to the next milestone: the selector
-    // and adoption modules exist, but the Host RPC face cannot back them yet.
+  it('declares exactly the six live commands', () => {
+    // Only routed commands are registered: `/preset`, `/skill`, and `/host`
+    // are deregistered until the router wires them (task 16.32), and
+    // `/session new|resume` stays deferred to the next milestone (16.26).
     expect(MILESTONE_ONE_COMMANDS.map(command => command.name)).toEqual([
-      'project', 'queue', 'steer', 'stop', 'model', 'preset', 'skill', 'host', 'guild',
+      'project', 'queue', 'steer', 'stop', 'model', 'guild',
     ])
   })
 
@@ -41,15 +45,9 @@ describe('milestone one command set', () => {
       ['show', []],
       ['select', [['model', true], ['reasoning', false]]],
     ])
-    expect(subcommands.get('preset')).toEqual([
-      ['show', []],
-      ['select', [['preset', true]]],
-      ['reset', []],
-    ])
-    expect(subcommands.get('skill')).toEqual([
-      ['run', [['skill', true], ['input', false]]],
-    ])
-    expect(subcommands.get('host')).toEqual([['status', []]])
+    // `/preset`, `/skill`, and `/host` are deregistered (task 16.32); their
+    // control modules stay implemented and unit-tested for the wiring
+    // milestone.
 
     // Direct options on leaf commands.
     expect(MILESTONE_ONE_COMMANDS.find(command => command.name === 'steer')?.options).toEqual([

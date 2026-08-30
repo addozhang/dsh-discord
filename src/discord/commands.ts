@@ -2,8 +2,13 @@
  * The Milestone 1 Discord command contract (design.md §13). One declarative
  * table feeds both the adapter's own routing metadata and the Discord
  * registration payload, so the wire shape cannot drift from the contract:
- * nine fixed commands, guild-only, ephemeral responses, no Discord-level
- * permission gates (adapter RBAC decides at interaction time, deny-first).
+ * only commands the interaction router actually routes are registered —
+ * guild-only, ephemeral responses, no Discord-level permission gates
+ * (adapter RBAC decides at interaction time, deny-first).
+ *
+ * Deregistered: `/preset`, `/skill`, `/host` (their control modules stay
+ * implemented and unit-tested; they return when the router wires them,
+ * alongside `/session new|resume` — see design.md §13 and tasks 16.26/16.32).
  */
 
 /** A command argument as the contract table declares it. */
@@ -44,7 +49,7 @@ function grouped(name: string, description: string, subcommands: CommandSubcomma
   return { name, description, subcommands, guildOnly: true, responseVisibility: 'ephemeral' }
 }
 
-/** The complete Milestone 1 command set, in registration order. */
+/** The live command set, in registration order. */
 export const MILESTONE_ONE_COMMANDS: readonly AdapterCommand[] = [
   grouped('project', 'Bind this channel to a DSH workspace', [
     { name: 'list', options: [{ name: 'query', required: false, autocomplete: true }] },
@@ -60,17 +65,6 @@ export const MILESTONE_ONE_COMMANDS: readonly AdapterCommand[] = [
   grouped('model', 'Show or select the session model', [
     { name: 'show' },
     { name: 'select', options: [{ name: 'model', required: true }, { name: 'reasoning', required: false }] },
-  ]),
-  grouped('preset', 'Show, select, or reset this channel\'s agent preset', [
-    { name: 'show' },
-    { name: 'select', options: [{ name: 'preset', required: true }] },
-    { name: 'reset' },
-  ]),
-  grouped('skill', 'Run a DSH skill through the session queue', [
-    { name: 'run', options: [{ name: 'skill', required: true }, { name: 'input', required: false }] },
-  ]),
-  grouped('host', 'Show the connected DSH host status', [
-    { name: 'status' },
   ]),
   grouped('guild', 'Guild-scoped adapter operations', [
     { name: 'forget' },
