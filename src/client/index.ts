@@ -13,6 +13,7 @@ import {
 import { DISCORD_SETTINGS_NAMESPACE } from '../settings-namespace.js'
 import type { DiscordSettings } from '../settings.js'
 import { DiscordCardController } from './card-controller.js'
+import { installDiscordNavIcon } from './nav-icon.js'
 import { DiscordSettingsCard } from './DiscordSettingsCard.js'
 import type {} from './slot-contract.js'
 
@@ -62,7 +63,7 @@ export function apply(ctx: ClientContext): void {
     registrant: name,
     inject: () => controller.face(),
   }, DiscordSettingsCard))
-  ctx.effect(() => () => {}, 'discord settings card')
+  ctx.effect(() => installDiscordNavIcon(), 'discord nav icon shim')
 
   const call = (ctx as ClientContext & PluginRpcFace).connection?.rpc?.call
   if (typeof call !== 'function') return

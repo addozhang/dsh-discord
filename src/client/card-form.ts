@@ -78,7 +78,6 @@ export type DiscordCardField = typeof DISCORD_ID_FIELDS[number] | typeof ARCHIVE
 
 /** The adapter copy languages, as select choices (labels are endonyms). */
 export const LANGUAGE_CHOICES: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'auto', label: '跟随 DSH 语言' },
   { value: 'zh', label: '中文' },
   { value: 'en', label: 'English' },
 ]
