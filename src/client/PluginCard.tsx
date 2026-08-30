@@ -43,7 +43,9 @@ export interface PluginCardProps {
  * @returns the card, or nothing when the namespace is unavailable.
  */
 export function PluginCard(props: PluginCardProps): ReactNode {
-  const [open, setOpen] = useState(false)
+  // Open by default: the card carries only a handful of settings, and the
+  // extra click to reveal them was pure friction (user-directed, card pass).
+  const [open, setOpen] = useState(true)
   const { state } = props
   if (!state.available) return null
   const blocked = !state.dirty || state.invalid || state.saving

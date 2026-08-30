@@ -20,20 +20,7 @@ interface DiscordPluginsLocale {
   discordDescription: string
   discordAllowedGuildIds: string
   discordAllowedGuildIdsHint: string
-  discordMemberUserIds: string
-  discordMemberUserIdsHint: string
-  discordMemberRoleIds: string
-  discordMemberRoleIdsHint: string
-  discordAdminUserIds: string
-  discordAdminUserIdsHint: string
-  discordAdminRoleIds: string
-  discordAdminRoleIdsHint: string
-  discordDeniedUserIds: string
-  discordDeniedUserIdsHint: string
-  discordDeniedRoleIds: string
-  discordDeniedRoleIdsHint: string
-  discordHostOperatorUserIds: string
-  discordHostOperatorUserIdsHint: string
+  discordGuildIdHelp: string
   discordThreadAutoArchive: string
   discordThreadAutoArchiveHint: string
   discordLanguage: string
