@@ -83,5 +83,13 @@
     "@deepseek-ai/schemastery": "3.18.1",
     "zod": "^4.4.3"
   },
-  "pnpm": {}
+  "pnpm": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/addozhang/dsh-discord.git"
+  },
+  "bugs": {
+    "url": "https://github.com/addozhang/dsh-discord/issues"
+  },
+  "homepage": "https://github.com/addozhang/dsh-discord#readme"
 }
