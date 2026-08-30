@@ -7,6 +7,8 @@
  * never blindly retried by callers.
  */
 
+import { randomUUID } from 'node:crypto'
+
 export type RestMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'
 
 /** The untyped wire face injected for testability (fetch-shaped). */
@@ -182,6 +184,16 @@ export function createRestClient(
  * major parameters — `channels/:id`, `guilds/:id`, `webhooks/:id` — so every
  * write into one channel shares one bucket and serializes behind it.
  */
+/**
+ * A fresh Discord message nonce: reconciliation identity for an
+ * unobservable send (rest.ts contract). Discord validates the wire field at
+ * **25 characters max** — a 36-char UUID is a 50035 Invalid Form Body on
+ * every send (task 16.38) — so the id is the UUID's 25 hex digits.
+ */
+export function newNonce(): string {
+  return randomUUID().replaceAll('-', '').slice(0, 25)
+}
+
 export function routeBucketOf(path: string): string {
   const segments = path.split('/').filter(segment => segment.length > 0)
   return segments.slice(0, 2).join('/')

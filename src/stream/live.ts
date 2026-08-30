@@ -107,6 +107,17 @@ const DEFAULT_ACTIVITY_COALESCE_MS = 1_000
 /** Row budget: a presentation title is truncated before it reaches Discord. */
 const ACTIVITY_TITLE_MAX = 80
 
+/**
+ * Wire-level live-path tracing (`DSH_DISCORD_TRACE=1` → stderr). Default
+ * silent like the rest of the adapter; the live path's drops (unrecognized
+ * frame shapes, unmatched sessions) are otherwise unobservable, which once
+ * hid a real-Host shape mismatch from every gate (16.38).
+ */
+const TRACE = process.env['DSH_DISCORD_TRACE'] === '1'
+function trace(...parts: unknown[]): void {
+  if (TRACE) console.error('[dsh-discord:trace]', ...parts)
+}
+
 interface ThreadRuntime {
   render: ThreadRenderModel
   tools: ToolActivitySurface
@@ -117,6 +128,14 @@ interface ThreadRuntime {
   finalizer: AnswerFinalizer | undefined
   headMessageId: string | undefined
   activityMessageId: string | undefined
+  /**
+   * The head flush currently in flight, resolving to the landed head's
+   * message id (or undefined when it did not land). The authoritative
+   * finalize waits on it — settling the flush before reading
+   * `headMessageId` — so the answer EDITS the flushed head instead of
+   * racing it with a duplicate second message (16.39).
+   */
+  headFlush: Promise<string | undefined> | undefined
   /**
    * Step generation fence: bumped on every turn/step boundary. Flushes and
    * finalizers capture it at creation and never mutate the head across a
@@ -201,6 +220,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       finalizer: undefined,
       headMessageId: undefined,
       activityMessageId: undefined,
+      headFlush: undefined,
       stepSeq: 0,
       headAttempted: false,
       activityAttempted: false,
@@ -216,23 +236,31 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
   /** Flush the current answer text: create the head once, then edit it. */
   function flushAnswer(threadId: string, runtime: ThreadRuntime): (content: string) => Promise<void> {
     const stepSeq = runtime.stepSeq
-    return async (content: string) => {
-      if (runtime.stepSeq !== stepSeq) return
+    return (content: string): Promise<void> => {
+      if (runtime.stepSeq !== stepSeq) return Promise.resolve()
       const payload = buildOutboundMessage({ kind: 'assistant', content })
-      if (runtime.headMessageId === undefined) {
-        // An earlier send whose application was unobservable must never be
-        // blind-resent (rest.ts contract): the stream pauses here and the
-        // finalizer's single fresh send carries the answer instead.
-        if (runtime.headAttempted) return
-        const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
-        if (sent.outcome === 'completed') runtime.headMessageId = sent.messageId
-        else if (sent.outcome === 'unknown') {
-          runtime.headAttempted = true
-          deps.log?.('discord_live_head_send_unknown', { threadId })
+      const flush = (async (): Promise<string | undefined> => {
+        if (runtime.headMessageId === undefined) {
+          // An earlier send whose application was unobservable must never be
+          // blind-resent (rest.ts contract): the stream pauses here and the
+          // finalizer's single fresh send carries the answer instead.
+          if (runtime.headAttempted) return undefined
+          const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+          if (sent.outcome === 'completed') {
+            runtime.headMessageId = sent.messageId
+            return sent.messageId
+          }
+          if (sent.outcome === 'unknown') {
+            runtime.headAttempted = true
+            deps.log?.('discord_live_head_send_unknown', { threadId })
+          }
+          return undefined
         }
-        return
-      }
-      await deps.delivery.edit({ channelId: threadId, messageId: runtime.headMessageId, content: payload.content })
+        await deps.delivery.edit({ channelId: threadId, messageId: runtime.headMessageId, content: payload.content })
+        return runtime.headMessageId
+      })()
+      runtime.headFlush = flush
+      return flush.then(() => undefined)
     }
   }
 
@@ -241,6 +269,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     runtime.turnId = turnId
     runtime.headMessageId = undefined
     runtime.activityMessageId = undefined
+    runtime.headFlush = undefined
     runtime.headAttempted = false
     runtime.activityAttempted = false
     runtime.stepSeq += 1
@@ -324,6 +353,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         // A new step opens a NEW logical answer message: the previous
         // step's completed head is never overwritten (stream-renderer spec).
         runtime.headMessageId = undefined
+        runtime.headFlush = undefined
         runtime.headAttempted = false
         runtime.stepSeq += 1
         // The previous step's finalize disposed the scheduler; a fresh one
@@ -337,9 +367,15 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         return
       }
       case 'assistant/chunk': {
-        if (runtime.scheduler === undefined || turnId === undefined || stepId === undefined) return
+        if (runtime.scheduler === undefined || turnId === undefined || stepId === undefined) {
+          trace('chunk dropped (no turn/step/scheduler)', event.type, turnId, stepId)
+          return
+        }
         const chunk = data['chunk'] as { type?: unknown; text?: unknown } | undefined
-        if (chunk?.type !== 'text-delta' || typeof chunk.text !== 'string') return
+        if (chunk?.type !== 'text-delta' || typeof chunk.text !== 'string') {
+          trace('chunk not text-delta:', String(chunk?.type))
+          return
+        }
         runtime.render.appendDelta({ turnId, stepId, text: chunk.text })
         const snapshot = runtime.render.snapshot()
         const current = snapshot.answers.find(answer => answer.stepId === stepId)
@@ -350,45 +386,50 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         if (turnId === undefined || stepId === undefined) return
         const interrupted = data['interrupted'] === true
         const text = assistantText(data['message'])
+        trace('assistant/message: extracted text length', text.length, 'interrupted:', interrupted)
         runtime.render.setAuthoritative({ turnId, stepId, text })
         if (interrupted) runtime.render.interrupt({ turnId, stepId })
         runtime.scheduler?.dispose()
         runtime.scheduler = undefined
         if (text === '') return
         // The authoritative finalize sends exactly once per turn answer. It
-        // runs detached, so it captures the step generation here: a finalize
-        // whose REST is still in flight when the next step starts must not
-        // re-point the live head at its own (older) message.
-        const finalizedStepSeq = runtime.stepSeq
-        runtime.finalizer = createAnswerFinalizer({
-          delivery: {
-            editHead: async ({ messageId, content }) => {
-              const payload = buildOutboundMessage({ kind: 'assistant', content })
-              // No head exists (text arrived without flushed chunks): the
-              // first finalize send IS the head, recorded for continuations.
-              if (messageId === '') {
-                const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
-                if (sent.outcome === 'completed') {
-                  if (runtime.stepSeq === finalizedStepSeq && runtime.headMessageId === undefined) {
-                    runtime.headMessageId = sent.messageId
+        // runs detached AFTER the in-flight head flush settles: racing the
+        // flush would read `headMessageId` before the flushed send landed
+        // and post the answer as a duplicate second message (16.39). The
+        // step fence is read post-settle for the same reason.
+        const pendingFlush = Promise.resolve(runtime.headFlush).catch(() => undefined)
+        void pendingFlush.then((inFlightHead) => {
+          const finalizedStepSeq = runtime.stepSeq
+          const finalizer = createAnswerFinalizer({
+            delivery: {
+              editHead: async ({ messageId, content }) => {
+                const payload = buildOutboundMessage({ kind: 'assistant', content })
+                // No head exists (text arrived without flushed chunks): the
+                // first finalize send IS the head, recorded for continuations.
+                if (messageId === '') {
+                  const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+                  if (sent.outcome === 'completed') {
+                    if (runtime.stepSeq === finalizedStepSeq && runtime.headMessageId === undefined) {
+                      runtime.headMessageId = sent.messageId
+                    }
+                    return { outcome: 'completed' as const }
                   }
-                  return { outcome: 'completed' as const }
+                  return { outcome: 'failed' as const }
                 }
-                return { outcome: 'failed' as const }
-              }
-              const edited = await deps.delivery.edit({ channelId: threadId, messageId, content: payload.content })
-              return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
+                const edited = await deps.delivery.edit({ channelId: threadId, messageId, content: payload.content })
+                return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
+              },
+              sendContinuation: async ({ content }) => {
+                const payload = buildOutboundMessage({ kind: 'assistant', content })
+                const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+                return sent.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
+              },
             },
-            sendContinuation: async ({ content }) => {
-              const payload = buildOutboundMessage({ kind: 'assistant', content })
-              const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
-              return sent.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
-            },
-          },
-          headMessageId: runtime.headMessageId ?? '',
-        })
-        const finalText = text + ANSWER_MARKER(interrupted, deps.interruptedMarker?.() ?? '*（已被中断）*')
-        void runtime.finalizer.finalize(finalText).catch((cause: unknown) => {
+            headMessageId: inFlightHead ?? runtime.headMessageId ?? '',
+          })
+          const finalText = text + ANSWER_MARKER(interrupted, deps.interruptedMarker?.() ?? '*（已被中断）*')
+          return finalizer.finalize(finalText)
+        }).catch((cause: unknown) => {
           deps.log?.('discord_live_finalize_threw', { threadId, cause: String(cause) })
         })
         return
@@ -562,9 +603,15 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     }
     if (type !== 'session/event') return
     const threadId = deps.threadForSession(sessionId)
-    if (threadId === undefined) return
+    if (threadId === undefined) {
+      trace('drop: no thread for session', sessionId)
+      return
+    }
     const eventWrapper = frame['event'] as { type?: unknown; data?: Record<string, unknown> } | undefined
-    if (eventWrapper === undefined || typeof eventWrapper.type !== 'string') return
+    if (eventWrapper === undefined || typeof eventWrapper.type !== 'string') {
+      trace('drop: session/event without event wrapper', JSON.stringify(frame).slice(0, 200))
+      return
+    }
     handleSessionEvent(sessionId, threadId, runtimeFor(threadId), { type: eventWrapper.type, data: eventWrapper.data ?? {} }, frame['view'])
   }
 
@@ -585,6 +632,11 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
             const payload = (typeof frame === 'object' && frame !== null && 'payload' in frame)
               ? (frame as { payload?: unknown }).payload
               : frame
+            if (TRACE) {
+              const t = (typeof payload === 'object' && payload !== null ? (payload as { type?: unknown }).type : undefined)
+              const sid = (typeof payload === 'object' && payload !== null ? (payload as { sessionId?: unknown }).sessionId : undefined)
+              trace('frame', String(t), String(sid))
+            }
             handleFrame(payload, typeof envelopeRpcId === 'string' ? envelopeRpcId : undefined)
           } catch (cause) {
             deps.log?.('discord_live_frame_threw', { cause: String(cause) })
@@ -594,6 +646,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       } catch (cause) {
         if (isDisposed()) return
         deps.log?.('discord_live_stream_error', { cause: String(cause) })
+        trace('stream closed:', String(cause))
       }
       if (isDisposed()) return
       await new Promise(resolve => { setTimeout(resolve, backoffMs) })

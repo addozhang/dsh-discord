@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { createRestClient, createSharedRestClient, type FetchLike, type FetchRequest } from '../src/discord/rest.js'
+import { createRestClient, createSharedRestClient, newNonce, type FetchLike, type FetchRequest } from '../src/discord/rest.js'
 
 type ScriptedResponse =
   | { status: number; body?: unknown; headers?: Record<string, string> }
@@ -243,5 +243,20 @@ describe('per-route serialized rest', () => {
     expect(h.calls).toHaveLength(2)
     h.resolveGate(1, new Response(JSON.stringify({ id: 'm2' }), { status: 200 }))
     await expect(following).resolves.toMatchObject({ outcome: 'completed' })
+  })
+})
+
+describe('newNonce (16.38)', () => {
+  it('stays within Discord\'s 25-character wire limit', () => {
+    for (let i = 0; i < 100; i += 1) {
+      const nonce = newNonce()
+      expect(nonce.length).toBeLessThanOrEqual(25)
+      expect(nonce).toMatch(/^[0-9a-f]+$/)
+    }
+  })
+
+  it('is unique across practical draws', () => {
+    const seen = new Set(Array.from({ length: 1_000 }, () => newNonce()))
+    expect(seen.size).toBe(1_000)
   })
 })

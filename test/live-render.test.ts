@@ -54,8 +54,12 @@ async function drive(frames: LiveFrame[], options: {
   updateIntervalMs?: number
   threadName?: (channelId: string) => Promise<string | undefined>
   sendOutcomes?: Array<'completed' | 'unknown' | 'failed'>
+  /** Test-controlled delivery for interleaving races (16.39). */
+  delivery?: LiveDeliveryPort
 }): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }>> {
-  const { delivery, calls } = createDelivery(options.sendOutcomes ?? [])
+  const { delivery, calls } = options.delivery !== undefined
+    ? { delivery: options.delivery, calls: [] }
+    : createDelivery(options.sendOutcomes ?? [])
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
   async function* source(): AsyncIterable<LiveFrame> {
@@ -433,4 +437,49 @@ describe('live render: delivery failure posture', () => {
     expect(lastEdit?.messageId).toBe('dm-2')
     expect(lastEdit?.content).toContain('AB')
   })
+
+  it('completes the in-flight head send instead of duplicating the answer (16.39)', async () => {
+    // The live race: the last coalesced flush's send is still in flight
+    // (headMessageId unset) when the authoritative assistant/message
+    // arrives. The finalize must settle that send and EDIT its message —
+    // not post the full answer as a duplicate second message.
+    const calls: Array<{ kind: string; messageId?: string; content?: string }> = []
+    let releaseHeadSend!: (messageId: string) => void
+    const headSendGate = new Promise<string>((resolve) => { releaseHeadSend = resolve })
+    const delivery: LiveDeliveryPort = {
+      send: (request) => {
+        calls.push({ kind: 'send', content: request.content })
+        if (calls.filter(call => call.kind === 'send').length === 1) {
+          return headSendGate.then((messageId) => ({ outcome: 'completed' as const, messageId }))
+        }
+        return Promise.resolve({ outcome: 'completed', messageId: 'dm-extra' })
+      },
+      edit: (request) => {
+        calls.push({ kind: 'edit', messageId: request.messageId, content: request.content })
+        return Promise.resolve({ outcome: 'completed' })
+      },
+      typing: () => Promise.resolve(),
+      renameThread: () => Promise.resolve({ outcome: 'completed' }),
+      delete: () => Promise.resolve({ outcome: 'completed' }),
+    }
+
+    await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }),
+      sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'Hel' } }),
+      sessionEvent('sess-1', 'assistant/message', { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'Hello world' }] } }),
+    ], { threadForSession: () => 'thread-1', delivery, updateIntervalMs: 0 })
+
+    // The flushed head lands once released, then the finalize edits it.
+    releaseHeadSend('dm-head')
+    await new Promise(resolve => { setTimeout(resolve, 20) })
+
+    const sends = calls.filter(call => call.kind === 'send')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.content).toBe('Hel')
+    const edits = calls.filter(call => call.kind === 'edit')
+    expect(edits).toHaveLength(1)
+    expect(edits[0]?.messageId).toBe('dm-head')
+    expect(edits[0]?.content).toBe('Hello world')
+  }, 20_000)
 })
