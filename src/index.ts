@@ -257,6 +257,20 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (typeof sent.body?.id !== 'string') return { stored: false, reason: `HTTP ${String(sent.status)}: response missing message id` }
         return { stored: true, messageId: sent.body.id }
       },
+      editMessage: async (channelId, messageId, payload) => {
+        const rest = await sharedRest()
+        if (rest === undefined) return { stored: false, reason: 'rest unavailable' }
+        const patched = await rest.request('PATCH', `/channels/${channelId}/messages/${messageId}`, payload)
+        if (patched.outcome !== 'completed') {
+          return {
+            stored: false,
+            reason: patched.outcome === 'rejected'
+              ? `HTTP ${String(patched.status)} ${patched.error.message}`
+              : patched.reason,
+          }
+        }
+        return { stored: true }
+      },
     })
     const componentFollowUp = async (_interactionId: string, interactionToken: string, content: string): Promise<void> => {
       const rest = await sharedRest()

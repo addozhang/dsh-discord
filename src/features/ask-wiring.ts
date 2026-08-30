@@ -59,6 +59,12 @@ export interface AskWiringDeps {
    * otherwise `reason` carries the failure cause for the log.
    */
   postMessage(threadId: string, payload: unknown): Promise<{ stored: boolean; reason?: string; messageId?: string }>
+  /**
+   * Edit an already-posted control message (PATCH). Retirement greys the
+   * controls out on the ORIGINAL message — a POST would only add a new,
+   * empty message while the live buttons stayed behind (16.41).
+   */
+  editMessage(channelId: string, messageId: string, payload: unknown): Promise<{ stored: boolean; reason?: string }>
 }
 
 export function createAskWiring(deps: AskWiringDeps): {
@@ -69,8 +75,23 @@ export function createAskWiring(deps: AskWiringDeps): {
   onQuestionRequested(input: QuestionAskInput): void
   onQuestionResolved(input: { sessionId: string; questionRpcId: string; outcome: 'answered' | 'cancelled' }): void
 } {
-  /** Discord message refs for rendered controls, keyed by ask id. */
-  const controlMessages = new Map<string, { channelId: string; messageId: string }>()
+  /** Discord message refs + rendered rows for controls, keyed by ask id. */
+  const controlMessages = new Map<string, { channelId: string; messageId: string; components: unknown }>()
+
+  /**
+   * Every interactive component greys out (`disabled: true`): the settled
+   * ask keeps its visual context on the thread and Discord stops
+   * delivering clicks for it entirely.
+   */
+  type WireComponent = Record<string, unknown>
+  type WireRow = { components?: WireComponent[] }
+  function disabledComponents(components: unknown): unknown {
+    if (!Array.isArray(components)) return []
+    return (components as WireRow[]).map(row => ({
+      ...row,
+      components: (row.components ?? []).map(control => ({ ...control, disabled: true })),
+    }))
+  }
 
   const disableControl = async (key: string): Promise<void> => {
     const target = controlMessages.get(key)
@@ -79,8 +100,10 @@ export function createAskWiring(deps: AskWiringDeps): {
     // Retirement is best-effort: a failed disable must never fail the ask's
     // settled outcome — the registry TTL keeps stray clicks answerable.
     try {
-      const posted = await deps.postMessage(target.channelId, { components: [] })
-      if (!posted.stored) deps.log('discord_control_disable_failed', { key })
+      const patched = await deps.editMessage(target.channelId, target.messageId, {
+        components: disabledComponents(target.components),
+      })
+      if (!patched.stored) deps.log('discord_control_disable_failed', { key, reason: patched.reason })
     } catch (cause) {
       deps.log('discord_control_disable_failed', { key, cause: String(cause) })
     }
@@ -131,7 +154,7 @@ export function createAskWiring(deps: AskWiringDeps): {
       void deps.postMessage(input.threadId, payload)
         .then(sent => {
           if (sent.stored && sent.messageId !== undefined) {
-            controlMessages.set(input.approvalId, { channelId: input.threadId, messageId: sent.messageId })
+            controlMessages.set(input.approvalId, { channelId: input.threadId, messageId: sent.messageId, components: payload.components })
           }
         })
         .catch((cause: unknown) => { deps.log('discord_approval_render_failed', String(cause)) })
@@ -199,7 +222,7 @@ export function createAskWiring(deps: AskWiringDeps): {
             abandonQuestion(sent.reason ?? 'post rejected')
             return
           }
-          controlMessages.set(input.rpcId, { channelId: input.threadId, messageId: sent.messageId })
+          controlMessages.set(input.rpcId, { channelId: input.threadId, messageId: sent.messageId, components: payload.components })
         })
         .catch((cause: unknown) => { abandonQuestion(String(cause)) })
     },
