@@ -19,21 +19,32 @@
 - **会话控制** — `/steer`、`/stop`、`/queue list|remove` 带运行所有权校验；`/project bind|list|info` 管理 Guild↔工作区绑定；`/guild forget` 供操作员清理。
 - **设置卡片** — Token 引导（粘贴 + 连接；存入 Host 凭据服务，绝不写入设置或日志）、连接/断开、服务器白名单、线程自动归档、Bot 语言。
 - **双语文案** — 所有 Discord 可见文案提供中英双语；Bot 语言默认跟随 DSH 语言偏好，也可从卡片固定。
-- **安全设计** — 显式服务器白名单内的 deny-first 授权、每条 wire 请求携带 `allowed_mentions` 并做字节级提及中和、至多一次的 DSH 提交与保留 unknown 的对账、重启后持久的绑定。
+- **安全设计** — 显式服务器白名单内的 deny-first 授权、每条 wire 请求携带 `allowed_mentions` 并做字节级提及中和、至多一次的 DSH 提交与保留 unknown 的对账、重启后持久的绑定，以及 READY 扫描：被删的 category/控制频道会重建，被删的工作区频道视为用户意图（解除映射，workspace 保持可重新绑定）。
 
 ## 环境要求
 
-- [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) `0.1.1-rc.2`（web profile）
+- [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) `0.1.1-rc.2` 或更新（web profile）
 - Node.js `^22.19.0 || >=24`
 - 一个 Discord 应用（含 Bot 用户），并在开发者门户启用 **MESSAGE CONTENT** 特权 intent（Developer Portal → 你的应用 → Bot → Privileged Gateway Intents）
 
 ## 安装
 
+使用 dsh CLI 安装——它会自动把包装进 profile 并注册 bundle：
+
 ```sh
-pnpm add @addozhang/dsh-discord
+dsh plugin --profile web add @addozhang/dsh-discord
 ```
 
-适配器以插件 bundle 形式运行在 DSH web profile 中——在 profile 的 `package.json` 里注册：
+然后重启 `dsh web` 并刷新浏览器。`dsh plugin` 底层是指向 profile 目录的 pnpm 薄转发；安装完成后它会自动对账 profile 的 `dsh.profile.bundles` 层列表，把所有声明了 `dsh.bundle` patch 的依赖追加进去——无需手动编辑。
+
+升级与卸载使用同一条命令：
+
+```sh
+dsh plugin --profile web up @addozhang/dsh-discord   # 升级；bundle 列表会重新对账
+dsh plugin --profile web rm @addozhang/dsh-discord   # 卸载；先执行 /guild forget 清理适配器记录
+```
+
+如果不用 CLI、手工管理 profile，等价做法是在 profile 目录里用 pnpm 安装本包，并在 `dsh.profile.bundles` 中自行登记：
 
 ```json
 {
@@ -52,7 +63,7 @@ pnpm add @addozhang/dsh-discord
 | `memberUserIds` / `memberRoleIds` | `[]` | 白名单 Guild 内的成员级授权。 |
 | `administratorUserIds` / `administratorRoleIds` | `[]` | 工作区管理员级（`/project bind`、预设修改）。 |
 | `deniedUserIds` / `deniedRoleIds` | `[]` | 拒绝名单；优先级高于上述一切授权。 |
-| `hostOperatorUserIds` | `[]` | Host 操作员（`/guild forget`、`/model select`）。 |
+| `hostOperatorUserIds` | `[]` | Host 操作员（`/guild forget`）。 |
 | `defaultVerbosity` | `essential-tools` | 工具活动行粒度：`text-only`、`essential-tools`、`full-tools`。 |
 | `language` | `auto` | Bot 可见文案语言：`auto` 跟随 DSH 语言偏好（非中文渲染英文），或固定 `zh`/`en`。 |
 | `streamUpdateIntervalMs` | `800` | 流式编辑合并间隔（250–10000）。 |
@@ -71,7 +82,7 @@ dsh-discord:
 
 ## 初始设置
 
-1. 以至少以下权限把 Bot 邀请到你的服务器：查看频道、发送消息、创建公共线程、在线程中发送消息、上传文件、读取消息历史。
+1. 以至少以下权限把 Bot 邀请到你的服务器：查看频道、**管理频道**（适配器要创建自己的分类和工作区频道）、发送消息、创建公共线程、在线程中发送消息、上传文件、读取消息历史。
 2. 启动 profile 并打开 Web 界面。
 3. 在 **Settings → Discord** 中粘贴 Bot Token（开发者门户 → 你的应用 → Bot → Reset Token）并点击 **Connect**。Token 由 Host 凭据服务保存——绝不写入设置、日志或客户端。
 4. 填写 **允许的服务器**（服务器 ID 获取方式：Discord 开发者模式 → 右键服务器 → 复制服务器 ID）。白名单之外的一切都会被忽略。
@@ -85,9 +96,9 @@ dsh-discord:
 | `/project list` / `info` | 任意频道 | 列出工作区 / 查看当前频道绑定 |
 | `/queue list`, `/queue remove` | 会话线程 | 查看与移除待处理队列 |
 | `/steer`, `/stop` | 会话线程 | 插话或取消运行中的 Turn（仅属主） |
-| `/model`, `/preset`, `/skill` | 按上下文 | 模型/预设默认值与技能运行 |
-| `/host status` | 任意频道 | 连接状态与版本 |
 | `/guild forget` | 任意频道 | 仅操作员：移除适配器记录 |
+
+`/model` 保持注册，等待其交互式 provider → 模型 → thinking/reasoning 级联（下个里程碑）；`/preset`、`/skill`、`/host` 已取消注册，待路由接线后回归——见已知限制。
 
 ## 设计说明
 
@@ -95,11 +106,14 @@ dsh-discord:
 - 发布工作流通过 npm trusted publishing (OIDC) 认证——任何地方都不保存发布凭证。
 - 适配器启动链带代际计数，Connect/Disconnect 与初始启动竞争时只会产生一个 Gateway。
 - 凭据探测会回退到 `resolve()`：Host 的 `describe()` 不识别环境变量来源的值——已连接的适配器不会被误报为未配置。
+- 适配器日志默认静默：流程记录走 Host 的 debug 级别，失败形态的事件升到 warn——默认级别下不会向 DSH 进程打印任何内容。
+- 链路级 trace：启动前设置 `DSH_DISCORD_TRACE=1` 可将 mux 帧、丢弃点与投递结果输出到 stderr（默认静默）。存在原因：rc.2 Host 未为插件日志接线任何 exporter，也没有日志级别开关——`logger.debug` 输出不可见；Host 提供等价机制后应移除。
 
 ## 已知限制与推迟项
 
 - **`/session new|resume` 未注册** — 选择器与冷收养模块已实现并通过单元测试，但 Host RPC 面尚不支持（`sessions.list` v1 只返回裸 id；缺少 `session.inspect`）。将在下个里程碑回归。
-- **`/preset` 缺少会话线程守卫**，**verbosity 为全局设置**（DSH 生态有按频道设置的先例）。
+- **`/model` 已注册但尚未接线** — 其控制模块（模型目录与受控选择）已实现并通过单元测试；交互式 provider → 模型 → thinking/reasoning 级联将随路由接线里程碑落地。`/preset`、`/skill`、`/host` 保持注销状态，同一次接线时回归（`/preset` 的会话线程守卫一并处理）。
+- **verbosity 为全局设置**（DSH 生态有按频道设置的先例）。
 - **经 Kimaki 对齐后有意推迟**：reconcile-interactions 接线、ask 等待期暂停 typing、fail-closed 绑定/会话属主 store 接线、凭据轮换监听。
 - **已知张力**：流式编辑 250ms 下限与高负载下 Discord 编辑预算的冲突（429 自愈），以及 typing 缺少时长上限看门狗。
 
@@ -117,9 +131,10 @@ pnpm build         # lib + client bundle
 
 ```sh
 pnpm pack --pack-destination /tmp
-cd "$DSH_HOME/profiles/<your-profile>"
-pnpm add file:/tmp/addozhang-dsh-discord-<version>.tgz
+dsh plugin --profile <your-profile> add file:/tmp/addozhang-dsh-discord-<version>.tgz
 ```
+
+`dsh plugin` 会把相对路径锚定到调用目录，因此在已执行 `pnpm build` 的仓库里也可以直接 `dsh plugin --profile <your-profile> add ../fiber`。重复 pack + add 即可刷新已安装副本，然后重启 `dsh web`。
 
 发布由 [GitHub Actions](./.github/workflows/publish.yml) 经 npm trusted publishing (OIDC) 完成（`npm version <level> && git push --follow-tags`）——任何地方都不保存发布凭证。实现遵循 `openspec/changes/build-discord-native-adapter/` 中的 OpenSpec 变更（设计、能力 spec、验证清单、评审报告）。
 
