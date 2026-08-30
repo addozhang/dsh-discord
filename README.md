@@ -19,7 +19,7 @@ The adapter runs as a DSH plugin bundle inside a web profile:
 ```sh
 pnpm build && pnpm pack --pack-destination /tmp
 cd "$DSH_HOME/profiles/<your-profile>"
-pnpm add file:/tmp/addozhang-dsh-discord-0.1.0.tgz
+pnpm add file:/tmp/addozhang-dsh-discord-<version>.tgz   # e.g. 0.1.1
 ```
 
 and register it in the profile's `package.json`:

@@ -34,6 +34,14 @@ jobs:
       - name: Install
         run: pnpm install --ignore-scripts --frozen-lockfile
 
+      - name: Verify tag matches package version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "v$PKG_VERSION" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json version v$PKG_VERSION — bump with 'npm version <level>' before tagging"
+            exit 1
+          fi
+
       - name: Build
         run: pnpm build
 
