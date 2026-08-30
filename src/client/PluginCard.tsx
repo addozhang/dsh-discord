@@ -25,6 +25,8 @@ export interface PluginCardProps {
   copy: PluginCardCopy
   /** Card title. */
   title: string
+  /** Monochrome mark rendered before the title. */
+  icon?: ReactNode
   /** Line describing what this card's settings govern. */
   description: string
   /** The card's form state. */
@@ -58,7 +60,7 @@ export function PluginCard(props: PluginCardProps): ReactNode {
         onClick={() => { setOpen(!open) }}
       >
         <span data-dsh-discord-card-head="">
-          <span data-dsh-discord-card-title="">{props.title}</span>
+          <span data-dsh-discord-card-title="">{props.icon}{props.title}</span>
           <span data-dsh-discord-card-description="">{props.description}</span>
         </span>
         {state.dirty ? <span data-dsh-discord-badge="unsaved">{props.copy.unsaved}</span> : null}

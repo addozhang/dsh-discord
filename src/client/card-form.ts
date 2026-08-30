@@ -62,8 +62,8 @@ export const ARCHIVE_FIELD = 'threadAutoArchiveMinutes' as const satisfies keyof
 export const LANGUAGE_FIELD = 'language' as const satisfies keyof DiscordSettings
 
 /** Accept exactly the adapter copy languages. */
-function parseLanguage(text: string): 'zh' | 'en' | undefined {
-  return text === 'zh' || text === 'en' ? text : undefined
+function parseLanguage(text: string): 'auto' | 'zh' | 'en' | undefined {
+  return text === 'auto' || text === 'zh' || text === 'en' ? text : undefined
 }
 
 function isIdField(field: DiscordCardField): boolean {
@@ -78,6 +78,7 @@ export type DiscordCardField = typeof DISCORD_ID_FIELDS[number] | typeof ARCHIVE
 
 /** The adapter copy languages, as select choices (labels are endonyms). */
 export const LANGUAGE_CHOICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'auto', label: '跟随 DSH 语言' },
   { value: 'zh', label: '中文' },
   { value: 'en', label: 'English' },
 ]

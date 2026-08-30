@@ -8,6 +8,7 @@ import {
   normalizeDiscordSettings,
   type DiscordSettings,
   } from './settings.js'
+import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { installCancellationRoot } from './lifecycle.js'
 import { DISCORD_SUPPRESS_MENTIONS_FLAG, OUTBOUND_EPHEMERAL_FLAGS } from './policy/disclosure.js'
 import { validateHostCapabilities } from './startup.js'
@@ -91,11 +92,16 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   /**
    * Discord-visible copy, re-resolved on every access so a language change
    * on the settings card applies without rebuilding the composition. The
-   * DSH locale itself is not exposed to host-side plugins (the settings
-   * provider is namespace-scoped), so the language is a plugin setting.
+   * 'auto' preference follows the DSH locale (the `locale` namespace the
+   * Host app registers); non-Chinese locales fall back to English.
    */
+  const resolveLanguage = (): 'zh' | 'en' => {
+    if (current.language !== 'auto') return current.language
+    const locale = (ctx.get('settings') as { get(namespace: unknown): unknown }).get(settingsNamespace('locale')) as { preference?: string } | undefined
+    return typeof locale?.preference === 'string' && locale.preference.startsWith('zh') ? 'zh' : 'en'
+  }
   const copy: CopyTable = new Proxy({} as CopyTable, {
-    get: (_target, key) => createCopy(current.language)[key as keyof CopyTable],
+    get: (_target, key) => createCopy(resolveLanguage())[key as keyof CopyTable],
   })
   // Reassigned once the async composition has built the real registrar.
   let registerCommands: () => Promise<void> = async () => {}

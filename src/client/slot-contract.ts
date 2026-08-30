@@ -19,8 +19,8 @@ interface DiscordPluginsLocale {
   discordTitle: string
   discordDescription: string
   discordAllowedGuildIds: string
-  discordAllowedGuildIdsHint: string
   discordGuildIdHelp: string
+  discordLanguageAuto: string
   discordTokenLabel: string
   discordTokenPlaceholder: string
   discordTokenConnect: string

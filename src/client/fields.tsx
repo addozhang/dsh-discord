@@ -74,9 +74,11 @@ export function SelectField(props: FieldProps & { options: readonly SelectOption
           <option key={option.value} value={option.value}>{option.label}</option>
         ))}
       </select>
-      <p data-dsh-discord-field-note={props.invalid ? 'invalid' : 'hint'}>
-        {props.invalid ? props.invalidLabel : props.hint}
-      </p>
+      {(props.invalid || props.hint !== '') && (
+        <p data-dsh-discord-field-note={props.invalid ? 'invalid' : 'hint'}>
+          {props.invalid ? props.invalidLabel : props.hint}
+        </p>
+      )}
     </div>
   )
 }
@@ -114,9 +116,11 @@ export function ValueField(props: FieldProps): ReactNode {
         disabled={props.disabled}
         onInput={event => { props.onEdit(event.currentTarget.value); }}
       />
-      <p data-dsh-discord-field-note={props.invalid ? 'invalid' : 'hint'}>
-        {props.invalid ? props.invalidLabel : props.hint}
-      </p>
+      {(props.invalid || props.hint !== '') && (
+        <p data-dsh-discord-field-note={props.invalid ? 'invalid' : 'hint'}>
+          {props.invalid ? props.invalidLabel : props.hint}
+        </p>
+      )}
     </div>
   )
 }
