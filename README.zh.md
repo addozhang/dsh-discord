@@ -98,7 +98,6 @@ dsh-discord:
 | `/steer`, `/stop` | 会话线程 | 插话或取消运行中的 Turn（仅属主） |
 | `/guild forget` | 任意频道 | 仅操作员：移除适配器记录 |
 
-`/model` 保持注册，等待其交互式 provider → 模型 → thinking/reasoning 级联（下个里程碑）；`/preset`、`/skill`、`/host` 已取消注册，待路由接线后回归——见已知限制。
 
 ## 设计说明
 

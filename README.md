@@ -98,7 +98,6 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 | `/steer`, `/stop` | session thread | steer or cancel the running turn (owner only) |
 | `/guild forget` | any channel | operator-only removal of adapter records |
 
-`/model` remains registered ahead of its interactive provider → model → thinking/reasoning cascade (next milestone); `/preset`, `/skill`, and `/host` are deregistered until the router wires them — see Known limitations.
 
 ## Design notes
 
