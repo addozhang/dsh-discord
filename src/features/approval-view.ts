@@ -9,7 +9,7 @@
  */
 
 import type { ComponentRegistry } from '../discord/components.js'
-import { DISCORD_SUPPRESS_MENTIONS_FLAG } from '../policy/disclosure.js'
+import { DISCORD_SUPPRESS_NOTIFICATIONS_FLAG } from '../policy/disclosure.js'
 import { suppressMentionSyntax } from '../policy/suppress.js'
 import { toolLabel } from '../stream/tool-view.js'
 
@@ -42,7 +42,7 @@ export interface ApprovalButton {
 
 export interface ApprovalViewPayload {
   content: string
-  flags: typeof DISCORD_SUPPRESS_MENTIONS_FLAG
+  flags: typeof DISCORD_SUPPRESS_NOTIFICATIONS_FLAG
   components: Array<{ type: typeof ACTION_ROW; components: ApprovalButton[] }>
 }
 
@@ -66,7 +66,7 @@ export function renderApprovalControls(input: ApprovalViewInput): ApprovalViewPa
 
   return {
     content,
-    flags: DISCORD_SUPPRESS_MENTIONS_FLAG,
+    flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG,
     components: [
       {
         type: ACTION_ROW,

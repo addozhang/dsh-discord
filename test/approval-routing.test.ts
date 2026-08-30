@@ -118,6 +118,18 @@ describe('approval click routing', () => {
     expect(respond).toHaveBeenCalledTimes(1)
   })
 
+  it('parks unresolved when the respond port throws, keeping the retry available', async () => {
+    const { click, respond, store } = setup()
+    respond.mockImplementationOnce(() => Promise.reject(new Error('port blew up')))
+
+    await expect(click('dc:opaque-1')).resolves.toEqual({ outcome: 'unresolved' })
+    expect(store.get('appr-1')?.state).toBe('unresolved')
+
+    // The explicit retry path stays open once the port recovers.
+    await expect(click('dc:opaque-1')).resolves.toEqual({ outcome: 'submitted', action: 'allow' })
+    expect(store.get('appr-1')?.state).toBe('resolved')
+  })
+
   it('lets an explicit retry re-submit after an unresolved outcome', async () => {
     const { click, respond } = setup()
     respond.mockReturnValueOnce(Promise.resolve({ outcome: 'unknown' }))

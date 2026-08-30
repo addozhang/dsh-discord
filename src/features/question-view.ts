@@ -9,7 +9,7 @@
  */
 
 import type { ComponentRegistry } from '../discord/components.js'
-import { DISCORD_SUPPRESS_MENTIONS_FLAG } from '../policy/disclosure.js'
+import { DISCORD_SUPPRESS_NOTIFICATIONS_FLAG } from '../policy/disclosure.js'
 import { suppressMentionSyntax } from '../policy/suppress.js'
 import {
   MAX_CUSTOM_LENGTH,
@@ -55,7 +55,7 @@ export interface QuestionRow {
 
 export interface QuestionViewPayload {
   content: string
-  flags: typeof DISCORD_SUPPRESS_MENTIONS_FLAG
+  flags: typeof DISCORD_SUPPRESS_NOTIFICATIONS_FLAG
   components: QuestionRow[]
 }
 
@@ -121,7 +121,7 @@ export function renderQuestionControls(input: QuestionViewInput): QuestionViewPa
     : `${String(batch.questions.length)} questions need answers`
   return {
     content: `${header} (answers stay editable until you submit; custom text up to ${String(MAX_CUSTOM_LENGTH)} characters)`,
-    flags: DISCORD_SUPPRESS_MENTIONS_FLAG,
+    flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG,
     components: rows,
   }
 }

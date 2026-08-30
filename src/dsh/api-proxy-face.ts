@@ -488,7 +488,11 @@ export type RespondOutcome =
  * Builds the full ClientResponse envelope — {type: 'client-response',
  * rpcId, result: {ok: true, value}} is the wire contract; posting the bare
  * payload is silently ignored by the Host (rpcId never resolves) — and
- * maps the RpcReceipt onto the port outcome.
+ * maps the RpcReceipt onto the port outcome. Like every call in this module
+ * it is bounded (a Host that never resolves the receipt must not wedge an
+ * interaction handler or an expiry sweep forever) and never throws: a Host
+ * rejection or timeout resolves to `unknown` — the response may or may not
+ * have landed, and the callers park the ask `unresolved` on exactly that.
  */
 export function createClientRespondPort(
   dsh: { respond(message: unknown): Promise<unknown> },
@@ -497,21 +501,32 @@ export function createClientRespondPort(
   respond(rpcId: string, value: unknown): Promise<RespondOutcome>
 } {
   const log = options.log
+  const timeoutMs = options.timeoutMs ?? PROMPT_TIMEOUT_MS
   return {
-    respond(rpcId, value): Promise<RespondOutcome> {
-      return dsh.respond({
-        type: 'client-response',
-        rpcId,
-        result: { ok: true, value },
-      }).then(r => {
-        const receipt = r as { accepted?: unknown; reason?: unknown } | undefined
-        log?.('discord_client_respond_receipt', { rpcId, receipt: receipt ?? null })
-        if (receipt?.accepted === true) return { outcome: 'confirmed' }
-        if (receipt?.accepted === false) {
-          return { outcome: 'rejected', reason: typeof receipt.reason === 'string' ? receipt.reason : 'respond-refused' }
-        }
+    async respond(rpcId, value): Promise<RespondOutcome> {
+      let receipt: unknown
+      try {
+        const response = await withRpcTimeout(
+          dsh.respond({
+            type: 'client-response',
+            rpcId,
+            result: { ok: true, value },
+          }),
+          timeoutMs,
+        )
+        receipt = response
+      } catch (cause) {
+        const reason = cause instanceof RpcTimeoutError ? 'discord_client_respond_timeout' : 'discord_client_respond_threw'
+        log?.(reason, { rpcId, ...(cause instanceof RpcTimeoutError ? { timeoutMs } : { cause: String(cause) }) })
         return { outcome: 'unknown' }
-      })
+      }
+      const table = receipt as { accepted?: unknown; reason?: unknown } | undefined
+      log?.('discord_client_respond_receipt', { rpcId, receipt: table ?? null })
+      if (table?.accepted === true) return { outcome: 'confirmed' }
+      if (table?.accepted === false) {
+        return { outcome: 'rejected', reason: typeof table.reason === 'string' ? table.reason : 'respond-refused' }
+      }
+      return { outcome: 'unknown' }
     },
   }
 }

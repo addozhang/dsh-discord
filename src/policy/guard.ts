@@ -48,7 +48,8 @@ export function createAuthorizedIngress(options: AuthorizedIngressOptions): {
       guildId: event.guildId,
       userId: isMessage ? event.authorId : event.actorId,
       roleIds: event.roleIds,
-      ...(isMessage ? {} : { memberPermissions: event.memberPermissions, isBot: event.isBot }),
+      memberPermissions: event.memberPermissions,
+      ...(isMessage ? {} : { isBot: event.isBot }),
     })
 
     if (!decision.allowed) {

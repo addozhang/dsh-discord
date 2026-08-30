@@ -101,6 +101,9 @@ export function createThreadCreationFlow(deps: ThreadCreationDeps): {
         })
         if (found.outcome === 'found') {
           await deps.intents.resolve(request.sourceMessageId, 'succeeded', deps.nowMs())
+          // Persist the recovered id like the fresh-create path does, or
+          // every redelivery re-enters the crash window and rescans.
+          await deps.intents.annotate(request.sourceMessageId, { threadId: found.threadId })
           await joinAuthor(request, found.threadId)
           return { outcome: 'recovered', threadId: found.threadId }
         }

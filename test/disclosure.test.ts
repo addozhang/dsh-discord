@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  DISCORD_SUPPRESS_MENTIONS_FLAG,
+  DISCORD_SUPPRESS_NOTIFICATIONS_FLAG,
   describeWorkspace,
   safeTitle,
   workspaceLabels,
@@ -107,6 +107,6 @@ describe('suppressMentionSyntax', () => {
 
 describe('outbound flags', () => {
   it('exposes Discord SUPPRESS_MENTIONS (1 << 12) for every message path', () => {
-    expect(DISCORD_SUPPRESS_MENTIONS_FLAG).toBe(4096)
+    expect(DISCORD_SUPPRESS_NOTIFICATIONS_FLAG).toBe(4096)
   })
 })

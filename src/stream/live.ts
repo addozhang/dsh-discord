@@ -16,7 +16,7 @@ import { createToolActivitySurface, type ToolActivitySurface } from './tool-view
 import { createAnswerFinalizer, type AnswerFinalizer } from './finalizer.js'
 import { buildOutboundMessage } from './outbound.js'
 import { toolCategoryIcon } from './icons.js'
-import { safeTitle } from '../policy/disclosure.js'
+import { discordChannelNameKey, safeTitle } from '../policy/disclosure.js'
 import type { DiscordVerbosity } from '../settings.js'
 
 /** The mux frames the live path consumes (narrow, defensive shape). */
@@ -26,10 +26,16 @@ export type LiveFrame =
   | { type: 'session/queue'; sessionId: string; items: Array<{ id: string; summary: string }> }
   | { type: string }
 
-/** The Discord delivery face the live renderer needs. */
+/**
+ * The Discord delivery face the live renderer needs. `unknown` on a send
+ * means the request's application on Discord's side is unobservable (rest.ts
+ * contract); the caller must never blind-resent such a send — the live path
+ * pauses instead and lets the finalizer's single fresh send carry the text.
+ */
 export interface LiveDeliveryPort {
   send(request: { channelId: string; content: string }): Promise<
     | { outcome: 'completed'; messageId: string }
+    | { outcome: 'unknown' }
     | { outcome: 'failed' }
   >
   edit(request: { channelId: string; messageId: string; content: string }): Promise<
@@ -111,6 +117,16 @@ interface ThreadRuntime {
   finalizer: AnswerFinalizer | undefined
   headMessageId: string | undefined
   activityMessageId: string | undefined
+  /**
+   * Step generation fence: bumped on every turn/step boundary. Flushes and
+   * finalizers capture it at creation and never mutate the head across a
+   * boundary — a late finalize from a superseded step must not re-point the
+   * live head at its own (older) message.
+   */
+  stepSeq: number
+  /** The current step's first send is unobservable; never blind-resend it. */
+  headAttempted: boolean
+  activityAttempted: boolean
   turnId: string | undefined
   /** Safe correlation for tool/result rows: the label stays the call's own. */
   toolNames: Map<string, string>
@@ -121,6 +137,14 @@ interface ThreadRuntime {
 }
 
 const ANSWER_MARKER = (interrupted: boolean, marker: string): string => interrupted ? `\n\n${marker}` : ''
+
+/** Pair-safe truncation: never split a surrogate pair at the boundary. */
+function truncateText(text: string, max: number): string {
+  if (text.length <= max) return text
+  const cut = text.slice(0, max)
+  const last = cut.charCodeAt(cut.length - 1)
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut
+}
 
 /** Extract the visible text of one assistant message (text blocks only). */
 function assistantText(message: unknown): string {
@@ -170,12 +194,16 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       typing: createTypingLifecycle({
         trigger: () => deps.delivery.typing(threadId),
         intervalMs: deps.typingIntervalMs,
+        onFailure: (cause) => { deps.log?.('discord_live_typing_threw', { threadId, cause: String(cause) }) },
       }),
       scheduler: undefined,
       activityScheduler: undefined,
       finalizer: undefined,
       headMessageId: undefined,
       activityMessageId: undefined,
+      stepSeq: 0,
+      headAttempted: false,
+      activityAttempted: false,
       turnId: undefined,
       toolNames: new Map<string, string>(),
       toolTitles: new Map<string, string>(),
@@ -187,11 +215,21 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
 
   /** Flush the current answer text: create the head once, then edit it. */
   function flushAnswer(threadId: string, runtime: ThreadRuntime): (content: string) => Promise<void> {
+    const stepSeq = runtime.stepSeq
     return async (content: string) => {
+      if (runtime.stepSeq !== stepSeq) return
       const payload = buildOutboundMessage({ kind: 'assistant', content })
       if (runtime.headMessageId === undefined) {
+        // An earlier send whose application was unobservable must never be
+        // blind-resent (rest.ts contract): the stream pauses here and the
+        // finalizer's single fresh send carries the answer instead.
+        if (runtime.headAttempted) return
         const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
         if (sent.outcome === 'completed') runtime.headMessageId = sent.messageId
+        else if (sent.outcome === 'unknown') {
+          runtime.headAttempted = true
+          deps.log?.('discord_live_head_send_unknown', { threadId })
+        }
         return
       }
       await deps.delivery.edit({ channelId: threadId, messageId: runtime.headMessageId, content: payload.content })
@@ -203,6 +241,9 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     runtime.turnId = turnId
     runtime.headMessageId = undefined
     runtime.activityMessageId = undefined
+    runtime.headAttempted = false
+    runtime.activityAttempted = false
+    runtime.stepSeq += 1
     runtime.tools = createToolActivitySurface({ verbosity })
     runtime.toolNames = new Map<string, string>()
     runtime.toolTitles = new Map<string, string>()
@@ -210,6 +251,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     runtime.scheduler = createUpdateScheduler({
       minIntervalMs: deps.updateIntervalMs,
       onFlush: flushAnswer(threadId, runtime),
+      onFlushError: (cause) => { deps.log?.('discord_live_flush_failed', { threadId, cause: String(cause) }) },
     })
     // The activity message's own coalescer: row changes share one edit per
     // interval, so parallel tools cannot exceed the channel's edit budget.
@@ -217,6 +259,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     runtime.activityScheduler = createUpdateScheduler({
       minIntervalMs: deps.activityCoalesceMs ?? DEFAULT_ACTIVITY_COALESCE_MS,
       onFlush: renderActivity(threadId, runtime),
+      onFlushError: (cause) => { deps.log?.('discord_live_activity_flush_failed', { threadId, cause: String(cause) }) },
     })
     runtime.finalizer = undefined
     // A fresh lifecycle per turn: start() no-ops on a stopped one, so a
@@ -225,25 +268,38 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     runtime.typing = createTypingLifecycle({
       trigger: () => deps.delivery.typing(threadId),
       intervalMs: deps.typingIntervalMs,
+      onFailure: (cause) => { deps.log?.('discord_live_typing_threw', { threadId, cause: String(cause) }) },
     })
     runtime.typing.start()
+  }
+
+  /** The activity message body: one icon + presentation title per call row. */
+  function renderActivityContent(runtime: ThreadRuntime): string {
+    const rows = runtime.tools.render()
+    return rows.map(row => {
+      const title = truncateText(row.title ?? row.label, ACTIVITY_TITLE_MAX)
+      return `> ${toolCategoryIcon(row.label)} ${title}`
+    }).join('\n')
   }
 
   /** Render the tool rows into one bounded activity message (create once, edit after). */
   function renderActivity(threadId: string, runtime: ThreadRuntime): () => Promise<void> {
     return async () => {
-      const rows = runtime.tools.render()
-      if (rows.length === 0) return
-      const content = rows.map(row => {
-        const title = (row.title ?? row.label).slice(0, ACTIVITY_TITLE_MAX)
-        return `> ${toolCategoryIcon(row.label)} ${title}`
-      }).join('\n')
+      if (runtime.tools.render().length === 0) return
+      // Tool titles are Host-presented free text (terminal commands): they
+      // go through the same outbound builder as every other message path.
+      const payload = buildOutboundMessage({ kind: 'tool', content: renderActivityContent(runtime) })
       if (runtime.activityMessageId === undefined) {
-        const sent = await deps.delivery.send({ channelId: threadId, content })
+        if (runtime.activityAttempted) return
+        const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
         if (sent.outcome === 'completed') runtime.activityMessageId = sent.messageId
+        else if (sent.outcome === 'unknown') {
+          runtime.activityAttempted = true
+          deps.log?.('discord_live_activity_send_unknown', { threadId })
+        }
         return
       }
-      await deps.delivery.edit({ channelId: threadId, messageId: runtime.activityMessageId, content })
+      await deps.delivery.edit({ channelId: threadId, messageId: runtime.activityMessageId, content: payload.content })
     }
   }
 
@@ -268,12 +324,15 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         // A new step opens a NEW logical answer message: the previous
         // step's completed head is never overwritten (stream-renderer spec).
         runtime.headMessageId = undefined
+        runtime.headAttempted = false
+        runtime.stepSeq += 1
         // The previous step's finalize disposed the scheduler; a fresh one
         // carries the new step's chunk coalescing.
         runtime.scheduler?.dispose()
         runtime.scheduler = createUpdateScheduler({
           minIntervalMs: deps.updateIntervalMs,
           onFlush: flushAnswer(threadId, runtime),
+          onFlushError: (cause) => { deps.log?.('discord_live_flush_failed', { threadId, cause: String(cause) }) },
         })
         return
       }
@@ -296,7 +355,11 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         runtime.scheduler?.dispose()
         runtime.scheduler = undefined
         if (text === '') return
-        // The authoritative finalize sends exactly once per turn answer.
+        // The authoritative finalize sends exactly once per turn answer. It
+        // runs detached, so it captures the step generation here: a finalize
+        // whose REST is still in flight when the next step starts must not
+        // re-point the live head at its own (older) message.
+        const finalizedStepSeq = runtime.stepSeq
         runtime.finalizer = createAnswerFinalizer({
           delivery: {
             editHead: async ({ messageId, content }) => {
@@ -306,7 +369,9 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
               if (messageId === '') {
                 const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
                 if (sent.outcome === 'completed') {
-                  runtime.headMessageId = sent.messageId
+                  if (runtime.stepSeq === finalizedStepSeq && runtime.headMessageId === undefined) {
+                    runtime.headMessageId = sent.messageId
+                  }
                   return { outcome: 'completed' as const }
                 }
                 return { outcome: 'failed' as const }
@@ -380,26 +445,19 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     }
   }
 
-  /** The activity message body: one icon + presentation title per call row. */
-  function renderActivityContent(runtime: ThreadRuntime): string {
-    const rows = runtime.tools.render()
-    return rows.map(row => {
-      const title = (row.title ?? row.label).slice(0, 80)
-      return `> ${toolCategoryIcon(row.label)} ${title}`
-    }).join('\n')
-  }
-
   /** A bounded one-line summary of a queued message: text blocks only. */
   function queueSummary(item: unknown): { id: string; summary: string } {
     const record = (typeof item === 'object' && item !== null ? item : {}) as { id?: unknown; message?: { content?: unknown } }
     const id = typeof record.id === 'string' ? record.id : ''
     const content = Array.isArray(record.message?.content) ? record.message.content : []
-    const text = content
-      .filter((block): block is { type: 'text'; text: string } =>
-        typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text')
-      .map(block => block.text)
-      .join(' ')
-      .slice(0, 120)
+    const text = truncateText(
+      content
+        .filter((block): block is { type: 'text'; text: string } =>
+          typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text')
+        .map(block => block.text)
+        .join(' '),
+      120,
+    )
     return { id, summary: text === '' ? '（非文本消息）' : text }
   }
 
@@ -439,10 +497,12 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       runtime.lastTitle = name
       // Cold dedupe state after a restart: confirm the thread's wire name
       // before PATCHing — Discord throttles renames hard (~2 per 10 min),
-      // and an unchanged session must not burn one on a no-op.
+      // and an unchanged session must not burn one on a no-op. Both sides
+      // are slugified: Discord stores names lowercased and dashed, so a
+      // raw comparison would report a false difference on every restart.
       const renameNeeded = deps.threadName === undefined ? Promise.resolve(true)
         : deps.threadName(threadId).then(
-            (current) => current === undefined || safeTitle(current) !== name,
+            (current) => current === undefined || discordChannelNameKey(current) !== discordChannelNameKey(name),
           ).catch(() => true)
       void renameNeeded.then((needed) => {
         if (!needed) return

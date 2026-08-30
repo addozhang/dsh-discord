@@ -71,12 +71,21 @@ export async function handleApprovalClick(
   if (claim.outcome !== 'claimed') return { outcome: 'already-resolved' }
 
   const outcome: ApprovalOutcome = context.action === 'allow' ? 'allowed-once' : 'rejected'
-  const submitted = await deps.port.respond({
-    rpcId: decision.respond.rpcId,
-    sessionId: decision.respond.sessionId,
-    approvalId: decision.respond.approvalId,
-    outcome,
-  })
+  // A port that THROWS (distinct from an unknown outcome) is still an
+  // unconfirmed submit: park unresolved so the expiry sweep and the user's
+  // own retry stay available — never leave the approval in submitting.
+  let submitted: Awaited<ReturnType<typeof deps.port.respond>>
+  try {
+    submitted = await deps.port.respond({
+      rpcId: decision.respond.rpcId,
+      sessionId: decision.respond.sessionId,
+      approvalId: decision.respond.approvalId,
+      outcome,
+    })
+  } catch {
+    await deps.store.markUnresolved(context.approvalId, deps.nowMs())
+    return { outcome: 'unresolved' }
+  }
 
   if (submitted.outcome === 'confirmed') {
     await deps.store.markResolved(context.approvalId, outcome, deps.nowMs())

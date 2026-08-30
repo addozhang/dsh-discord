@@ -57,7 +57,7 @@ function setup() {
 
   const select = (customId: string, values: string[], over: { userId?: string; threadId?: string } = {}) =>
     handleSelectInput(
-      { registry, store, port, nowMs: () => 0 },
+      { registry, store, port, nowMs: () => 0, controls: { disable: async () => {} } },
       { customId, values, userId: over.userId ?? 'user-owner', threadId: over.threadId ?? 'thread-1' },
     )
 
@@ -131,7 +131,7 @@ describe('custom-answer modal flow', () => {
     expect(modalContext.found).toBe(true)
 
     const outcome = handleModalSubmit(
-      { registry, store, port: { respond: vi.fn() }, nowMs: () => 0 },
+      { registry, store, port: { respond: vi.fn() }, nowMs: () => 0, controls: { disable: async () => {} } },
       { customId: 'dc:opaque-4', text: 'whichever is cheaper', userId: 'user-owner', threadId: 'thread-1' },
     )
     expect(outcome).toEqual({ outcome: 'recorded', complete: false })
@@ -143,7 +143,7 @@ describe('custom-answer modal flow', () => {
     await select('dc:opaque-1', [CUSTOM_ANSWER_VALUE])
 
     const outcome = handleModalSubmit(
-      { registry, store, port: { respond: vi.fn() }, nowMs: () => 0 },
+      { registry, store, port: { respond: vi.fn() }, nowMs: () => 0, controls: { disable: async () => {} } },
       { customId: 'dc:opaque-4', text: 'sneaky', userId: 'user-other', threadId: 'thread-1' },
     )
     expect(outcome).toEqual({ outcome: 'denied' })
@@ -155,18 +155,58 @@ describe('custom-answer modal flow', () => {
     await select('dc:opaque-1', [CUSTOM_ANSWER_VALUE])
 
     const outcome = handleModalSubmit(
-      { registry, store, port: { respond: vi.fn() }, nowMs: () => 60_000 },
+      { registry, store, port: { respond: vi.fn() }, nowMs: () => 60_000, controls: { disable: async () => {} } },
       { customId: 'dc:opaque-4', text: 'too late', userId: 'user-owner', threadId: 'thread-1' },
     )
     expect(outcome).toEqual({ outcome: 'unknown-control' })
     expect(store.get('qrpc-1')?.draft('q1')).toBeUndefined()
   })
 
+  it('retires the rendered controls when the submit is confirmed', async () => {
+    const { registry, store, port, select, submitId } = setup()
+    const disable = vi.fn(async () => {})
+    await select('dc:opaque-1', ['Postgres'])
+    await select('dc:opaque-2', ['Rust'])
+
+    const outcome = await handleSelectInput(
+      { registry, store, port, nowMs: () => 0, controls: { disable } },
+      { customId: submitId, values: [], userId: 'user-owner', threadId: 'thread-1' },
+    )
+
+    expect(outcome).toEqual({ outcome: 'submitted' })
+    expect(disable).toHaveBeenCalledWith('qrpc-1')
+  })
+
+  it('parks unresolved when the respond port throws, keeping the retry available', async () => {
+    const { registry, store, respond, port, select, submitId } = setup()
+    const disable = vi.fn(async () => {})
+    await select('dc:opaque-1', ['Postgres'])
+    await select('dc:opaque-2', ['Rust'])
+    respond.mockImplementationOnce(() => Promise.reject(new Error('port blew up')))
+
+    const outcome = await handleSelectInput(
+      { registry, store, port, nowMs: () => 0, controls: { disable } },
+      { customId: submitId, values: [], userId: 'user-owner', threadId: 'thread-1' },
+    )
+    // A thrown port is an unconfirmed submit: unresolved, never submitting.
+    expect(outcome).toEqual({ outcome: 'unresolved' })
+    expect(store.get('qrpc-1')?.state).toBe('unresolved')
+    expect(disable).not.toHaveBeenCalled()
+
+    // The user's own retry re-submits once the port recovers.
+    const retried = await handleSelectInput(
+      { registry, store, port, nowMs: () => 0, controls: { disable } },
+      { customId: submitId, values: [], userId: 'user-owner', threadId: 'thread-1' },
+    )
+    expect(retried).toEqual({ outcome: 'submitted' })
+    expect(store.get('qrpc-1')?.state).toBe('resolved')
+  })
+
   it('encodes the submitted batch with labels and custom text per question', async () => {
     const { registry, store, port, respond, select } = setup()
     await select('dc:opaque-1', [CUSTOM_ANSWER_VALUE])
     handleModalSubmit(
-      { registry, store, port, nowMs: () => 0 },
+      { registry, store, port, nowMs: () => 0, controls: { disable: async () => {} } },
       { customId: 'dc:opaque-4', text: 'whichever is cheaper', userId: 'user-owner', threadId: 'thread-1' },
     )
     await select('dc:opaque-2', ['Rust'])

@@ -4,8 +4,9 @@
  * carries it to Discord — and because a flush may be an in-flight REST edit,
  * the scheduler serializes: while a flush runs, new content only waits; the
  * next flush fires only when both the interval elapsed AND the content
- * changed. A failed flush is observed by the caller's onFlush and does not
- * wedge the scheduler.
+ * changed. A failed flush is observed HERE (the scheduler runs detached, so
+ * its rejection would otherwise be unhandled), reported through
+ * `onFlushError`, and retried on the next schedule.
  */
 
 export interface UpdateScheduler {
@@ -16,6 +17,8 @@ export interface UpdateScheduler {
 export function createUpdateScheduler(options: {
   minIntervalMs: number
   onFlush(content: string): Promise<void>
+  /** Observes a failed flush; unset, failures are still contained silently. */
+  onFlushError?: (cause: unknown) => void
 }): UpdateScheduler {
   let disposed = false
   let latest: string | undefined
@@ -40,6 +43,11 @@ export function createUpdateScheduler(options: {
     try {
       await options.onFlush(content)
       lastFlushed = content
+    } catch (cause) {
+      // The flush runs detached (void runFlush()), so this catch is the only
+      // thing standing between a failing delivery and a process-killing
+      // unhandled rejection. lastFlushed stays put: the next schedule retries.
+      options.onFlushError?.(cause)
     } finally {
       flushing = false
       // Content that arrived during the flush gets its own interval now.

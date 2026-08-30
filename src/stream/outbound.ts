@@ -1,23 +1,26 @@
 /**
  * The single outbound message builder (design.md §8, task 11.7). Every
  * message path — assistant answers, tool views, titles, errors — constructs
- * its payload here, where the SUPPRESS_MENTIONS flag is applied and content
- * is additionally neutralized byte-wise: a renderer that ignored the flag
- * still could not resolve a ping.
+ * its payload here, where mention prevention is layered three ways: the
+ * `allowed_mentions: { parse: [] }` request field (the API-level guarantee),
+ * silent-delivery flags, and byte-wise syntax neutralization, so a renderer
+ * that bypassed one layer still could not resolve a ping.
  */
 
-import { DISCORD_SUPPRESS_MENTIONS_FLAG, safeTitle } from '../policy/disclosure.js'
+import { ALLOWED_MENTIONS_NONE, DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, safeTitle } from '../policy/disclosure.js'
 import { wrapGfmTables } from './markdown.js'
 import { suppressMentionSyntax } from '../policy/suppress.js'
 
-/** Discord message flags the adapter always sets (SUPPRESS_MENTIONS). */
-export const OUTBOUND_MESSAGE_FLAGS = DISCORD_SUPPRESS_MENTIONS_FLAG
+/** Discord message flags the adapter always sets (silent delivery). */
+export const OUTBOUND_MESSAGE_FLAGS = DISCORD_SUPPRESS_NOTIFICATIONS_FLAG
 
 export type OutboundContentKind = 'assistant' | 'tool' | 'title' | 'error'
 
 export interface OutboundMessage {
   content: string
   flags: number
+  /** No parse category allowed: nothing in the content can ping. */
+  allowed_mentions: { parse: string[] }
 }
 
 /**
@@ -30,5 +33,5 @@ export function buildOutboundMessage(input: { kind: OutboundContentKind; content
     : input.kind === 'assistant'
       ? suppressMentionSyntax(wrapGfmTables(input.content))
       : suppressMentionSyntax(input.content)
-  return { content, flags: OUTBOUND_MESSAGE_FLAGS }
+  return { content, flags: OUTBOUND_MESSAGE_FLAGS, allowed_mentions: ALLOWED_MENTIONS_NONE }
 }

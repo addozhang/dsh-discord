@@ -269,10 +269,19 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
 
   /** Set while the operator explicitly disconnected; blocks auto start. */
   let stoppedByUser = false
+  /**
+   * Start-chain generation. Bumped by connect()/disconnect() so an in-flight
+   * chain (suspended at its token/identity awaits) dies quietly instead of
+   * spawning a second, unownable gateway after the operator acted.
+   */
+  let startSeq = 0
 
   async function runStartChain(): Promise<void> {
-    if (stoppedByUser) return
+    const seq = ++startSeq
+    const stale = (): boolean => stoppedByUser || seq !== startSeq
+    if (stale()) return
     const token = await deps.tokenProvider()
+    if (stale()) return
     if (token === undefined || token === '') {
       started = false
       startError = 'missing-token'
@@ -282,6 +291,7 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
     }
     status.setCredential({ configured: true })
     const selfUserId = await deps.selfUserIdProvider()
+    if (stale()) return
 
     ingress = createAuthorizedIngress({
       selfUserId,
@@ -323,6 +333,7 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
     connect() {
       stoppedByUser = false
       startError = undefined
+      startSeq += 1
       gateway?.dispose()
       gateway = undefined
       started = false
@@ -335,6 +346,7 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
       // Operator-initiated offline: the credential stays in the store so the
       // next Connect (possibly with a replaced token) needs no re-entry.
       stoppedByUser = true
+      startSeq += 1
       gateway?.dispose()
       gateway = undefined
       started = false
@@ -342,6 +354,7 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
       status.setGateway('disconnected')
     },
     dispose() {
+      startSeq += 1
       gateway?.dispose()
     },
   }

@@ -20,12 +20,19 @@ export interface TypingLifecycle {
 export function createTypingLifecycle(options: {
   trigger: () => void | Promise<void>
   intervalMs: number
+  /** Observes a failed trigger; the interval keeps the indicator honest. */
+  onFailure?: (cause: unknown) => void
 }): TypingLifecycle {
   let state: 'idle' | 'running' | 'paused' | 'stopped' = 'idle'
   let timer: ReturnType<typeof setInterval> | undefined
 
   const fire = (): void => {
-    void options.trigger()
+    // The trigger runs detached (fire-and-forget by contract); without this
+    // catch a rejecting trigger (e.g. a credential resolution failure) would
+    // be an unhandled rejection and kill the process.
+    void Promise.resolve(options.trigger()).catch((cause: unknown) => {
+      options.onFailure?.(cause)
+    })
   }
 
   function clearTimer(): void {

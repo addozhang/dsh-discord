@@ -29,7 +29,7 @@ const zh = {
   // ── /project list / info ─────────────────────────────────────────────
   listEmpty: '（没有已注册的工作区）',
   listHeader: '**可用工作区**',
-  listPager: (page: number, pageCount: number) => `\n（第 ${String(page)}/${String(pageCount)} 页）`,
+  listTruncated: (shown: number, total: number) => `\n（共 ${String(total)} 个，仅列出前 ${String(shown)} 个）`,
   infoUnboundAllowed: '此频道未绑定工作区；请到工作区的专属频道中使用（/project bind 可创建）。',
   infoUnbound: '⚠️ 此频道未绑定工作区。',
   infoMemberOnly: '⚠️ 只有成员可以查看此频道的绑定。',
@@ -127,7 +127,7 @@ const en: CopyTable = {
 
   listEmpty: '(no registered workspaces)',
   listHeader: '**Available workspaces**',
-  listPager: (page, pageCount) => `\n(page ${String(page)}/${String(pageCount)})`,
+  listTruncated: (shown, total) => `\n(showing ${String(shown)} of ${String(total)})`,
   infoUnboundAllowed: 'This channel is not bound to a workspace; use the workspace home channel (/project bind creates one).',
   infoUnbound: '⚠️ This channel is not bound to a workspace.',
   infoMemberOnly: '⚠️ Only members can view this channel binding.',

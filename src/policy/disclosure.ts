@@ -6,8 +6,9 @@
  * an abbreviated form may appear in autocomplete labels — but a path never
  * reaches channel metadata or public (non-ephemeral) messages. User-controlled
  * text is sanitized before it can forge Discord mentions or overflow
- * component limits, and every outbound message carries the SUPPRESS_MENTIONS
- * flag so assistant, tool, title, and error content can never ping anyone.
+ * component limits, and every outbound message carries
+ * `allowed_mentions: { parse: [] }` plus byte-wise syntax neutralization so
+ * assistant, tool, title, and error content can never ping anyone.
  */
 
 import { homedir } from 'node:os'
@@ -43,14 +44,36 @@ export interface WorkspaceLabel {
   label: string
 }
 
-/** Discord's SUPPRESS_MENTIONS message flag (1 << 12). */
-export const DISCORD_SUPPRESS_MENTIONS_FLAG = 1 << 12
+/**
+ * Discord's SUPPRESS_NOTIFICATIONS message flag (1 << 12): the message will
+ * not trigger push/desktop notifications. This flag says nothing about
+ * mentions — ping prevention is the `allowed_mentions` request field below,
+ * and the syntax neutralization in policy/suppress.ts is the third layer.
+ */
+export const DISCORD_SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12
+
+/**
+ * Discord's request field that disables every mention parse category: with
+ * `parse: []` no `@everyone`, user, role, or channel mention in the content
+ * pings, regardless of how the content renders. Every message create/edit
+ * the adapter sends carries this.
+ */
+export const ALLOWED_MENTIONS_NONE: { parse: string[] } = { parse: [] }
 
 /** Discord's ephemeral message flag (only the invoker sees the message). */
 export const DISCORD_EPHEMERAL_FLAG = 1 << 6
 
-/** Ephemeral + SUPPRESS_MENTIONS: the standard adapter followup flags. */
-export const OUTBOUND_EPHEMERAL_FLAGS = DISCORD_EPHEMERAL_FLAG | DISCORD_SUPPRESS_MENTIONS_FLAG
+/** Ephemeral + silent: the standard adapter followup flags. */
+export const OUTBOUND_EPHEMERAL_FLAGS = DISCORD_EPHEMERAL_FLAG | DISCORD_SUPPRESS_NOTIFICATIONS_FLAG
+
+/**
+ * The comparison key for Discord channel/thread names: Discord slugs names
+ * (lowercase, whitespace runs collapse to `-`), so a rename-dedupe check
+ * must compare both sides slugified or every restart burns a rename.
+ */
+export function discordChannelNameKey(text: string): string {
+  return text.trim().toLowerCase().replace(/\s+/gu, '-')
+}
 
 /** Component label ceiling imposed by Discord. */
 const DISCORD_LABEL_MAX = 100

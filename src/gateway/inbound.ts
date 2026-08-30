@@ -44,6 +44,8 @@ export interface NormalizedMessage {
   authorId: DiscordSnowflake
   /** Role ids the wire attached to the member (empty when absent). */
   roleIds: string[]
+  /** Permission bitmask string from the member, when the wire carried one. */
+  memberPermissions: string | undefined
   /** Content after stripping every bot-mention token and trimming. */
   content: string
   /** Whether the message explicitly mentioned the adapter's bot user. */
@@ -109,6 +111,11 @@ function asSnowflake(value: unknown): DiscordSnowflake | undefined {
 }
 
 function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowflake): IngestResult {
+  // Webhook-authored messages are app-driven surfaces, not member input:
+  // their author object need not carry `bot: true`, and anyone with
+  // Manage Webhooks could otherwise drive prompts through one.
+  if (typeof payload['webhook_id'] === 'string') return { accepted: false, reason: 'bot-authored' }
+
   const author = payload['author']
   if (!isRecord(author)) return { accepted: false, reason: 'malformed-payload' }
 
@@ -141,6 +148,9 @@ function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowf
   }
 
   const stripped = extractBotMention(content, selfUserId)
+  const rawPermissions = typeof (isRecord(payload['member']) ? payload['member'] : {})['permissions'] === 'string'
+    ? (payload['member'] as { permissions: string }).permissions
+    : undefined
   return {
     accepted: true,
     event: {
@@ -150,6 +160,7 @@ function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowf
       channelId,
       authorId,
       roleIds: extractRoleIds(payload),
+      memberPermissions: rawPermissions,
       content: stripped.text,
       mentionedBot: stripped.mentioned,
       repliedToId,

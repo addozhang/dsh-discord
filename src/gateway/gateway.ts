@@ -62,6 +62,14 @@ const OPCODE_HEARTBEAT_ACK = 11
 /** A recoverable close code: Discord allows session resume. */
 const RECOVERABLE_CLOSE = 4000
 
+/**
+ * Grace period after a heartbeat-miss `terminate()`. The production socket
+ * adapter terminates via a graceful close handshake, which a partitioned
+ * peer never answers — without this fallback the machine would sit silently
+ * dead with no onclose and no reconnect.
+ */
+const TERMINATE_FALLBACK_MS = 5_000
+
 interface WireFrame {
   op?: unknown
   t?: unknown
@@ -81,6 +89,7 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
   let generation = 0
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
+  let terminateFallbackTimer: ReturnType<typeof setTimeout> | undefined
   let heartbeatAcked = true
   let lastSeq: number | null = null
   let sessionId: string | undefined
@@ -95,6 +104,10 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
     if (reconnectTimer !== undefined) {
       clearTimeout(reconnectTimer)
       reconnectTimer = undefined
+    }
+    if (terminateFallbackTimer !== undefined) {
+      clearTimeout(terminateFallbackTimer)
+      terminateFallbackTimer = undefined
     }
   }
 
@@ -160,6 +173,17 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
           if (disposed || liveGeneration !== generation) return
           if (!heartbeatAcked) {
             currentSocket?.terminate()
+            // The adapter's terminate may be a graceful close, which a dead
+            // peer never answers — onclose can then stay silent for minutes.
+            // Arm a one-shot fallback so the reconnect machinery runs
+            // regardless of socket-adapter behavior.
+            if (terminateFallbackTimer === undefined) {
+              terminateFallbackTimer = setTimeout(() => {
+                terminateFallbackTimer = undefined
+                if (disposed || liveGeneration !== generation) return
+                if (currentSocket === socket) handleClose(RECOVERABLE_CLOSE)
+              }, TERMINATE_FALLBACK_MS)
+            }
             return
           }
           heartbeatAcked = false

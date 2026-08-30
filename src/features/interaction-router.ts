@@ -99,26 +99,45 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
 
   async function routeAutocomplete(event: RouterEvent, interactionToken: string): Promise<void> {
     if (event.commandName !== 'project') return
-    const decision = authorize(event)
-    const choices: Array<{ name: string; value: string }> = []
-    if (decision.allowed) {
-      const wireOptions = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string; focused?: boolean }> }> | undefined
-      const sub = Array.isArray(wireOptions) ? wireOptions[0] : undefined
-      const focused = Array.isArray(sub?.options) ? sub.options.find(option => option.focused === true) : undefined
-      const query = typeof focused?.value === 'string' ? focused.value : ''
-      const catalog = await deps.catalogPort.listWorkspaces()
-      if (catalog.outcome === 'completed') {
-        choices.push(...workspaceAutocompleteChoices(catalog.workspaces, query).slice(0, 25))
+    // Autocomplete has no deferred-ack form: whatever happens below, Discord
+    // must receive exactly one type-8 answer, even if only empty choices.
+    try {
+      const decision = authorize(event)
+      const choices: Array<{ name: string; value: string }> = []
+      if (decision.allowed) {
+        try {
+          const wireOptions = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string; focused?: boolean }> }> | undefined
+          const sub = Array.isArray(wireOptions) ? wireOptions[0] : undefined
+          const focused = Array.isArray(sub?.options) ? sub.options.find(option => option.focused === true) : undefined
+          const query = typeof focused?.value === 'string' ? focused.value : ''
+          const catalog = await deps.catalogPort.listWorkspaces()
+          if (catalog.outcome === 'completed') {
+            choices.push(...workspaceAutocompleteChoices(catalog.workspaces, query).slice(0, 25))
+          }
+        } catch (cause) {
+          // Malformed catalog rows must degrade to empty choices, never to
+          // an unanswered interaction.
+          deps.warn('discord_autocomplete_catalog_failed', String(cause))
+        }
       }
-    }
-    const rest = await deps.rest()
-    if (rest === undefined) return
-    const posted = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, {
-      type: 8,
-      data: { choices },
-    })
-    if (posted.outcome !== 'completed') {
-      deps.log('discord_autocomplete_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
+      const rest = await deps.rest()
+      if (rest === undefined) { deps.warn('discord_autocomplete_failed', 'missing-token'); return }
+      const posted = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, {
+        type: 8,
+        data: { choices },
+      })
+      if (posted.outcome !== 'completed') {
+        deps.log('discord_autocomplete_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
+      }
+    } catch (cause) {
+      deps.warn('discord_autocomplete_threw', String(cause))
+      const rest = await deps.rest()
+      if (rest !== undefined) {
+        await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, {
+          type: 8,
+          data: { choices: [] },
+        }).catch(() => {})
+      }
     }
   }
 
@@ -201,32 +220,35 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             return
           }
           // Names only: the bind option autocompletes live candidates,
-          // so ids never need to be read, copied, or typed.
+          // so ids never need to be read, copied, or typed. Text surface,
+          // no navigation: over-large catalogs get an honest truncation
+          // line instead of a pager that leads nowhere.
           const rows = view.items.map(item => `• ${item.label}`)
-          const pager = view.pageCount > 1 ? deps.copy.listPager(view.pageIndex + 1, view.pageCount) : ''
-          await followUp(rows.length === 0 ? deps.copy.listEmpty : [deps.copy.listHeader, ...rows].join('\n') + pager)
+          const truncation = view.totalCount > view.items.length
+            ? deps.copy.listTruncated(view.items.length, view.totalCount)
+            : ''
+          await followUp(rows.length === 0 ? deps.copy.listEmpty : [deps.copy.listHeader, ...rows].join('\n') + truncation)
           return
         }
         if (subName === 'info') {
           // Info describes THIS channel's bound workspace. Any authorized
           // member sees the identity plus the canonical path (amended
           // design §3 / 16.1); the response is ephemeral either way.
+          // Deny-first: the refusal is decided before any DSH read.
           const decision = authorize(event)
-          const binding = deps.channelBinding(event.guildId, event.channelId)
-          if (binding === undefined) {
-            // Bind provisions the Workspace's home channel — most
-            // channels, including the control channel, are unbound.
-            await followUp(decision.allowed
-              ? deps.copy.infoUnboundAllowed
-              : deps.copy.infoUnbound)
-            return
-          }
-          const detail = await deps.dsh.readWorkspaceDetail(binding.workspaceId)
           if (!decision.allowed) {
             // Refuse identity disclosure to non-members even when bound.
             await followUp(deps.copy.infoMemberOnly)
             return
           }
+          const binding = deps.channelBinding(event.guildId, event.channelId)
+          if (binding === undefined) {
+            // Bind provisions the Workspace's home channel — most
+            // channels, including the control channel, are unbound.
+            await followUp(deps.copy.infoUnboundAllowed)
+            return
+          }
+          const detail = await deps.dsh.readWorkspaceDetail(binding.workspaceId)
           if (detail.outcome !== 'found') {
             await followUp(detail.outcome === 'unknown'
               ? deps.copy.infoUnknown
@@ -399,8 +421,11 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         }])
         return
       }
+      // Terminal guard: a recognized interaction type with an unhandled
+      // command name must still answer, never strand on the deferred ack.
+      await followUp(deps.copy.unknownSubcommand)
     } catch (cause) {
-      console.error('[dsh-discord] slash handler failed:', cause)
+      deps.warn('discord_slash_handler_failed', String(cause))
       await followUp(deps.copy.commandFailed).catch(() => {})
     }
   }
@@ -520,7 +545,9 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       return
     }
     // Every other outcome settles as a deferred update plus an ephemeral
-    // followup; the rendered controls retire only on terminal outcomes.
+    // followup; the rendered controls retire on the submitted terminal
+    // outcome (question-routing) or via expiry/remote resolution — stray
+    // clicks meanwhile still answer honestly through the stores.
     const rest = await deps.rest()
     if (rest === undefined) return
     await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
@@ -589,8 +616,9 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         return
       }
       // A not-found custom_id means the control was never registered or has
-      // been retired by its TTL (approval/question contexts stay resolvable
-      // until claim). Kimaki discipline: an expired click still gets the
+      // been retired by its TTL (approval/question registry entries stay
+      // resolvable until expiry; claimed-vs-resolved state lives in the
+      // stores). Kimaki discipline: an expired click still gets the
       // deferred ack plus an explicit ephemeral rerun hint — never silence.
       if (bindContext === undefined) {
         const rest = await deps.rest()
@@ -649,11 +677,17 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           )
         } catch (cause) {
           deps.warn('discord_approval_click_failed', String(cause))
+          // The type-6 ack already went out: without a followup the user
+          // gets no failure state at all — answer like the sibling paths.
+          await deps.componentFollowUp(event.interactionId, interactionToken, deps.copy.commandFailed).catch(() => {})
           return
         }
         const approvalId = typeof bindContext['approvalId'] === 'string' ? bindContext['approvalId'] : ''
         deps.log('discord_approval_click', { outcome: outcome.outcome, userId: event.actorId, approvalId })
-        if (outcome.outcome === 'submitted' || outcome.outcome === 'already-resolved' || outcome.outcome === 'unresolved') {
+        // `unresolved` intentionally keeps the controls live: the store's
+        // claim accepts a re-click, so the user's own retry stays reachable
+        // until the expiry sweep retires the ask.
+        if (outcome.outcome === 'submitted' || outcome.outcome === 'already-resolved') {
           await deps.disableControl(approvalId)
         }
         if (outcome.outcome === 'denied') {

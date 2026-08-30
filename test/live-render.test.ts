@@ -10,12 +10,15 @@ import { describe, expect, it } from 'vitest'
 
 import { startLiveRender, type LiveDeliveryPort, type LiveFrame } from '../src/stream/live.js'
 
-function createDelivery() {
+function createDelivery(sendOutcomes: Array<'completed' | 'unknown' | 'failed'> = []) {
   const calls: Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }> = []
   let messageCounter = 0
   const delivery: LiveDeliveryPort = {
     send: (request) => {
       calls.push({ kind: 'send', channelId: request.channelId, content: request.content })
+      const queued = sendOutcomes.shift()
+      if (queued === 'unknown') return Promise.resolve({ outcome: 'unknown' })
+      if (queued === 'failed') return Promise.resolve({ outcome: 'failed' })
       messageCounter += 1
       return Promise.resolve({ outcome: 'completed', messageId: `dm-${String(messageCounter)}` })
     },
@@ -50,8 +53,9 @@ async function drive(frames: LiveFrame[], options: {
   onTurnEnded?: (sessionId: string) => void
   updateIntervalMs?: number
   threadName?: (channelId: string) => Promise<string | undefined>
+  sendOutcomes?: Array<'completed' | 'unknown' | 'failed'>
 }): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }>> {
-  const { delivery, calls } = createDelivery()
+  const { delivery, calls } = createDelivery(options.sendOutcomes ?? [])
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
   async function* source(): AsyncIterable<LiveFrame> {
@@ -294,6 +298,18 @@ describe('live render: session-title rename', () => {
     expect(calls.filter(call => call.kind === 'rename')).toHaveLength(0)
   })
 
+  it('after a restart, skips the rename when the wire name is the slugified title', async () => {
+    // Discord stores thread names lowercased and dashed; the dedupe must
+    // compare slugified keys or every restart burns a rename on a no-op.
+    const calls = await drive([
+      { type: 'session/projection', sessionId: 'sess-1', key: 'title', value: '阅读 main 分支当前状态' } as LiveFrame,
+    ], {
+      threadForSession: () => 'thread-1',
+      threadName: () => Promise.resolve('阅读-main-分支当前状态'),
+    })
+    expect(calls.filter(call => call.kind === 'rename')).toHaveLength(0)
+  })
+
   it('after a restart, renames when the wire name differs or lookup fails', async () => {
     for (const threadName of [
       () => Promise.resolve('stale name'),
@@ -306,5 +322,115 @@ describe('live render: session-title rename', () => {
         { kind: 'rename', channelId: 'thread-1', content: '阅读 main 分支当前状态' },
       ])
     }
+  })
+})
+
+describe('live render: delivery failure posture', () => {
+  it('never blind-resends a head whose send outcome was unobservable', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }),
+      sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'Hel' } }),
+      sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'lo' } }),
+      sessionEvent('sess-1', 'assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'Hello' }] } }),
+    ], {
+      threadForSession: () => 'thread-1',
+      // The first (head-creating) send is unobservable: Discord may have it.
+      sendOutcomes: ['unknown'],
+    })
+
+    const sends = calls.filter(call => call.kind === 'send')
+    // One unobservable flush send + the finalizer's single fresh send —
+    // never a blind resend of the same content.
+    expect(sends).toHaveLength(2)
+    expect(sends[1]?.content).toContain('Hello')
+    expect(calls.filter(call => call.kind === 'edit')).toHaveLength(0)
+  })
+
+  it('a finalize from a superseded step never re-points the live head', async () => {
+    const calls: Array<{ kind: string; channelId?: string; messageId?: string; content?: string }> = []
+    let releaseFinalizeSend!: () => void
+    const finalizeSendGate = new Promise<void>((resolve) => { releaseFinalizeSend = resolve })
+    const { delivery } = (() => {
+      let n = 0
+      const delivery: LiveDeliveryPort = {
+        send: (request) => {
+          calls.push({ kind: 'send', channelId: request.channelId, content: request.content })
+          if (request.content.includes('step-one-final')) {
+            n += 1
+            const id = `dm-${String(n)}`
+            return finalizeSendGate.then(() => ({ outcome: 'completed' as const, messageId: id }))
+          }
+          n += 1
+          return Promise.resolve({ outcome: 'completed' as const, messageId: `dm-${String(n)}` })
+        },
+        edit: (request) => {
+          calls.push({ kind: 'edit', channelId: request.channelId, messageId: request.messageId, content: request.content })
+          return Promise.resolve({ outcome: 'completed' as const })
+        },
+        typing: () => Promise.resolve(),
+        renameThread: () => Promise.resolve({ outcome: 'completed' as const }),
+        delete: () => Promise.resolve({ outcome: 'completed' as const }),
+      }
+      return { delivery }
+    })()
+
+    // A pushable frame queue so the test can interleave with in-flight sends.
+    const queue: LiveFrame[] = []
+    let notify: (() => void) | undefined
+    let drainedClosed: boolean = false
+    const sleep = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms) })
+    async function* source(): AsyncIterable<LiveFrame> {
+      while (!drainedClosed) {
+        if (queue.length === 0) {
+          await new Promise<void>(resolve => { notify = resolve })
+          continue
+        }
+        const frame = queue.shift()
+        if (frame === undefined) continue
+        yield frame
+        await sleep(5)
+      }
+    }
+    const live = startLiveRender({
+      frames: source,
+      threadForSession: () => 'thread-1',
+      delivery,
+      updateIntervalMs: 0,
+      activityCoalesceMs: 0,
+      typingIntervalMs: 60_000,
+      approvalTimeoutMs: 1,
+      questionTimeoutMs: 1,
+    })
+    const push = (frame: LiveFrame): void => { queue.push(frame); notify?.() }
+
+    push(sessionEvent('sess-1', 'turn/start', { turn: 1 }))
+    await sleep(10)
+    push(sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }))
+    await sleep(10)
+    // Step-1's authoritative message finalizes with no flushed head: the
+    // finalizer's own send becomes the head — but it is gated in flight.
+    push(sessionEvent('sess-1', 'assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'step-one-final' }] } }))
+    await sleep(20)
+    // Step-2 opens a new head while step-1's finalize send is still in REST.
+    push(sessionEvent('sess-1', 'step/start', { turn: 1, step: 2 }))
+    await sleep(10)
+    push(sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 2, chunk: { type: 'text-delta', index: 0, text: 'A' } }))
+    await sleep(20)
+    releaseFinalizeSend()
+    await sleep(20)
+    push(sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 2, chunk: { type: 'text-delta', index: 0, text: 'B' } }))
+    await sleep(20)
+    drainedClosed = true
+    notify?.()
+    live.dispose()
+
+    // Step-2's chunk flushed into its own message; the late finalize's send
+    // must NOT have become the head — the last edit still targets dm-2.
+    const sends = calls.filter(call => call.kind === 'send')
+    expect(sends.some(call => call.content?.includes('step-one-final'))).toBe(true)
+    const lastEdit = calls.filter(call => call.kind === 'edit').at(-1)
+    expect(lastEdit?.messageId).toBe('dm-2')
+    expect(lastEdit?.content).toContain('AB')
   })
 })

@@ -72,6 +72,36 @@ describe('update scheduler', () => {
     scheduler.dispose()
   })
 
+  it('contains a rejecting onFlush, reports it, and retries the content later', async () => {
+    const onFlushError = vi.fn()
+    const flushed: string[] = []
+    let fail = true
+    const scheduler = createUpdateScheduler({
+      minIntervalMs: 100,
+      onFlush: (content) => {
+        if (fail) return Promise.reject(new Error('rest down'))
+        flushed.push(content)
+        return Promise.resolve()
+      },
+      onFlushError,
+    })
+
+    scheduler.schedule('hello')
+    await vi.advanceTimersByTimeAsync(100)
+    // The failure is observed (not an unhandled rejection), and the content
+    // stays unsent because lastFlushed never advanced.
+    expect(onFlushError).toHaveBeenCalledTimes(1)
+    expect(onFlushError.mock.calls[0]?.[0]).toBeInstanceOf(Error)
+    expect(flushed).toEqual([])
+
+    fail = false
+    scheduler.schedule('hello')
+    await vi.advanceTimersByTimeAsync(100)
+    expect(flushed).toEqual(['hello'])
+    expect(onFlushError).toHaveBeenCalledTimes(1)
+    scheduler.dispose()
+  })
+
   it('stops flushing after disposal', async () => {
     const flushed: string[] = []
     const scheduler = createUpdateScheduler({ minIntervalMs: 100, onFlush: (content) => { flushed.push(content); return Promise.resolve() } })

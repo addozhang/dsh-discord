@@ -203,6 +203,31 @@ describe('gateway state machine', () => {
     gateway.dispose()
   })
 
+  it('reconnects when the terminated socket never fires onclose (fallback)', async () => {
+    const h = createHarness()
+    const { startGateway } = await import('../src/gateway/gateway.js')
+    const gateway = startGateway(h.options)
+    await h.flush()
+
+    h.openAndHello()
+    h.ready('session-1')
+    // Two heartbeat intervals without an op-11 ack: the miss path terminates.
+    await vi.advanceTimersByTimeAsync(41_250)
+    await vi.advanceTimersByTimeAsync(41_250)
+    expect(h.currentSocket().terminated).toBe(true)
+
+    // The production adapter terminates via a graceful close, which a
+    // partitioned peer never answers: onclose never arrives. The fallback
+    // must drive the reconnect machinery within its grace period.
+    await vi.advanceTimersByTimeAsync(5_000)
+    await h.flush()
+    await vi.advanceTimersByTimeAsync(1_000)
+    await h.flush()
+    expect(h.sockets).toHaveLength(2)
+    expect(h.backoffs).toEqual([{ attempt: 1, delayMs: 1_000 }])
+    gateway.dispose()
+  })
+
   it('never reconnects after a terminal close code and reports it once', async () => {
     const h = createHarness()
     const { startGateway } = await import('../src/gateway/gateway.js')
@@ -260,7 +285,11 @@ describe('gateway state machine', () => {
     h.ready('session-1')
 
     staleSocket?.onclose?.(4000)
-    await vi.advanceTimersByTimeAsync(120_000)
+    // A short window proves the stale close scheduled nothing (any
+    // late-scheduled reconnect fires within the 1s backoff bound). A long
+    // advance would hit the live socket's heartbeat-miss fallback — which
+    // legitimately reconnects a socket whose acks never arrive.
+    await vi.advanceTimersByTimeAsync(1_000)
     await h.flush()
     expect(h.sockets).toHaveLength(2)
     expect(h.backoffs).toHaveLength(1)

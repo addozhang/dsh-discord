@@ -5,7 +5,7 @@
  * the RpcReceipt onto port outcomes.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { createClientRespondPort } from '../src/dsh/api-proxy-face.js'
 
@@ -49,6 +49,37 @@ describe('createClientRespondPort', () => {
   it('maps an unshaped receipt onto unknown', async () => {
     const port = createClientRespondPort(createFakeDsh(undefined))
     await expect(port.respond('rpc-1', {})).resolves.toEqual({ outcome: 'unknown' })
+  })
+
+  it('maps a rejecting respond onto unknown instead of throwing', async () => {
+    const log = vi.fn()
+    const port = createClientRespondPort(
+      { respond: () => Promise.reject(new Error('host rejected the envelope')) },
+      { log },
+    )
+
+    await expect(port.respond('rpc-1', {})).resolves.toEqual({ outcome: 'unknown' })
+    expect(log).toHaveBeenCalledWith('discord_client_respond_threw', expect.objectContaining({ rpcId: 'rpc-1' }))
+  })
+
+  it('maps a never-answering respond onto unknown via the bounded window', async () => {
+    vi.useFakeTimers()
+    try {
+      const log = vi.fn()
+      const port = createClientRespondPort(
+        { respond: () => new Promise(() => {}) },
+        { log, timeoutMs: 5 },
+      )
+      const pending = port.respond('rpc-1', {})
+      const outcome = await vi.waitFor(async () => {
+        await vi.advanceTimersByTimeAsync(10)
+        return pending
+      })
+      expect(outcome).toEqual({ outcome: 'unknown' })
+      expect(log).toHaveBeenCalledWith('discord_client_respond_timeout', expect.objectContaining({ rpcId: 'rpc-1' }))
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('echoes the question answer batch through the same envelope', async () => {

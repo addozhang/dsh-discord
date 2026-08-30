@@ -79,6 +79,9 @@ describe('thread creation intent', () => {
     await intents.claim({ messageId: 'm-crash', contentHash: 'h', claimedAtMs: 1 })
     const result = await flow.ensureThread({ sourceMessageId: 'm-crash', contentHash: 'h', guildId: 'g1', parentChannelId: 'c1', threadName: 'x', creatorUserId: 'member-9' })
     expect(result).toMatchObject({ outcome: 'recovered', threadId: 'recovered-for-m-crash' })
+    // The recovered id is persisted like the fresh-create path, so later
+    // redeliveries recover from the record instead of rescanning Discord.
+    expect(intents.get('m-crash')?.threadId).toBe('recovered-for-m-crash')
   })
 
   it('conflicts when the same message id redelivers different content', async () => {

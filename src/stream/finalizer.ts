@@ -4,8 +4,8 @@
  * Every piece is sent exactly once: the finalizer records progress as it
  * goes, duplicate finalize calls skip without touching Discord, a failed
  * continuation halts at that index (recovery belongs to reconciliation, not
- * blind resend), and a rate-limited edit is retried by the delivery port
- * while the finalizer guarantees a single successful edit.
+ * blind resend), and a rate-limited head edit is retried in place — bounded,
+ * so a port that keeps reporting rate-limit cannot spin forever.
  */
 
 import { splitMarkdownAware } from './markdown.js'
@@ -32,6 +32,9 @@ export interface AnswerFinalizer {
   finalize(fullText: string): Promise<FinalizeResult>
 }
 
+/** Head-edit retry budget when the port reports rate-limit backoff. */
+const MAX_HEAD_EDIT_RETRIES = 10
+
 export function createAnswerFinalizer(deps: {
   delivery: AnswerDeliveryPort
   headMessageId: string
@@ -50,9 +53,10 @@ export function createAnswerFinalizer(deps: {
         return { outcome: 'finalized', editedHead: false, continuations: 0 }
       }
 
-      // Head: edit until the port completes (rate-limit backoff is the
-      // port's job); the finalizer guarantees a single successful edit.
+      // Head: edit until the port completes; a rate-limited port backs off
+      // here, within a bounded budget so the loop cannot spin forever.
       let editedHead = false
+      let rateLimitedAttempts = 0
       for (;;) {
         const edited = await deps.delivery.editHead({ messageId: deps.headMessageId, content: chunks[0] ?? '' })
         if (edited.outcome === 'completed') {
@@ -60,6 +64,11 @@ export function createAnswerFinalizer(deps: {
           break
         }
         if (edited.outcome === 'rate-limited') {
+          rateLimitedAttempts += 1
+          if (rateLimitedAttempts > MAX_HEAD_EDIT_RETRIES) {
+            finalized = true
+            return { outcome: 'partial', editedHead: false, continuations: 0 }
+          }
           await new Promise(resolve => { setTimeout(resolve, edited.retryAfterMs) })
           continue
         }

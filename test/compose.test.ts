@@ -78,6 +78,35 @@ function setup(
   return { runtime, admitMention, continueInThread, status, socket, gatewaySocketRef }
 }
 
+/** Minimal valid deps with overridable lifecycle seams (lifecycle-race tests). */
+function baseDeps(status: ReturnType<typeof createAdapterStatusTracker>): CompositionDeps {
+  return {
+    tokenProvider: () => Promise.resolve('token-abc'),
+    socketFactory: () => makeSocket(),
+    policy: () => ({
+      allowedGuildIds: ['333333333333333333'],
+      memberUserIds: ['555555555555555555'],
+      memberRoleIds: [],
+      administratorUserIds: [],
+      administratorRoleIds: [],
+      deniedUserIds: [],
+      deniedRoleIds: [],
+      hostOperatorUserIds: [],
+    }),
+    selfUserIdProvider: () => Promise.resolve('111111111111111111'),
+    intents: 33280,
+    applicationId: () => 'app-1',
+    mainline: {
+      admitMention: () => Promise.resolve({ outcome: 'admitted', threadId: 'thread-1', sessionId: 'sess-1' }),
+      continueInThread: () => Promise.resolve({ outcome: 'queued' }),
+    },
+    bindings: { workspaceForChannel: () => 'ws-1', sessionForThread: () => undefined },
+    approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
+    questions: createQuestionStore(),
+    status,
+  }
+}
+
 function dispatchMessage(overrides: Record<string, unknown> = {}) {
   return {
     t: 'MESSAGE_CREATE',
@@ -191,6 +220,67 @@ describe('composed adapter runtime', () => {
       connection: 'disconnected',
       hint: 'configure-token',
     })
+  })
+
+  it('a start chain suspended in flight never spawns a gateway after disconnect()', async () => {
+    const sockets: GatewaySocket[] = []
+    let releaseSelfUserId!: () => void
+    const identityGate = new Promise<void>((resolve) => { releaseSelfUserId = resolve })
+    const status = createAdapterStatusTracker()
+    const runtime = startDiscordAdapter({
+      ...baseDeps(status),
+      socketFactory: () => {
+        const created = makeSocket()
+        sockets.push(created)
+        return created
+      },
+      // The identity probe is a real network call in production: gate it so
+      // the auto-start chain is suspended past its await when disconnect lands.
+      selfUserIdProvider: () => identityGate.then(() => '111111111111111111'),
+    })
+
+    // Auto-start chain is now parked on the identity gate.
+    await Promise.resolve()
+    runtime.disconnect()
+
+    releaseSelfUserId()
+    await vi.waitFor(() => { expect(runtime.started).toBe(false) })
+    await new Promise(resolve => { setTimeout(resolve, 10) })
+
+    // The stale chain died quietly: no socket was ever created.
+    expect(sockets).toHaveLength(0)
+    expect(runtime.started).toBe(false)
+    expect(status.project().connection).toBe('disconnected')
+  })
+
+  it('connect() during an in-flight start chain retires the stale chain (one live socket)', async () => {
+    const sockets: GatewaySocket[] = []
+    const gates: Array<() => void> = []
+    const status = createAdapterStatusTracker()
+    const runtime = startDiscordAdapter({
+      ...baseDeps(status),
+      socketFactory: () => {
+        const created = makeSocket()
+        sockets.push(created)
+        return created
+      },
+      selfUserIdProvider: () => new Promise<string>((resolve) => {
+        gates.push(() => { resolve('111111111111111111') })
+      }),
+    })
+
+    await vi.waitFor(() => { expect(gates).toHaveLength(1) })
+    // Operator clicks Connect while the auto-start chain is still parked:
+    // the stale chain must never proceed, only the new one does.
+    runtime.connect()
+    await vi.waitFor(() => { expect(gates).toHaveLength(2) })
+    gates[1]?.()
+    await vi.waitFor(() => { expect(runtime.started).toBe(true) })
+    gates[0]?.()
+    await new Promise(resolve => { setTimeout(resolve, 10) })
+
+    expect(sockets).toHaveLength(1)
+    expect(runtime.started).toBe(true)
   })
 
   it('tears the gateway down on dispose', async () => {

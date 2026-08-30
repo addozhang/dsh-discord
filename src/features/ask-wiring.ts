@@ -76,8 +76,14 @@ export function createAskWiring(deps: AskWiringDeps): {
     const target = controlMessages.get(key)
     if (target === undefined) return
     controlMessages.delete(key)
-    const posted = await deps.postMessage(target.channelId, { components: [] })
-    if (!posted.stored) deps.log('discord_control_disable_failed', { key })
+    // Retirement is best-effort: a failed disable must never fail the ask's
+    // settled outcome — the registry TTL keeps stray clicks answerable.
+    try {
+      const posted = await deps.postMessage(target.channelId, { components: [] })
+      if (!posted.stored) deps.log('discord_control_disable_failed', { key })
+    } catch (cause) {
+      deps.log('discord_control_disable_failed', { key, cause: String(cause) })
+    }
   }
 
   function resolveAskActor(sessionId: string, threadId: string): { actorUserId: string; actorSource: 'turn' | 'thread-binding' | 'none' } {

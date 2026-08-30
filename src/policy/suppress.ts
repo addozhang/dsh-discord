@@ -1,9 +1,10 @@
 /**
  * Mention-syntax neutralization for outbound text. Discord renders
  * `<@id>`, `<@!id>`, `<#id>`, `<@&id>`, `@everyone`, and `@here` pings; the
- * adapter's message flag suppresses parsing, but titles and labels can flow
- * into surfaces the flag does not cover, so the syntax itself is broken with
- * a zero-width space the renderer treats as plain text.
+ * adapter's `allowed_mentions: { parse: [] }` request field stops them from
+ * notifying, but titles and labels can flow into surfaces the field does not
+ * cover (component labels, thread names, markdown contexts), so the syntax
+ * itself is broken with a zero-width space the renderer treats as plain text.
  */
 
 const ZERO_WIDTH = '\u200b'

@@ -39,7 +39,8 @@ export interface QuestionRoutingDeps {
   store: QuestionStore
   port: DshQuestionRespondPort
   nowMs: () => number
-  controls?: { disable(questionRpcId: string): Promise<void> } | undefined
+  /** Retires the rendered controls on a submitted (terminal) outcome. */
+  controls: { disable(questionRpcId: string): Promise<void> }
 }
 
 export interface QuestionInteractionInput {
@@ -138,13 +139,25 @@ export async function handleSelectInput(
     const claim = await deps.store.claim(context.questionRpcId)
     if (claim.outcome !== 'claimed') return { outcome: 'already-resolved' }
 
-    const submitted = await deps.port.respond({
-      rpcId: record.questionRpcId,
-      sessionId: record.sessionId,
-      answer: deps.store.encodeSubmitted(context.questionRpcId),
-    })
+    // A port that THROWS (distinct from an unknown outcome) is still an
+    // unconfirmed submit: park unresolved so the expiry sweeps and the
+    // user's own retry stay available — never leave the ask in submitting.
+    let submitted: Awaited<ReturnType<typeof deps.port.respond>>
+    try {
+      submitted = await deps.port.respond({
+        rpcId: record.questionRpcId,
+        sessionId: record.sessionId,
+        answer: deps.store.encodeSubmitted(context.questionRpcId),
+      })
+    } catch {
+      await deps.store.markUnresolved(context.questionRpcId, deps.nowMs())
+      return { outcome: 'unresolved' }
+    }
     if (submitted.outcome === 'confirmed') {
       await deps.store.markResolved(context.questionRpcId, 'answered', 'user', deps.nowMs())
+      // Terminal: retire the controls so stray clicks cannot follow.
+      // (disableControl never throws; the guard keeps the settled outcome.)
+      await deps.controls.disable(context.questionRpcId).catch(() => {})
       return { outcome: 'submitted' }
     }
     await deps.store.markUnresolved(context.questionRpcId, deps.nowMs())

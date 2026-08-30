@@ -3,10 +3,11 @@
  * its deadline must not strand DSH's tool call forever, and the adapter has
  * no answer to give: the sweep atomically claims the batch — losing to any
  * user click, which then owns the question — requests cancellation of the
- * owning adapter-controlled turn through its request ID, records whether the
- * cancellation was accepted, and only then expires the Discord controls. The
- * sweep's dependencies carry no answer port, so it structurally cannot
- * synthesize a response.
+ * owning adapter-controlled turn (the port is session-scoped: DSH 0.1.1
+ * cancels a session's active turn), records whether the cancellation was
+ * accepted, and only then expires the Discord controls. The sweep's
+ * dependencies carry no answer port, so it structurally cannot synthesize a
+ * response.
  */
 
 import type { QuestionStore } from './question-store.js'

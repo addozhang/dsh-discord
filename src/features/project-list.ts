@@ -4,9 +4,11 @@
  * by fakes in tests): every registered Workspace is selectable, labels come
  * from the least-disclosure policy (safe titles, opaque `ws:` references,
  * duplicate disambiguation); per amended design §3 the bind autocomplete
- * appends the abbreviated canonical path to each candidate label, and large
- * catalogs page inside Discord's component limit with interaction-scoped
- * navigation values.
+ * appends the abbreviated canonical path to each candidate label. This
+ * surface renders plain text, so it has no navigation: large catalogs are
+ * reported honestly — first page items plus the total count for the caller's
+ * truncation note — while the selector pagination helpers stay available to
+ * select-based surfaces.
  * Catalog failures surface as sanitized outcomes — no raw provider detail
  * ever reaches Discord.
  */
@@ -34,6 +36,8 @@ export type ProjectListView =
   | {
       outcome: 'ok'
       items: SelectorOption[]
+      /** The whole (query-filtered) catalog size, for truncation copy. */
+      totalCount: number
       pageIndex: number
       pageCount: number
       hasPrev: boolean
@@ -84,6 +88,7 @@ export async function createProjectListView(port: ProjectListPort, request: Proj
   return {
     outcome: 'ok',
     items: page.items,
+    totalCount: options.length,
     pageIndex: page.pageIndex,
     pageCount: page.pageCount,
     hasPrev: page.hasPrev,

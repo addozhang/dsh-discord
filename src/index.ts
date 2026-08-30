@@ -10,7 +10,7 @@ import {
   } from './settings.js'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { installCancellationRoot } from './lifecycle.js'
-import { DISCORD_SUPPRESS_MENTIONS_FLAG, OUTBOUND_EPHEMERAL_FLAGS } from './policy/disclosure.js'
+import { ALLOWED_MENTIONS_NONE, DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, OUTBOUND_EPHEMERAL_FLAGS } from './policy/disclosure.js'
 import { validateHostCapabilities } from './startup.js'
 import {
   createAdapterStatusTracker,
@@ -44,7 +44,7 @@ import { createTurnTracker } from './features/turn-ownership.js'
 import { createThreadCreationFlow, type DiscordThreadPort } from './features/thread-creation.js'
 import { createSessionCreationFlow, type DshSessionPort } from './features/session-creation.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from './features/prompt-submission.js'
-import { createSessionMainline } from './features/session-mainline.js'
+import { createSessionMainline, requestIdFor } from './features/session-mainline.js'
 import { startLiveRender } from './stream/live.js'
 import type { ChannelBinding, ThreadBinding } from './state/records.js'
 import type { PolicyTable } from './policy/authorization.js'
@@ -144,9 +144,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   // The in-process apiProxy face: domain methods resolve RpcRequest →
   // RpcResponse and never throw business errors; boundedness and outcome
   // logging live in src/dsh/api-proxy-face.ts.
-  const apiProxy = ctx.get('apiProxy') as unknown as DshApiProxyFace & {
-    respond: (rpcId: string, payload: unknown) => Promise<unknown>
-  }
+  const apiProxy = ctx.get('apiProxy') as unknown as DshApiProxyFace
   // Every apiProxy outcome is visible on stderr: the live profile pass reads
   // this channel, and a silent call can never again be misread as a hang.
   const rpcLog = (event: string, detail?: unknown): void => {
@@ -339,12 +337,12 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (result.outcome === 'admitted') {
           // Ownership fact: this request id's turn belongs to this author —
           // approval/question clicks authorize against it.
-          turnActors.set(`discord:${request.messageId}`, request.authorId)
+          turnActors.set(requestIdFor(request.messageId), request.authorId)
           rpcLog('discord_mention_admitted', { messageId: request.messageId, threadId: result.threadId, sessionId: result.sessionId })
         } else {
           rpcLog('discord_mention_not_admitted', { messageId: request.messageId, outcome: result.outcome })
           const notice = copy[MAINLINE_FAILURE_KEYS[result.outcome]]
-          void withRest(rest => rest.request('POST', `/channels/${request.channelId}/messages`, { content: notice, flags: DISCORD_SUPPRESS_MENTIONS_FLAG }))
+          void withRest(rest => rest.request('POST', `/channels/${request.channelId}/messages`, { content: notice, flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, allowed_mentions: ALLOWED_MENTIONS_NONE }))
             .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
         }
         return result
@@ -354,7 +352,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (result.outcome === 'rejected' || result.outcome === 'unknown') {
           rpcLog('discord_continuation_not_queued', { messageId: request.messageId, outcome: result.outcome })
           const notice = result.outcome === 'rejected' ? copy.continuationRejected : copy.continuationUnknown
-          void withRest(rest => rest.request('POST', `/channels/${request.threadId}/messages`, { content: notice, flags: DISCORD_SUPPRESS_MENTIONS_FLAG }))
+          void withRest(rest => rest.request('POST', `/channels/${request.threadId}/messages`, { content: notice, flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, allowed_mentions: ALLOWED_MENTIONS_NONE }))
             .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
         }
         return result
@@ -412,6 +410,31 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       const rest = await sharedRest()
       if (rest === undefined) return undefined
       return run(rest)
+    }
+    /**
+     * Reconcile an unobservable message send (rest.ts contract): the send
+     * carried a nonce, so a message that actually landed is findable among
+     * the channel's recent messages — authored by this bot. `undefined`
+     * means the outcome stays unobservable (no evidence either way).
+     */
+    const findSentMessageByNonce = async (
+      rest: SharedRestClient,
+      channelId: string,
+      nonce: string,
+    ): Promise<string | undefined> => {
+      // The list body is untrusted wire data: narrow every row by shape.
+      const listed = await rest.request<unknown>('GET', `/channels/${channelId}/messages?limit=50`)
+      if (listed.outcome !== 'completed' || !Array.isArray(listed.body)) return undefined
+      for (const row of listed.body) {
+        if (typeof row !== 'object' || row === null) continue
+        const record = row as Record<string, unknown>
+        if (record['nonce'] !== nonce) continue
+        const author = record['author']
+        if (typeof author !== 'object' || author === null) continue
+        if ((author as Record<string, unknown>)['id'] !== applicationIdRef.current) continue
+        if (typeof record['id'] === 'string') return record['id']
+      }
+      return undefined
     }
     const bindChannelKey = (guildId: string, channelId: string): string =>
       channelBindingKey({ applicationId: applicationIdRef.current, guildId, channelId })
@@ -695,7 +718,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           ? copy.unboundNoticeAdministrator
           : copy.unboundNoticeMember
         void withRest(async (rest) => {
-          const sent = await rest.request('POST', `/channels/${request.channelId}/messages`, { content, flags: DISCORD_SUPPRESS_MENTIONS_FLAG })
+          const sent = await rest.request('POST', `/channels/${request.channelId}/messages`, { content, flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, allowed_mentions: ALLOWED_MENTIONS_NONE })
           if (sent.outcome !== 'completed') {
             rpcLog('discord_unbound_notice_send_failed', sent.outcome === 'rejected' ? `HTTP ${String(sent.status)}` : sent.reason)
           }
@@ -785,9 +808,24 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         send: async (request) => {
           const rest = await sharedRest()
           if (rest === undefined) return { outcome: 'failed' }
-          const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${request.channelId}/messages`, { content: request.content, flags: DISCORD_SUPPRESS_MENTIONS_FLAG })
+          // The nonce lets an unobservable send be reconciled instead of
+          // blindly retried (rest.ts contract): a message that actually
+          // landed is found by its nonce and reported completed.
+          const nonce = crypto.randomUUID()
+          const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${request.channelId}/messages`, {
+            content: request.content,
+            flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG,
+            allowed_mentions: ALLOWED_MENTIONS_NONE,
+            nonce,
+          })
           if (sent.outcome === 'completed' && typeof sent.body?.id === 'string') {
             return { outcome: 'completed', messageId: sent.body.id }
+          }
+          if (sent.outcome === 'unknown') {
+            const reconciled = await findSentMessageByNonce(rest, request.channelId, nonce)
+            if (reconciled !== undefined) return { outcome: 'completed', messageId: reconciled }
+            rpcLog('discord_live_send_unknown', { channelId: request.channelId })
+            return { outcome: 'unknown' }
           }
           rpcLog('discord_live_send_failed', { channelId: request.channelId, outcome: sent.outcome })
           return { outcome: 'failed' }
@@ -795,7 +833,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         edit: async (request) => {
           const rest = await sharedRest()
           if (rest === undefined) return { outcome: 'failed' }
-          const edited = await rest.request('PATCH', `/channels/${request.channelId}/messages/${request.messageId}`, { content: request.content, flags: DISCORD_SUPPRESS_MENTIONS_FLAG })
+          const edited = await rest.request('PATCH', `/channels/${request.channelId}/messages/${request.messageId}`, {
+            content: request.content,
+            flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG,
+            allowed_mentions: ALLOWED_MENTIONS_NONE,
+          })
           return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
         },
         typing: async (channelId) => {

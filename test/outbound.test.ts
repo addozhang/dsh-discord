@@ -1,7 +1,7 @@
 /**
  * Outbound suppression tests (11.7): every message the adapter sends —
  * assistant answers, tool views, titles, and errors — carries the
- * SUPPRESS_MENTIONS flag AND mention-neutralized content, so a hostile or
+ * `allowed_mentions: {parse: []}` AND mention-neutralized content, so a hostile or
  * accidental ping is impossible even if a surface ignores the flag.
  */
 
@@ -14,10 +14,11 @@ import {
 import { suppressMentionSyntax } from '../src/policy/suppress.js'
 
 describe('outbound message builder', () => {
-  it('always sets SUPPRESS_MENTIONS on the payload flags', () => {
+  it('always allows no mention parse category and stays silent', () => {
     const payload = buildOutboundMessage({ kind: 'assistant', content: 'plain text' })
     expect(payload.flags).toBe(OUTBOUND_MESSAGE_FLAGS)
     expect(OUTBOUND_MESSAGE_FLAGS & (1 << 12)).toBe(1 << 12)
+    expect(payload.allowed_mentions).toEqual({ parse: [] })
   })
 
   it('neutralizes mention syntax in every content kind', () => {
