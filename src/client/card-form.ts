@@ -113,6 +113,8 @@ export interface CardManagement {
   connect(): void
   /** Operator-initiated offline; the stored credential is kept. */
   disconnect(): void
+  /** Pull the Host status now instead of waiting for the next poll. */
+  refresh(): void
 }
 
 /** The registration-side face the Discord card's slot entry injects. */

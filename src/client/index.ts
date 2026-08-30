@@ -76,6 +76,10 @@ export function apply(ctx: ClientContext): void {
     }),
     connect: () => { void call(DISCORD_RPC_CHANNEL, 'adapter.connect', {}, undefined) },
     disconnect: () => { void call(DISCORD_RPC_CHANNEL, 'adapter.disconnect', {}, undefined) },
+    // Immediate feedback for connect/disconnect clicks: the handshake takes
+    // a moment, so poll twice — once for the offline/starting state and once
+    // after the gateway should have landed on READY or a terminal close.
+    refresh: () => { setTimeout(poll, 600); setTimeout(poll, 2500) },
   })
   const poll = (): void => {
     void call(DISCORD_RPC_CHANNEL, STATUS_ENDPOINT, {}, undefined)

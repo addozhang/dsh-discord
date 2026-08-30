@@ -122,6 +122,7 @@ function TokenSetup(props: {
     props.management.setToken(value).then(() => {
       setToken('')
       props.management?.connect()
+      props.management?.refresh()
       setConnecting(false)
     }, (cause: unknown) => {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -193,7 +194,7 @@ export function DiscordSettingsCard(props: DiscordSettingsCardProps) {
             <button
               type="button"
               data-dsh-discord-disconnect=""
-              onClick={() => { props.management?.disconnect() }}
+              onClick={() => { props.management?.disconnect(); props.management?.refresh() }}
             >
               {t('discordDisconnect')}
             </button>
