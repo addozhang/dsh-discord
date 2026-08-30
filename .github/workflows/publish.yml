@@ -9,9 +9,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      # Trusted publishing (OIDC): npm authenticates the workflow itself —
+      # contents: write for the auto-generated GitHub release; id-token for
+      # trusted publishing (OIDC) — npm authenticates the workflow itself,
       # no NPM_TOKEN secret, no long-lived token, no 2FA prompt.
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
