@@ -219,6 +219,7 @@ describe('DiscordCardForm status surface (2.3)', () => {
       connectionKey: 'discordStatusInvalidToken',
       hintKey: 'discordHintTokenRejected',
       actionable: true,
+      tokenConfigured: true,
     })
 
     form.setStatus({ token: 'configured', connection: 'connected' })

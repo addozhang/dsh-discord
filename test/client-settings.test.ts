@@ -34,6 +34,7 @@ describe('adapter status presentation (2.3)', () => {
       connectionKey: 'discordStatusConnected',
       hintKey: undefined,
       actionable: false,
+      tokenConfigured: true,
     })
   })
 
@@ -43,6 +44,7 @@ describe('adapter status presentation (2.3)', () => {
       connectionKey: 'discordStatusInvalidToken',
       hintKey: 'discordHintTokenRejected',
       actionable: true,
+      tokenConfigured: true,
     })
   })
 
@@ -63,6 +65,7 @@ describe('adapter status presentation (2.3)', () => {
         connectionKey: 'discordStatusDisconnected',
         hintKey: 'discordHintConfigureToken',
         actionable: true,
+        tokenConfigured: false,
       })
   })
 

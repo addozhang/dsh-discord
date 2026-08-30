@@ -80,6 +80,8 @@ export interface AdapterStatusPresentation {
   connectionKey: DiscordStatusConnectionKey
   hintKey?: DiscordStatusHintKey | undefined
   actionable: boolean
+  /** Whether the credential service already holds a token. */
+  tokenConfigured: boolean
 }
 
 /** Locale keys the card renders for each connection condition. */
@@ -126,5 +128,6 @@ export function presentAdapterStatus(view: AdapterStatusView): AdapterStatusPres
     connectionKey: CONNECTION_KEYS[view.connection],
     ...(view.hint === undefined ? {} : { hintKey: HINT_KEYS[view.hint] }),
     actionable: view.hint !== undefined,
+    tokenConfigured: view.token !== 'unconfigured',
   }
 }

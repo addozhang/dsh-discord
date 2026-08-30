@@ -26,6 +26,8 @@ interface DiscordPluginsLocale {
   discordTokenConnect: string
   discordTokenConnecting: string
   discordTokenHelp: string
+  discordTokenSaved: string
+  discordTokenReconnectHint: string
   discordDisconnect: string
   discordThreadAutoArchive: string
   discordThreadAutoArchiveHint: string

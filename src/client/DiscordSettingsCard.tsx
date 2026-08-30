@@ -97,6 +97,7 @@ function TokenSetup(props: {
   management: CardManagement | undefined
   connectionKey: DiscordStatusConnectionKey | undefined
   hintKey: DiscordStatusHintKey | undefined
+  tokenConfigured: boolean
   t: TranslateNS<'dsh-discord'>
 }): ReactNode {
   const { t } = props
@@ -114,13 +115,16 @@ function TokenSetup(props: {
     || connectionKey === 'discordStatusIntentsBlocked'
     || connectionKey === 'discordStatusPermissionsBlocked'
   if (!visible) return null
+  // A saved credential reconnects with an empty input; typing replaces it.
   const submit = (): void => {
+    if (props.management === undefined || connecting) return
     const value = token.trim()
-    if (value === '' || props.management === undefined || connecting) return
     setConnecting(true)
     setError('')
-    props.management.setToken(value).then(() => {
-      setToken('')
+    const write = value === ''
+      ? Promise.resolve()
+      : props.management.setToken(value).then(() => { setToken('') })
+    write.then(() => {
       props.management?.connect()
       props.management?.refresh()
       setConnecting(false)
@@ -139,17 +143,17 @@ function TokenSetup(props: {
           id="plugin-config-discord-token"
           type="password"
           autoComplete="off"
-          placeholder={t('discordTokenPlaceholder')}
+          placeholder={props.tokenConfigured ? t('discordTokenSaved') : t('discordTokenPlaceholder')}
           value={token}
           disabled={connecting}
           onChange={event => { setToken(event.currentTarget.value) }}
           onKeyDown={event => { if (event.key === 'Enter') submit() }}
         />
-        <button type="button" disabled={connecting || token.trim() === ''} onClick={submit}>
+        <button type="button" disabled={connecting || (!props.tokenConfigured && token.trim() === '')} onClick={submit}>
           {connecting ? t('discordTokenConnecting') : t('discordTokenConnect')}
         </button>
       </div>
-      <p data-dsh-discord-field-help="">{t('discordTokenHelp')}</p>
+      <p data-dsh-discord-field-help="">{props.tokenConfigured ? t('discordTokenReconnectHint') : t('discordTokenHelp')}</p>
       {error !== '' && <p data-dsh-discord-token-error="">{error}</p>}
     </div>
   )
@@ -201,7 +205,7 @@ export function DiscordSettingsCard(props: DiscordSettingsCardProps) {
           )}
         </p>
       )}
-      <TokenSetup management={props.management} connectionKey={state.status?.connectionKey} hintKey={state.status?.hintKey} t={t} />
+      <TokenSetup management={props.management} connectionKey={state.status?.connectionKey} hintKey={state.status?.hintKey} tokenConfigured={state.status?.tokenConfigured ?? false} t={t} />
       <ValueField
         id="plugin-config-discord-allowedGuildIds"
         label={t('discordAllowedGuildIds')}
