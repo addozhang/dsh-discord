@@ -51,10 +51,6 @@ export const MILESTONE_ONE_COMMANDS: readonly AdapterCommand[] = [
     { name: 'bind', options: [{ name: 'workspace', required: true, autocomplete: true }] },
     { name: 'info' },
   ]),
-  grouped('session', 'Start or resume a DSH session', [
-    { name: 'new', options: [{ name: 'prompt', required: true }] },
-    { name: 'resume', options: [{ name: 'session', required: true }] },
-  ]),
   grouped('queue', 'Inspect the session inbox queue', [
     { name: 'list' },
     { name: 'remove', options: [{ name: 'item', required: true }] },

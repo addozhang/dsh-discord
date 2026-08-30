@@ -36,6 +36,9 @@ interface DiscordPluginsLocale {
   discordHostOperatorUserIdsHint: string
   discordThreadAutoArchive: string
   discordThreadAutoArchiveHint: string
+  discordLanguage: string
+  discordLanguageHint: string
+  discordInvalidLanguage: string
   discordInvalidIds: string
   discordInvalidArchive: string
   discordStatusConnected: string

@@ -10,6 +10,7 @@
 import type { ComponentRegistry } from '../discord/components.js'
 import type { SharedRestClient } from '../discord/rest.js'
 import { evaluateAuthorization, levelAtLeast, type PolicyTable } from '../policy/authorization.js'
+import { OUTBOUND_EPHEMERAL_FLAGS } from '../policy/disclosure.js'
 import { workspaceAutocompleteChoices, createProjectListView, type ProjectListPort } from './project-list.js'
 import { projectInfo } from './project-info.js'
 import type { WorkspaceResolver } from './project-bind.js'
@@ -22,6 +23,7 @@ import type { QuestionInteractionOutcome } from './question-routing.js'
 import type { ApprovalStore } from './approval-store.js'
 import type { ChannelBinding } from '../state/records.js'
 import type { NormalizedInteraction } from '../gateway/inbound.js'
+import type { CopyTable } from '../i18n.js'
 
 /** The DSH faces the control commands submit through (apiProxy-backed). */
 export interface InteractionDshFace {
@@ -36,6 +38,8 @@ export interface InteractionRouterDeps {
   applicationId: () => string
   /** The shared component registry (render + click routing use one instance). */
   registry: ComponentRegistry
+  /** Discord-visible copy, resolved per access (language can change live). */
+  copy: CopyTable
   approvals: ApprovalStore
   approvalRespondPort: DshApprovalRespondPort
   turnTracker: TurnTracker
@@ -129,7 +133,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     const followUp = async (content: string, components?: Array<unknown>): Promise<void> => {
       const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, {
         content,
-        flags: 64,
+        flags: OUTBOUND_EPHEMERAL_FLAGS,
         ...(components === undefined ? {} : { components }),
       })
       if (posted.outcome !== 'completed') {
@@ -139,8 +143,8 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     const buttonRow = (confirmId: string, cancelId: string): Array<unknown> => [{
       type: 1,
       components: [
-        { type: 2, style: 3, label: '确认绑定', custom_id: confirmId },
-        { type: 2, style: 4, label: '取消', custom_id: cancelId },
+        { type: 2, style: 3, label: deps.copy.bindConfirmButton, custom_id: confirmId },
+        { type: 2, style: 4, label: deps.copy.bindCancelButton, custom_id: cancelId },
       ],
     }]
     try {
@@ -155,36 +159,36 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           // captured; only the opaque ws: reference crosses the wire.
           const decision = authorize(event)
           if (!decision.allowed || !levelAtLeast(decision.level, 'workspace-administrator')) {
-            await followUp('⚠️ 只有工作区管理员可以绑定频道。')
+            await followUp(deps.copy.bindAdminOnly)
             return
           }
           const wireOptions = Array.isArray(subcommand?.options) ? subcommand.options : []
           const reference = wireOptions.find(option => option.name === 'workspace')?.value
           if (typeof reference !== 'string' || reference === '') {
-            await followUp('💡 用法：/project bind workspace:<从候选中选择>')
+            await followUp(deps.copy.bindUsage)
             return
           }
           const resolvedWorkspace = await deps.resolver.resolve(reference)
           if (resolvedWorkspace.outcome !== 'found') {
             await followUp(resolvedWorkspace.outcome === 'stale'
-              ? '⚠️ 该工作区已不存在，请用 /project bind 的候选重新选择。'
+              ? deps.copy.bindWorkspaceGone
               : resolvedWorkspace.outcome === 'unknown'
-                ? '⚠️ 工作区目录未在限时内确认（结果未知），请稍后重试。'
-                : '⚠️ 工作区目录暂时不可用，请稍后重试。')
+                ? deps.copy.bindWorkspaceUnknown
+                : deps.copy.bindWorkspaceUnavailable)
             return
           }
           const { id: workspaceId, title } = resolvedWorkspace.workspace
           const existing = deps.findBoundChannelFor(event.guildId, workspaceId)
           if (existing !== undefined) {
             // Idempotent: one workspace, one channel.
-            await followUp(`工作区「${title}」的频道已存在于：<#${existing}>`)
+            await followUp(deps.copy.bindChannelExists(title, existing))
             return
           }
           const expiresAtMs = Date.now() + 15 * 60 * 1000
           const confirmId = deps.registry.register({ kind: 'project-bind', action: 'confirm', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
           const cancelId = deps.registry.register({ kind: 'project-bind', action: 'cancel', workspaceId, workspaceTitle: title, guildId: event.guildId, actorId: event.actorId, expiresAtMs })
           deps.log('discord_project_bind_planned', { interactionId: event.interactionId, workspaceId })
-          await followUp(`将为工作区「${title}」创建专属频道（DeepSeek Harness 分类下）？`, buttonRow(confirmId, cancelId))
+          await followUp(deps.copy.bindConfirmPrompt(title), buttonRow(confirmId, cancelId))
           return
         }
         if (subName === 'list') {
@@ -192,15 +196,15 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           const view = await createProjectListView(deps.catalogPort, { selectionId: event.interactionId })
           if (view.outcome !== 'ok') {
             await followUp(view.reason === 'workspace-catalog-unknown'
-              ? '⚠️ 工作区目录未在限时内确认（结果未知），请稍后重试。'
-              : '⚠️ 无法读取工作区目录，请稍后重试。')
+              ? deps.copy.infoUnknown
+              : deps.copy.infoUnavailable)
             return
           }
           // Names only: the bind option autocompletes live candidates,
           // so ids never need to be read, copied, or typed.
           const rows = view.items.map(item => `• ${item.label}`)
-          const pager = view.pageCount > 1 ? `\n（第 ${String(view.pageIndex + 1)}/${String(view.pageCount)} 页）` : ''
-          await followUp(rows.length === 0 ? '（没有已注册的工作区）' : ['**可用工作区**', ...rows].join('\n') + pager)
+          const pager = view.pageCount > 1 ? deps.copy.listPager(view.pageIndex + 1, view.pageCount) : ''
+          await followUp(rows.length === 0 ? deps.copy.listEmpty : [deps.copy.listHeader, ...rows].join('\n') + pager)
           return
         }
         if (subName === 'info') {
@@ -213,22 +217,22 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             // Bind provisions the Workspace's home channel — most
             // channels, including the control channel, are unbound.
             await followUp(decision.allowed
-              ? '此频道未绑定工作区；请到工作区的专属频道中使用（/project bind 可创建）。'
-              : '⚠️ 此频道未绑定工作区。')
+              ? deps.copy.infoUnboundAllowed
+              : deps.copy.infoUnbound)
             return
           }
           const detail = await deps.dsh.readWorkspaceDetail(binding.workspaceId)
           if (!decision.allowed) {
             // Refuse identity disclosure to non-members even when bound.
-            await followUp('⚠️ 只有成员可以查看此频道的绑定。')
+            await followUp(deps.copy.infoMemberOnly)
             return
           }
           if (detail.outcome !== 'found') {
             await followUp(detail.outcome === 'unknown'
-              ? '⚠️ 工作区目录未在限时内确认（结果未知），请稍后重试。'
+              ? deps.copy.infoUnknown
               : detail.outcome === 'stale'
-                ? '⚠️ 绑定的工作区已不存在；请用 /project bind 重新选择。'
-                : '⚠️ 无法读取工作区目录，请稍后重试。')
+                ? deps.copy.infoStale
+                : deps.copy.infoUnavailable)
             return
           }
           const view = projectInfo({
@@ -236,18 +240,18 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             workspace: { id: detail.workspace.id, title: detail.workspace.title, path: detail.workspace.path },
           })
           if (view.outcome !== 'info') {
-            await followUp('⚠️ 只有成员可以查看此频道的绑定。')
+            await followUp(deps.copy.infoMemberOnly)
             return
           }
           const lines = [
             `**${view.workspace.label}**`,
-            `修订 ${String(binding.revision)}（由 <@${binding.boundBy}> 绑定）`,
+            deps.copy.infoRevision(String(binding.revision), binding.boundBy),
           ]
-          if (view.workspace.path !== undefined) lines.push(`路径：\`${view.workspace.path}\``)
+          if (view.workspace.path !== undefined) lines.push(deps.copy.infoPath(view.workspace.path))
           await followUp(lines.join('\n'))
           return
         }
-        await followUp('💡 未知子命令。')
+        await followUp(deps.copy.unknownSubcommand)
         return
       }
       // ── Session control commands (session-control spec) ─────────────
@@ -257,7 +261,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       if (event.commandName === 'stop' || event.commandName === 'steer') {
         const sessionId = deps.sessionForThread(event.guildId, event.channelId)
         if (sessionId === undefined) {
-          await followUp('⚠️ 此频道不是适配器拥有的会话线程。')
+          await followUp(deps.copy.stopNotSessionThread)
           return
         }
         if (event.commandName === 'stop') {
@@ -277,17 +281,17 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           )
           if (result.outcome === 'refused') {
             await followUp(result.reason === 'no-active-turn'
-              ? '此线程当前没有可停止的运行中任务。'
-              : '⚠️ 当前运行中的任务不是由此线程提交的，无法停止。')
+              ? deps.copy.stopNothingRunning
+              : deps.copy.stopNotOwner)
             return
           }
           if (result.outcome === 'cancelled') {
-            await followUp(result.pendingPreserved ? '🛑 已停止；队列中的待处理消息已保留。' : '🛑 已停止。')
+            await followUp(result.pendingPreserved ? deps.copy.stopStoppedQueuePreserved : deps.copy.stopStopped)
             return
           }
           await followUp(result.outcome === 'rejected'
-            ? '⚠️ DSH 拒绝了停止请求。'
-            : '⚠️ 停止结果未知，请到 DSH Web 确认。')
+            ? deps.copy.stopRejected
+            : deps.copy.stopUnknown)
           return
         }
         // /steer <prompt>
@@ -296,7 +300,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           : undefined
         const prompt = typeof steerText === 'string' ? steerText.trim() : ''
         if (prompt === '') {
-          await followUp('💡 用法：/steer prompt:<插话内容>')
+          await followUp(deps.copy.steerUsage)
           return
         }
         const result = await planSteer(
@@ -315,21 +319,21 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         )
         if (result.outcome === 'refused') {
           await followUp(result.reason === 'no-active-turn'
-            ? '此线程当前没有运行中的任务可插话。'
-            : '⚠️ 当前任务不是由此线程提交的，无法插话。')
+            ? deps.copy.steerNothingRunning
+            : deps.copy.steerNotOwner)
           return
         }
         await followUp(result.outcome === 'accepted'
-          ? '↪️ 已插话。'
+          ? deps.copy.steerQueued
           : result.outcome === 'rejected'
-            ? '⚠️ DSH 拒绝了插话。'
-            : '⚠️ 插话结果未知。')
+            ? deps.copy.steerRejected
+            : deps.copy.steerUnknown)
         return
       }
       if (event.commandName === 'queue') {
         const sessionId = deps.sessionForThread(event.guildId, event.channelId)
         if (sessionId === undefined) {
-          await followUp('⚠️ 此频道不是适配器拥有的会话线程。')
+          await followUp(deps.copy.queueNotSessionThread)
           return
         }
         const wireOptions = event.data['options'] as Array<{ name?: unknown; options?: Array<{ name?: unknown; value?: unknown }> }> | undefined
@@ -338,7 +342,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           const raw = Array.isArray(sub.options) ? sub.options.find(option => option.name === 'item')?.value : undefined
           const reference = typeof raw === 'string' ? raw.trim() : ''
           if (reference === '') {
-            await followUp('💡 用法：/queue remove item:</queue list 中的编号>')
+            await followUp(deps.copy.queueRemoveUsage)
             return
           }
           const snapshot = deps.queueSnapshots.get(sessionId)
@@ -346,58 +350,58 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             ? snapshot?.[Number.parseInt(reference, 10) - 1]
             : snapshot?.find(item => item.id === reference)
           if (byPosition === undefined) {
-            await followUp('未找到该队列项；请先运行 /queue list 获取最新编号。')
+            await followUp(deps.copy.queueItemNotFound)
             return
           }
           const removed = await deps.dsh.removeQueueItem(sessionId, byPosition.id)
           if (removed.outcome === 'accepted') {
-            await followUp(`⏳ 已移除：${byPosition.summary}`)
+            await followUp(deps.copy.queueRemoved(byPosition.summary))
             return
           }
           await followUp(removed.outcome === 'rejected'
-            ? '⚠️ DSH 拒绝了移除请求（该项可能已被处理）。'
-            : '⚠️ 移除结果未知；请用 /queue list 确认后再试。')
+            ? deps.copy.queueRemoveRejected
+            : deps.copy.queueRemoveUnknown)
           return
         }
         // /queue list — the mux snapshot cache is the data source.
         const snapshot = deps.queueSnapshots.get(sessionId)
         if (snapshot === undefined) {
-          await followUp('⚠️ 暂无队列数据（进程可能刚重启）；等待会话活动后会自动同步。')
+          await followUp(deps.copy.queueNoData)
           return
         }
         if (snapshot.length === 0) {
-          await followUp('⏳ （队列为空）')
+          await followUp(deps.copy.queueEmpty)
           return
         }
         const rows = snapshot.map((item, index) => `${String(index + 1)}. ${item.summary}`)
-        await followUp(['⏳ **队列**', ...rows, '', '💡 用 `/queue remove <编号>` 移除。'].join('\n'))
+        await followUp([deps.copy.queueHeader, ...rows, '', deps.copy.queueRemoveHint].join('\n'))
         return
       }
       if (event.commandName === 'guild') {
         const options = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string }> }> | undefined
         const subName = Array.isArray(options) ? options[0]?.name : undefined
         if (subName !== 'forget') {
-          await followUp('💡 未知子命令。')
+          await followUp(deps.copy.unknownSubcommand)
           return
         }
         // Guild forget mutates adapter-owned state for the whole guild:
         // Host-operator authority ONLY (binding-state spec; decision 16.7).
         const isOperator = deps.policy().hostOperatorUserIds.includes(event.actorId)
         if (!isOperator) {
-          await followUp('⚠️ 只有 Host 操作员可以忘记 Guild。')
+          await followUp(deps.copy.forgetOperatorOnly)
           return
         }
         const expiresAtMs = Date.now() + 15 * 60 * 1000
         const confirmId = deps.registry.register({ kind: 'guild-forget', action: 'confirm', guildId: event.guildId, actorId: event.actorId, expiresAtMs })
-        await followUp('⚠️ 将删除本 Guild 的全部适配器记录（绑定/意图；DSH 工作区与 Session 不受影响）。确认？', [{
+        await followUp(deps.copy.forgetConfirmPrompt, [{
           type: 1,
-          components: [{ type: 2, style: 4, label: '确认忘记', custom_id: confirmId }],
+          components: [{ type: 2, style: 4, label: deps.copy.forgetConfirmButton, custom_id: confirmId }],
         }])
         return
       }
     } catch (cause) {
       console.error('[dsh-discord] slash handler failed:', cause)
-      await followUp('⚠️ 命令处理失败，请稍后重试。').catch(() => {})
+      await followUp(deps.copy.commandFailed).catch(() => {})
     }
   }
 
@@ -414,7 +418,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     const clicked = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
     if (clicked.outcome !== 'completed') { deps.log('discord_ack_failed', clicked.outcome); return }
     const followUpResult = async (content: string): Promise<void> => {
-      const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, { content, flags: 64 })
+      const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, { content, flags: OUTBOUND_EPHEMERAL_FLAGS })
       if (posted.outcome !== 'completed') {
         deps.log('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
       }
@@ -431,11 +435,11 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     ) {
       // Another member's button (or a malformed context): deny
       // ephemerally and leave the control pending for its rightful owner.
-      await followUpResult('⚠️ 此确认不属于你。')
+      await followUpResult(deps.copy.confirmNotOwner)
       return
     }
     if (bindContext['action'] !== 'confirm') {
-      await followUpResult('已取消，未创建频道。')
+      await followUpResult(deps.copy.bindCancelled)
       return
     }
     // The write happens only now, on explicit confirmation: provision
@@ -451,13 +455,13 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       return undefined
     })
     if (ensuredChannel === undefined) {
-      await followUpResult('⚠️ 频道创建失败，请稍后重试。')
+      await followUpResult(deps.copy.bindChannelFailed)
       return
     }
     deps.log('discord_project_bind_commit', { workspaceId, channelId: ensuredChannel.channelId, created: ensuredChannel.created })
     await followUpResult(ensuredChannel.created
-      ? `💡 已为工作区「${workspaceTitle}」创建频道：<#${ensuredChannel.channelId}>`
-      : `💡 工作区「${workspaceTitle}」的频道已存在于：<#${ensuredChannel.channelId}>`)
+      ? deps.copy.bindChannelCreated(workspaceTitle, ensuredChannel.channelId)
+      : deps.copy.bindChannelExisting(workspaceTitle, ensuredChannel.channelId))
   }
 
   async function routeGuildForGetComponent(event: RouterEvent, interactionToken: string): Promise<void> {
@@ -473,15 +477,15 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     const owner = context['actorId']
     const guildId = context['guildId']
     if (owner !== event.actorId || typeof guildId !== 'string' || guildId !== event.guildId) {
-      const denied = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, { content: '⚠️ 此确认不属于你。', flags: 64 })
+      const denied = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, { content: deps.copy.confirmNotOwner, flags: OUTBOUND_EPHEMERAL_FLAGS })
       if (denied.outcome !== 'completed') deps.log('discord_followup_failed', denied.outcome)
       return
     }
     await deps.forgetGuild(guildId)
     deps.log('discord_guild_forget_commit', { guildId })
     const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, {
-      content: '💡 已忘记本 Guild：适配器记录（绑定/意图）已删除；DSH 工作区与 Session 未受影响。',
-      flags: 64,
+      content: deps.copy.forgetDone,
+      flags: OUTBOUND_EPHEMERAL_FLAGS,
     })
     if (posted.outcome !== 'completed') deps.log('discord_followup_failed', posted.outcome)
   }
@@ -520,16 +524,16 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     const rest = await deps.rest()
     if (rest === undefined) return
     await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
-    const copy: string | undefined =
-      outcome.outcome === 'submitted' ? '💡 回答已提交。'
-      : outcome.outcome === 'denied' ? '⚠️ 此问题不属于你。'
-      : outcome.outcome === 'already-resolved' ? '💡 该问题已被处理。'
-      : outcome.outcome === 'incomplete' ? '💡 还有问题未回答；请完成后再提交。'
-      : outcome.outcome === 'invalid-answer' ? `⚠️ 回答无效：${outcome.reason}`
-      : outcome.outcome === 'unresolved' ? '⚠️ 应答结果未知；DSH 未确认。'
-      : outcome.outcome === 'resolved-elsewhere' ? '💡 该问题已被其他客户端处理。'
+    const notice: string | undefined =
+      outcome.outcome === 'submitted' ? deps.copy.questionSubmitted
+      : outcome.outcome === 'denied' ? deps.copy.questionDenied
+      : outcome.outcome === 'already-resolved' ? deps.copy.questionAlreadyResolved
+      : outcome.outcome === 'incomplete' ? deps.copy.questionIncomplete
+      : outcome.outcome === 'invalid-answer' ? deps.copy.questionInvalid(outcome.reason)
+      : outcome.outcome === 'unresolved' ? deps.copy.questionUnresolved
+      : outcome.outcome === 'resolved-elsewhere' ? deps.copy.questionResolvedElsewhere
       : undefined
-    if (copy !== undefined) await deps.componentFollowUp(event.interactionId, interactionToken, copy)
+    if (notice !== undefined) await deps.componentFollowUp(event.interactionId, interactionToken, notice)
   }
 
   return {
@@ -565,7 +569,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           const rest = await deps.rest()
           if (rest !== undefined) {
             await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 }).catch(() => {})
-            await deps.componentFollowUp(event.interactionId, interactionToken, '⚠️ 命令处理失败，请稍后重试。').catch(() => {})
+            await deps.componentFollowUp(event.interactionId, interactionToken, deps.copy.commandFailed).catch(() => {})
           }
         }
         return
@@ -584,9 +588,20 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         await routeGuildForGetComponent(event, interactionToken)
         return
       }
-      // Everything that is not a bind/guild-forget confirmation is either
-      // an approval button or a question control; route by context shape.
-      if (bindContext === undefined) return
+      // A not-found custom_id means the control was never registered or has
+      // been retired by its TTL (approval/question contexts stay resolvable
+      // until claim). Kimaki discipline: an expired click still gets the
+      // deferred ack plus an explicit ephemeral rerun hint — never silence.
+      if (bindContext === undefined) {
+        const rest = await deps.rest()
+        if (rest !== undefined) {
+          await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 }).then(acked => {
+            if (acked.outcome !== 'completed') deps.log('discord_ack_failed', acked.outcome)
+          }).catch(() => {})
+          await deps.componentFollowUp(event.interactionId, interactionToken, deps.copy.expiredControl).catch(() => {})
+        }
+        return
+      }
       const isQuestionControl: boolean = 'questionRpcId' in bindContext
       const isApprovalControl: boolean = 'approvalId' in bindContext
       if (isQuestionControl) {
@@ -608,7 +623,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
             await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 }).then(acked => {
               if (acked.outcome !== 'completed') deps.log('discord_ack_failed', acked.outcome)
             }).catch(() => {})
-            await deps.componentFollowUp(event.interactionId, interactionToken, '⚠️ 命令处理失败，请稍后重试。').catch(() => {})
+            await deps.componentFollowUp(event.interactionId, interactionToken, deps.copy.commandFailed).catch(() => {})
           }
         }
         return
@@ -642,11 +657,11 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           await deps.disableControl(approvalId)
         }
         if (outcome.outcome === 'denied') {
-          await deps.componentFollowUp(event.interactionId, interactionToken, '⚠️ 此确认不属于你。')
+          await deps.componentFollowUp(event.interactionId, interactionToken, deps.copy.confirmNotOwner)
         } else if (outcome.outcome === 'unresolved') {
-          await deps.componentFollowUp(event.interactionId, interactionToken, '⚠️ 应答结果未知；DSH 未确认，请勿重复点击。')
+          await deps.componentFollowUp(event.interactionId, interactionToken, deps.copy.unresolvedAck)
         } else if (outcome.outcome === 'submitted') {
-          await deps.componentFollowUp(event.interactionId, interactionToken, '💡 已提交你的选择。')
+          await deps.componentFollowUp(event.interactionId, interactionToken, deps.copy.submittedAck)
         }
         return
       }

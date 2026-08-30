@@ -65,6 +65,8 @@ export interface LiveRenderDeps {
   log?: (event: string, detail?: unknown) => void
   /** Queue snapshot cache (the /queue surface's data source). */
   onQueueSnapshot?: (sessionId: string, items: Array<{ id: string; summary: string }>) => void
+  /** Localized interruption suffix, resolved live (language can change). */
+  interruptedMarker?: () => string
   /** Turn ownership release on turn/end. */
   onTurnEnded?: (sessionId: string) => void
   /**
@@ -118,7 +120,7 @@ interface ThreadRuntime {
   lastTitle: string | undefined
 }
 
-const ANSWER_MARKER = (interrupted: boolean): string => interrupted ? '\n\n*（已被中断）*' : ''
+const ANSWER_MARKER = (interrupted: boolean, marker: string): string => interrupted ? `\n\n${marker}` : ''
 
 /** Extract the visible text of one assistant message (text blocks only). */
 function assistantText(message: unknown): string {
@@ -320,7 +322,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
           },
           headMessageId: runtime.headMessageId ?? '',
         })
-        const finalText = text + ANSWER_MARKER(interrupted)
+        const finalText = text + ANSWER_MARKER(interrupted, deps.interruptedMarker?.() ?? '*（已被中断）*')
         void runtime.finalizer.finalize(finalText).catch((cause: unknown) => {
           deps.log?.('discord_live_finalize_threw', { threadId, cause: String(cause) })
         })

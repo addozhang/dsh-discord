@@ -12,6 +12,7 @@ export interface DiscordSettingsDraft {
   deniedRoleIds: string
   hostOperatorUserIds: string
   defaultVerbosity: DiscordSettings['defaultVerbosity']
+  language: DiscordSettings['language']
   threadAutoArchiveMinutes: DiscordSettings['threadAutoArchiveMinutes']
   streamUpdateIntervalMs: number
   typingIntervalMs: number
@@ -48,6 +49,7 @@ export function createSettingsDraft(
     deniedRoleIds: value.deniedRoleIds ?? [],
     hostOperatorUserIds: value.hostOperatorUserIds ?? [],
     defaultVerbosity: value.defaultVerbosity ?? 'essential-tools',
+    language: value.language ?? 'zh',
     threadAutoArchiveMinutes: value.threadAutoArchiveMinutes ?? 1440,
     streamUpdateIntervalMs: value.streamUpdateIntervalMs ?? 800,
     typingIntervalMs: value.typingIntervalMs ?? 7_000,

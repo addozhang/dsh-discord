@@ -46,6 +46,12 @@ export interface WorkspaceLabel {
 /** Discord's SUPPRESS_MENTIONS message flag (1 << 12). */
 export const DISCORD_SUPPRESS_MENTIONS_FLAG = 1 << 12
 
+/** Discord's ephemeral message flag (only the invoker sees the message). */
+export const DISCORD_EPHEMERAL_FLAG = 1 << 6
+
+/** Ephemeral + SUPPRESS_MENTIONS: the standard adapter followup flags. */
+export const OUTBOUND_EPHEMERAL_FLAGS = DISCORD_EPHEMERAL_FLAG | DISCORD_SUPPRESS_MENTIONS_FLAG
+
 /** Component label ceiling imposed by Discord. */
 const DISCORD_LABEL_MAX = 100
 /** Length of the id tail used to disambiguate duplicate titles. */

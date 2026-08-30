@@ -154,6 +154,49 @@ describe('DiscordCardForm', () => {
     expect(state.dirty).toBe(true)
     expect(state.allowedGuildIds.text).toBe('123456789012345678')
   })
+
+  it('stages a language choice, saves it as zh/en, and seeds from the scope', async () => {
+    const host = fakeScope({ value: { language: 'en' } })
+    const form = new DiscordCardForm(host.scope)
+    const store = form.bind()
+    const actions = form.actions()
+
+    // Seeded from the composition layer's current value.
+    let state = store.getSnapshot()
+    expect(state.language.text).toBe('en')
+    expect(state.language.overridden).toBe(false)
+
+    actions.edit('language', 'zh')
+    state = store.getSnapshot()
+    expect(state.dirty).toBe(true)
+    expect(state.invalid).toBe(false)
+    expect(state.language.overridden).toBe(true)
+
+    actions.save()
+    await vi.waitFor(() => {
+      state = store.getSnapshot()
+      expect(state.saving).toBe(false)
+    })
+    expect(state.dirty).toBe(false)
+    expect(host.user.language).toBe('zh')
+  })
+
+  it('marks a non zh/en language invalid and refuses to save it', async () => {
+    const host = fakeScope()
+    const form = new DiscordCardForm(host.scope)
+    const store = form.bind()
+    const actions = form.actions()
+
+    actions.edit('language', 'fr')
+    const state = store.getSnapshot()
+    expect(state.invalid).toBe(true)
+    expect(state.language.invalid).toBe(true)
+
+    actions.save()
+    await Promise.resolve()
+    expect(host.user.language).toBeUndefined()
+    expect(state.dirty).toBe(true)
+  })
 })
 
 describe('DiscordCardForm status surface (2.3)', () => {

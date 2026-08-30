@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
+import type { DiscordSettings } from '../src/settings.js'
 import {
   DEFAULT_DISCORD_SETTINGS,
+  DiscordSettingsSchema,
   normalizeDiscordSettings,
   validateDiscordSettings,
 } from '../src/settings.js'
@@ -43,5 +45,18 @@ describe('Discord settings', () => {
       ...DEFAULT_DISCORD_SETTINGS,
       streamUpdateIntervalMs: 20,
     }); }).toThrow('streamUpdateIntervalMs')
+  })
+
+  it('defaults the copy language to Chinese and admits English only', () => {
+    expect(DEFAULT_DISCORD_SETTINGS.language).toBe('zh')
+
+    // Schemastery schema nodes resolve by direct call. The call signature's
+    // static input type is the already-parsed DiscordSettings, so the test
+    // goes through an untyped view — Host configs arrive as untyped YAML and
+    // the runtime union/default is exactly what these assertions pin.
+    const resolve = DiscordSettingsSchema as unknown as (input: unknown) => DiscordSettings
+    expect(resolve({}).language).toBe('zh')
+    expect(resolve({ language: 'en' }).language).toBe('en')
+    expect(() => { resolve({ language: 'fr' }) }).toThrow()
   })
 })

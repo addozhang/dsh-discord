@@ -12,6 +12,7 @@ import { DigitalDiscord } from 'discord-digital-twin'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { createInteractionRouter } from '../src/features/interaction-router.js'
+import { createCopy } from '../src/i18n.js'
 import { renderApprovalControls } from '../src/features/approval-view.js'
 import { createApprovalStore } from '../src/features/approval-store.js'
 import { createClientRespondPort, type RespondReceipt } from '../src/dsh/api-proxy-face.js'
@@ -244,6 +245,7 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
       controls: { disable: () => Promise.resolve() },
     } as unknown as Parameters<typeof handleSelectInput>[0]
     const interactionRouter = createInteractionRouter({
+      copy: createCopy('zh'),
       policy: () => ({
         allowedGuildIds: [GUILD],
         memberUserIds: [USER, '222222222222222223'],
@@ -466,6 +468,20 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     })
     expect(done.content).toContain('DSH 工作区与 Session 未受影响')
     expect(rowMap.has(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }))).toBe(false)
+  }, 20_000)
+
+  it('answers a click on an unknown control with the ack plus an ephemeral rerun hint', async () => {
+    // A custom_id that was never registered (or whose TTL has passed) must
+    // not die in silence: Kimaki discipline answers it explicitly.
+    const host = await discord.channel(channelId).user(USER).sendMessage({ content: 'host message for the stale control' })
+    const interaction = await discord.simulateButtonClick({
+      channelId, userId: USER, messageId: host.id, customId: 'never-registered-id',
+    })
+    await discord.channel(channelId).waitForInteractionAck({ interactionId: interaction.id })
+    const reply = await discord.channel(channelId).waitForMessage({
+      predicate: message => message.content.includes('此控件已过期'),
+    })
+    expect((reply.flags ?? 0) & 64).toBe(64)
   }, 20_000)
 
   it('stops the thread-owned active turn', async () => {
@@ -890,6 +906,7 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     } as unknown as Parameters<typeof handleSelectInput>[0]
 
     const interactionRouter = createInteractionRouter({
+      copy: createCopy('zh'),
       policy: () => ({
         allowedGuildIds: [GUILD],
         memberUserIds: [USER],
@@ -1367,6 +1384,7 @@ describe('twin smoke: isolation matrix (15.11)', () => {
 
     const sharedRegistry = createComponentRegistry()
     const interactionRouter = createInteractionRouter({
+      copy: createCopy('zh'),
       policy: () => ({
         allowedGuildIds: [GUILD, GUILD2],
         memberUserIds: [USER],
@@ -1541,5 +1559,153 @@ describe('twin smoke: isolation matrix (15.11)', () => {
     expect(g2Reply.content).toContain('ws-two')
     expect(g2Reply.content).toContain('/tmp/ws-2')
     expect(g2Reply.content).not.toContain('ws-1')
+  }, 20_000)
+})
+
+describe('twin smoke: English copy path (16.25)', () => {
+  const GUILD_EN = '333333333333333336'
+  const CHANNEL_EN = '444444444444444448'
+  const GUEST = '222222222222222223'
+  let discord: DigitalDiscord
+  let rest: SharedRestClient
+  const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
+
+  beforeAll(async () => {
+    discord = new DigitalDiscord({
+      botToken: 'twin-test-token',
+      botUser: { id: BOT, username: 'dsh' },
+      dbUrl: ':memory:',
+      guilds: [{ id: GUILD_EN, name: 'G-en', channels: [{ id: CHANNEL_EN, name: 'general', type: 0 }] }],
+      users: [{ id: GUEST, username: 'Guest' }],
+    })
+    await discord.start()
+    // The administrator gate rides the wire permissions; demote the only
+    // member so the denial paths below are actually exercised.
+    await discord.prisma.guildMember.update({
+      where: { guildId_userId: { guildId: GUILD_EN, userId: GUEST } },
+      data: { permissions: '0' },
+    })
+    rest = createSharedRestClient({ token: discord.botToken, apiBase: `${discord.restUrl}/v10` })
+
+    const sharedRegistry = createComponentRegistry()
+    const interactionRouter = createInteractionRouter({
+      copy: createCopy('en'),
+      policy: () => ({
+        allowedGuildIds: [GUILD_EN],
+        memberUserIds: [GUEST],
+        memberRoleIds: [],
+        administratorUserIds: [],
+        administratorRoleIds: [],
+        deniedUserIds: [],
+        deniedRoleIds: [],
+        hostOperatorUserIds: [],
+      }),
+      applicationId: () => BOT,
+      registry: sharedRegistry,
+      approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
+      approvalRespondPort: { respond: () => Promise.resolve({ outcome: 'confirmed' as const }) },
+      turnTracker: createTurnTracker(),
+      queueSnapshots: new Map(),
+      forgetGuild: () => Promise.resolve(),
+      componentFollowUp: () => Promise.resolve(),
+      disableControl: () => Promise.resolve(),
+      handleQuestionComponent: input => handleSelectInput({
+        registry: sharedRegistry,
+        store: createQuestionStore(),
+        port: { respond: () => Promise.resolve({ outcome: 'confirmed' as const }) },
+        nowMs: () => Date.now(),
+      } as unknown as Parameters<typeof handleSelectInput>[0], input),
+      handleQuestionModal: input => handleModalSubmit({
+        registry: sharedRegistry,
+        store: createQuestionStore(),
+        port: { respond: () => Promise.resolve({ outcome: 'confirmed' as const }) },
+        nowMs: () => Date.now(),
+      } as unknown as Parameters<typeof handleSelectInput>[0], input),
+      dsh: {
+        cancel: () => Promise.resolve({ outcome: 'accepted' as const }),
+        steer: () => Promise.resolve({ outcome: 'accepted' as const }),
+        removeQueueItem: () => Promise.resolve({ outcome: 'accepted' as const }),
+        readWorkspaceDetail: () => Promise.resolve({
+          outcome: 'stale' as const,
+        }),
+      },
+      catalogPort: { listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [] }) },
+      resolver: { resolve: () => Promise.resolve({ outcome: 'stale' as const }) },
+      channelBinding: () => undefined,
+      findBoundChannelFor: () => undefined,
+      sessionForThread: () => undefined,
+      ensureWorkspaceChannel: () => Promise.resolve(undefined),
+      rest: () => Promise.resolve(rest),
+      log: () => {},
+      warn: () => {},
+    })
+
+    runtimeRef.current = startDiscordAdapter({
+      tokenProvider: () => Promise.resolve(discord.botToken),
+      socketFactory: twinSocket,
+      logger: { warn: () => {} },
+      policy: () => ({
+        allowedGuildIds: [GUILD_EN],
+        memberUserIds: [GUEST],
+        memberRoleIds: [],
+        administratorUserIds: [],
+        administratorRoleIds: [],
+        deniedUserIds: [],
+        deniedRoleIds: [],
+        hostOperatorUserIds: [],
+      }),
+      selfUserIdProvider: () => Promise.resolve(BOT),
+      intents: (1 << 0) | (1 << 9) | (1 << 15),
+      applicationId: () => BOT,
+      mainline: {
+        admitMention: request => Promise.resolve({
+          outcome: 'admitted' as const,
+          threadId: request.messageId,
+          sessionId: `sess-en-${request.messageId.slice(-4)}`,
+        }),
+        continueInThread: () => Promise.resolve({ outcome: 'queued' as const }),
+      },
+      gatewayUrl: `${discord.gatewayUrl}?v=10&encoding=json`,
+      bindings: {
+        workspaceForChannel: () => undefined,
+        sessionForThread: () => undefined,
+      },
+      approvals: createApprovalStore({ get: () => undefined, put: async () => {} }),
+      questions: createQuestionStore(),
+      status: createAdapterStatusTracker(),
+      routeInteraction: (event, token) => {
+        if (event.kind !== 'interaction') return
+        return interactionRouter.route(event, token)
+      },
+    })
+    await new Promise(resolve => { setTimeout(resolve, 500) })
+  }, 20_000)
+
+  afterAll(async () => {
+    runtimeRef.current?.dispose()
+    await discord.stop()
+  })
+
+  it('denies bind to a plain member with the English admin-only copy', async () => {
+    const interaction = await discord.simulateSlashCommand({
+      channelId: CHANNEL_EN, userId: GUEST, name: 'project',
+      options: [{ name: 'bind', type: 1, options: [{ name: 'workspace', type: 3, value: 'ws-1' }] }],
+    })
+    await discord.channel(CHANNEL_EN).waitForInteractionAck({ interactionId: interaction.id })
+    const reply = await discord.channel(CHANNEL_EN).waitForMessage({
+      predicate: message => message.content.includes('Only workspace administrators can bind channels.'),
+    })
+    expect((reply.flags ?? 0) & 64).toBe(64)
+  }, 20_000)
+
+  it('answers /stop outside a session thread with the English thread copy', async () => {
+    const interaction = await discord.simulateSlashCommand({
+      channelId: CHANNEL_EN, userId: GUEST, name: 'stop', options: [],
+    })
+    await discord.channel(CHANNEL_EN).waitForInteractionAck({ interactionId: interaction.id })
+    const reply = await discord.channel(CHANNEL_EN).waitForMessage({
+      predicate: message => message.content.includes('not an adapter-owned session thread'),
+    })
+    expect((reply.flags ?? 0) & 64).toBe(64)
   }, 20_000)
 })

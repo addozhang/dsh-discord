@@ -3,7 +3,7 @@
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import { SelectField, ValueField } from './fields.js'
 import { PluginCard, type PluginCardCopy } from './PluginCard.js'
-import { ARCHIVE_CHOICES, ARCHIVE_FIELD } from './card-form.js'
+import { ARCHIVE_CHOICES, ARCHIVE_FIELD, LANGUAGE_CHOICES, LANGUAGE_FIELD } from './card-form.js'
 import type { DiscordCardFace } from './card-controller.js'
 import type {} from './slot-contract.js'
 
@@ -86,6 +86,19 @@ export function DiscordSettingsCard(props: DiscordSettingsCardProps) {
         {...state[ARCHIVE_FIELD]}
         onEdit={(text) => { props.edit(ARCHIVE_FIELD, text) }}
         onReset={() => { props.resetField(ARCHIVE_FIELD) }}
+      />
+      <SelectField
+        id={`plugin-config-discord-${LANGUAGE_FIELD}`}
+        label={t('discordLanguage')}
+        hint={t('discordLanguageHint')}
+        overriddenLabel={t('overridden')}
+        resetLabel={t('reset')}
+        invalidLabel={t('discordInvalidLanguage')}
+        disabled={disabled}
+        options={LANGUAGE_CHOICES}
+        {...state[LANGUAGE_FIELD]}
+        onEdit={(text) => { props.edit(LANGUAGE_FIELD, text) }}
+        onReset={() => { props.resetField(LANGUAGE_FIELD) }}
       />
     </PluginCard>
   )

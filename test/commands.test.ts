@@ -10,9 +10,11 @@ import { describe, expect, it } from 'vitest'
 import { MILESTONE_ONE_COMMANDS, buildCommandRegistrations } from '../src/discord/commands.js'
 
 describe('milestone one command set', () => {
-  it('declares exactly the ten fixed commands', () => {
+  it('declares exactly the nine fixed commands', () => {
+    // `/session new|resume` is deferred to the next milestone: the selector
+    // and adoption modules exist, but the Host RPC face cannot back them yet.
     expect(MILESTONE_ONE_COMMANDS.map(command => command.name)).toEqual([
-      'project', 'session', 'queue', 'steer', 'stop', 'model', 'preset', 'skill', 'host', 'guild',
+      'project', 'queue', 'steer', 'stop', 'model', 'preset', 'skill', 'host', 'guild',
     ])
   })
 
@@ -30,10 +32,6 @@ describe('milestone one command set', () => {
       ['list', [['query', false]]],
       ['bind', [['workspace', true]]],
       ['info', []],
-    ])
-    expect(subcommands.get('session')).toEqual([
-      ['new', [['prompt', true]]],
-      ['resume', [['session', true]]],
     ])
     expect(subcommands.get('queue')).toEqual([
       ['list', []],

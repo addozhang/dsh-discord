@@ -58,6 +58,29 @@ export const DISCORD_ID_FIELDS = [
 
 /** The single-choice numeric field this card edits. */
 export const ARCHIVE_FIELD = 'threadAutoArchiveMinutes' as const satisfies keyof DiscordSettings
+/** The adapter copy language field this card edits (16.25). */
+export const LANGUAGE_FIELD = 'language' as const satisfies keyof DiscordSettings
+
+/** Accept exactly the adapter copy languages. */
+function parseLanguage(text: string): 'zh' | 'en' | undefined {
+  return text === 'zh' || text === 'en' ? text : undefined
+}
+
+function isIdField(field: DiscordCardField): boolean {
+  return (DISCORD_ID_FIELDS as readonly string[]).includes(field)
+}
+
+function isLanguageField(field: DiscordCardField): boolean {
+  return field === LANGUAGE_FIELD
+}
+
+export type DiscordCardField = typeof DISCORD_ID_FIELDS[number] | typeof ARCHIVE_FIELD | typeof LANGUAGE_FIELD
+
+/** The adapter copy languages, as select choices (labels are endonyms). */
+export const LANGUAGE_CHOICES: ReadonlyArray<{ value: string; label: string }> = [
+  { value: 'zh', label: '中文' },
+  { value: 'en', label: 'English' },
+]
 
 /** The archive durations Discord accepts, as select choices. */
 export const ARCHIVE_CHOICES: ReadonlyArray<{ value: string; label: string }> = [
@@ -67,16 +90,11 @@ export const ARCHIVE_CHOICES: ReadonlyArray<{ value: string; label: string }> = 
   { value: '10080', label: '7 天' },
 ]
 
-export type DiscordCardField = typeof DISCORD_ID_FIELDS[number] | typeof ARCHIVE_FIELD
 
 /** Accept exactly Discord's supported archive durations. */
 function parseArchiveMinutes(text: string): number | undefined {
   const parsed = Number.parseInt(text, 10)
   return ARCHIVE_CHOICES.some(choice => choice.value === String(parsed)) ? parsed : undefined
-}
-
-function isIdField(field: DiscordCardField): boolean {
-  return (DISCORD_ID_FIELDS as readonly string[]).includes(field)
 }
 
 /** What the Discord card renders. */
@@ -167,6 +185,7 @@ export class DiscordCardForm {
       fields[field] = this.fieldState(field)
     }
     fields[ARCHIVE_FIELD] = this.fieldState(ARCHIVE_FIELD)
+    fields[LANGUAGE_FIELD] = this.fieldState(LANGUAGE_FIELD)
     return {
       ...fields,
       available: snapshot.status === 'ready',
@@ -188,10 +207,11 @@ export class DiscordCardForm {
         invalid: false,
       }
     }
-    if (staged.clear) {
-      return { text: staged.text, overridden: false, invalid: false }
-    }
-    const parsed = isIdField(field) ? parseIdList(staged.text) : parseArchiveMinutes(staged.text)
+    const parsed = isIdField(field)
+      ? parseIdList(staged.text)
+      : isLanguageField(field)
+        ? parseLanguage(staged.text)
+        : parseArchiveMinutes(staged.text)
     return {
       text: staged.text,
       overridden: parsed !== undefined,
@@ -203,6 +223,7 @@ export class DiscordCardForm {
     const section = this.snapshot().value as Record<string, unknown> | undefined
     const value = section?.[field]
     if (Array.isArray(value)) return value.join('\n')
+    if (typeof value === 'string') return value
     if (typeof value === 'number') return String(value)
     return ''
   }
@@ -227,11 +248,16 @@ export class DiscordCardForm {
         if (this.stored(field)) plan.push({ field, write: () => this.clear(field) })
         continue
       }
-      if (staged.text === this.currentText(field)) continue
       if (isIdField(field)) {
         const parsed = parseIdList(staged.text)
         if (parsed === undefined) plan.push({ field, write: undefined })
         else plan.push({ field, write: () => this.store(field, parsed) })
+        continue
+      }
+      if (isLanguageField(field)) {
+        const language = parseLanguage(staged.text)
+        if (language === undefined) plan.push({ field, write: undefined })
+        else plan.push({ field, write: () => this.store(field, language) })
         continue
       }
       const parsed = parseArchiveMinutes(staged.text)
@@ -246,7 +272,7 @@ export class DiscordCardForm {
     return !this.stored(field)
   }
 
-  private async store(field: DiscordCardField, value: string[] | number): Promise<boolean> {
+  private async store(field: DiscordCardField, value: string[] | number | string): Promise<boolean> {
     await this.scope.set(field, value)
     return this.userLayer()?.[field] !== undefined
   }

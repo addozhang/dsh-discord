@@ -3,10 +3,12 @@ import z from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 
 import { DISCORD_SETTINGS_NAMESPACE } from './settings-namespace.js'
+import type { Language } from './i18n.js'
 
 export { DISCORD_SETTINGS_NAMESPACE } from './settings-namespace.js'
 
 export type DiscordVerbosity = 'text-only' | 'essential-tools' | 'full-tools'
+export type { Language }
 
 export interface DiscordSettings {
   enabled: boolean
@@ -19,6 +21,8 @@ export interface DiscordSettings {
   deniedRoleIds: string[]
   hostOperatorUserIds: string[]
   defaultVerbosity: DiscordVerbosity
+  /** Discord-visible copy language for adapter messages (16.25). */
+  language: Language
   streamUpdateIntervalMs: number
   typingIntervalMs: number
   approvalTimeoutMs: number
@@ -42,6 +46,7 @@ export const DEFAULT_DISCORD_SETTINGS: DiscordSettings = Object.freeze({
   deniedRoleIds: [],
   hostOperatorUserIds: [],
   defaultVerbosity: 'essential-tools',
+  language: 'zh',
   streamUpdateIntervalMs: 800,
   typingIntervalMs: 7_000,
   approvalTimeoutMs: 10 * 60_000,
@@ -63,6 +68,7 @@ export const DiscordSettingsSchema: z<DiscordSettings> = z.object({
   hostOperatorUserIds: discordIdList,
   defaultVerbosity: z.union(['text-only', 'essential-tools', 'full-tools'] as const)
     .default('essential-tools'),
+  language: z.union(['zh', 'en'] as const).default('zh'),
   threadAutoArchiveMinutes: z.union([60, 1440, 4320, 10080] as const)
     .default(1440),
   streamUpdateIntervalMs: z.number().step(1).min(250).max(10_000).default(800),

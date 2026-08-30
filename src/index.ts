@@ -9,6 +9,7 @@ import {
   type DiscordSettings,
   } from './settings.js'
 import { installCancellationRoot } from './lifecycle.js'
+import { DISCORD_SUPPRESS_MENTIONS_FLAG, OUTBOUND_EPHEMERAL_FLAGS } from './policy/disclosure.js'
 import { validateHostCapabilities } from './startup.js'
 import {
   createAdapterStatusTracker,
@@ -28,6 +29,7 @@ import { sweepExpiredApprovals } from './features/approval-expiry.js'
 import { sweepExpiredQuestions, type DshTurnCancelPort } from './features/question-expiry.js'
 import { createQuestionStore } from './features/question-store.js'
 import { handleSelectInput, handleModalSubmit, type QuestionRoutingDeps } from './features/question-routing.js'
+import { createCopy, type CopyTable } from './i18n.js'
 import type { DshApprovalRespondPort } from './features/approval-routing.js'
 import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
@@ -86,6 +88,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   validateHostCapabilities(name => ctx.get(name))
   installCancellationRoot(ctx)
   let current = normalizeDiscordSettings(config)
+  /**
+   * Discord-visible copy, re-resolved on every access so a language change
+   * on the settings card applies without rebuilding the composition. The
+   * DSH locale itself is not exposed to host-side plugins (the settings
+   * provider is namespace-scoped), so the language is a plugin setting.
+   */
+  const copy: CopyTable = new Proxy({} as CopyTable, {
+    get: (_target, key) => createCopy(current.language)[key as keyof CopyTable],
+  })
   // Reassigned once the async composition has built the real registrar.
   let registerCommands: () => Promise<void> = async () => {}
   const onGuildsChanged = (): void => { void registerCommands() }
@@ -230,7 +241,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const componentFollowUp = async (_interactionId: string, interactionToken: string, content: string): Promise<void> => {
       const rest = await sharedRest()
       if (rest === undefined) return
-      const posted = await rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: 64 })
+      const posted = await rest.request('POST', `/webhooks/${applicationIdRef.current}/${interactionToken}`, { content, flags: OUTBOUND_EPHEMERAL_FLAGS })
       if (posted.outcome !== 'completed') {
         rpcLog('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
       }
@@ -296,15 +307,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       }),
       turns: turnTracker,
     })
-    /** Visible failure feedback for mainline outcomes (posted to the source channel). */
-    const mainlineFailureCopy: Record<string, string> = {
-      'thread-conflict': '⚠️ 这条消息已被用于另一个会话任务，无法重复创建线程。',
-      'thread-failed': '⚠️ 线程创建失败，请稍后重试。',
-      'session-rejected': '⚠️ DSH 拒绝了会话创建（工作区可能已失效）；请稍后重试或重新 /project bind。',
-      'session-unknown': '⚠️ 会话创建结果未知；请到 DSH Web 确认后再重试，不会自动重复创建。',
-      'prompt-rejected': '⚠️ DSH 拒绝了任务提交。',
-      'prompt-unknown': '⚠️ 任务提交结果未知；为避免重复执行不会自动重发，请确认后重试。',
-    }
+    /** Mainline outcome → copy key; the string resolves live per language. */
+    const MAINLINE_FAILURE_KEYS = {
+      'thread-conflict': 'mainlineThreadConflict',
+      'thread-failed': 'mainlineThreadFailed',
+      'session-rejected': 'mainlineSessionRejected',
+      'session-unknown': 'mainlineSessionUnknown',
+      'prompt-rejected': 'mainlinePromptRejected',
+      'prompt-unknown': 'mainlinePromptUnknown',
+    } as const satisfies Record<string, keyof CopyTable>
     const mainline = {
       admitMention: async (request: Parameters<typeof composedMainline.admitMention>[0]) => {
         const result = await composedMainline.admitMention(request)
@@ -315,11 +326,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           rpcLog('discord_mention_admitted', { messageId: request.messageId, threadId: result.threadId, sessionId: result.sessionId })
         } else {
           rpcLog('discord_mention_not_admitted', { messageId: request.messageId, outcome: result.outcome })
-          const copy = mainlineFailureCopy[result.outcome]
-          if (copy !== undefined) {
-            void withRest(rest => rest.request('POST', `/channels/${request.channelId}/messages`, { content: copy }))
-              .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
-          }
+          const notice = copy[MAINLINE_FAILURE_KEYS[result.outcome]]
+          void withRest(rest => rest.request('POST', `/channels/${request.channelId}/messages`, { content: notice, flags: DISCORD_SUPPRESS_MENTIONS_FLAG }))
+            .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
         }
         return result
       },
@@ -327,10 +336,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         const result = await composedMainline.continueInThread(request)
         if (result.outcome === 'rejected' || result.outcome === 'unknown') {
           rpcLog('discord_continuation_not_queued', { messageId: request.messageId, outcome: result.outcome })
-          const copy = result.outcome === 'rejected'
-            ? '⚠️ 消息提交被 DSH 拒绝。'
-            : '⚠️ 消息提交结果未知；不会自动重发，请确认后重试。'
-          void withRest(rest => rest.request('POST', `/channels/${request.threadId}/messages`, { content: copy }))
+          const notice = result.outcome === 'rejected' ? copy.continuationRejected : copy.continuationUnknown
+          void withRest(rest => rest.request('POST', `/channels/${request.threadId}/messages`, { content: notice, flags: DISCORD_SUPPRESS_MENTIONS_FLAG }))
             .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
         }
         return result
@@ -597,6 +604,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       policy,
       applicationId: () => applicationIdRef.current,
       registry: sharedRegistry,
+      copy,
       approvals: approvalsStore,
       approvalRespondPort,
       turnTracker,
@@ -667,10 +675,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       bindings,
       unboundNotice: (request) => {
         const content = request.audience === 'administrator'
-          ? '💡 此频道未绑定工作区。工作区管理员可运行 `/project bind` 创建并绑定项目频道。'
-          : '💡 此频道未绑定工作区；请工作区管理员运行 `/project bind`。'
+          ? copy.unboundNoticeAdministrator
+          : copy.unboundNoticeMember
         void withRest(async (rest) => {
-          const sent = await rest.request('POST', `/channels/${request.channelId}/messages`, { content })
+          const sent = await rest.request('POST', `/channels/${request.channelId}/messages`, { content, flags: DISCORD_SUPPRESS_MENTIONS_FLAG })
           if (sent.outcome !== 'completed') {
             rpcLog('discord_unbound_notice_send_failed', sent.outcome === 'rejected' ? `HTTP ${String(sent.status)}` : sent.reason)
           }
@@ -760,7 +768,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         send: async (request) => {
           const rest = await sharedRest()
           if (rest === undefined) return { outcome: 'failed' }
-          const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${request.channelId}/messages`, { content: request.content })
+          const sent = await rest.request<{ id?: string } | undefined>('POST', `/channels/${request.channelId}/messages`, { content: request.content, flags: DISCORD_SUPPRESS_MENTIONS_FLAG })
           if (sent.outcome === 'completed' && typeof sent.body?.id === 'string') {
             return { outcome: 'completed', messageId: sent.body.id }
           }
@@ -770,7 +778,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         edit: async (request) => {
           const rest = await sharedRest()
           if (rest === undefined) return { outcome: 'failed' }
-          const edited = await rest.request('PATCH', `/channels/${request.channelId}/messages/${request.messageId}`, { content: request.content })
+          const edited = await rest.request('PATCH', `/channels/${request.channelId}/messages/${request.messageId}`, { content: request.content, flags: DISCORD_SUPPRESS_MENTIONS_FLAG })
           return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
         },
         typing: async (channelId) => {
@@ -803,6 +811,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       questionTimeoutMs: current.questionTimeoutMs,
       verbosity: current.defaultVerbosity,
       log: rpcLog,
+      interruptedMarker: () => copy.interruptedMarker,
       onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
       onTurnEnded: (sessionId) => {
         const turn = turnTracker.active(sessionId)
