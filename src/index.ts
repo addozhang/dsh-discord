@@ -16,7 +16,7 @@ import {
   installAdapterStatusRpc,
   type ConnectionRpc,
 } from './features/adapter-status.js'
-import { describeDiscordCredential, resolveDiscordBotToken, type DiscordCredentialProvider } from './credential.js'
+import { DISCORD_BOT_TOKEN_REF, describeDiscordCredential, resolveDiscordBotToken, type DiscordCredentialProvider } from './credential.js'
 import { createSharedRestClient, type SharedRestClient } from './discord/rest.js'
 import { createRestThreadPort } from './discord/thread-port.js'
 import { createComponentRegistry } from './discord/components.js'
@@ -115,7 +115,18 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   // Gateway observation fed by the adapter composition as it starts.
   // Services resolve through the same accessor the startup boundary probes.
   const statusTracker = createAdapterStatusTracker()
-  installAdapterStatusRpc(ctx.get('connection') as ConnectionRpc, statusTracker)
+  // Late-bound so the management channel can reach the runtime built inside
+  // the composition IIFE below (the card's Connect button).
+  const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
+  installAdapterStatusRpc(ctx.get('connection') as ConnectionRpc, statusTracker, {
+    tracker: statusTracker,
+    setToken: async (value: string) => {
+      await (ctx.get('credentials') as DiscordCredentialProvider).set(DISCORD_BOT_TOKEN_REF, value)
+      statusTracker.setCredential({ configured: true })
+    },
+    connect: () => { runtimeRef.current?.connect() },
+    disconnect: () => { runtimeRef.current?.disconnect() },
+  })
   void describeDiscordCredential(ctx.get('credentials') as DiscordCredentialProvider)
     .then((view) => { statusTracker.setCredential(view) })
     .catch((cause: unknown) => {
@@ -560,7 +571,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     }, 30_000)
     ctx.effect(() => () => { clearInterval(expiryTimer) }, 'discord interaction expiry sweep')
 
-    const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
+
     // DSH approval respond face: the client-response echoes the ask's rpcId.
     const clientRespond = createClientRespondPort(
       apiProxy as unknown as { respond(message: unknown): Promise<unknown> },

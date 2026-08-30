@@ -12,6 +12,8 @@ export interface DiscordCredentialProvider {
     value: string
     source: string
   } | undefined>
+  /** Durably store the secret in the provider-managed writable source. */
+  set(ref: typeof DISCORD_BOT_TOKEN_REF, value: string): Promise<void>
 }
 
 export async function describeDiscordCredential(

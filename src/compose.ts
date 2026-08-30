@@ -131,6 +131,16 @@ export interface DiscordAdapterRuntime {
   started: boolean
   /** Why the runtime did not start (no token ⇒ fail-closed offline). */
   startError?: 'missing-token' | undefined
+  /**
+   * Re-run the start chain after a late credential write (the card's
+   * Connect button). Idempotent: an already-running gateway is replaced.
+   */
+  connect(): void
+  /**
+   * Operator-initiated offline. The credential stays stored; the start chain
+   * is blocked until the next connect().
+   */
+  disconnect(): void
   dispose(): void
 }
 
@@ -257,9 +267,14 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
     }
   }
 
-  void (async () => {
+  /** Set while the operator explicitly disconnected; blocks auto start. */
+  let stoppedByUser = false
+
+  async function runStartChain(): Promise<void> {
+    if (stoppedByUser) return
     const token = await deps.tokenProvider()
     if (token === undefined || token === '') {
+      started = false
       startError = 'missing-token'
       status.setCredential({ configured: false })
       status.setGateway('disconnected')
@@ -292,7 +307,9 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
     })
     started = true
     status.setGateway('connecting')
-  })().catch((cause: unknown) => {
+  }
+
+  void runStartChain().catch((cause: unknown) => {
     deps.logger?.warn('discord_adapter_start_failed', String(cause))
     status.setGateway('disconnected')
   })
@@ -303,6 +320,27 @@ export function startDiscordAdapter(deps: CompositionDeps): DiscordAdapterRuntim
     questions: deps.questions,
     get started() { return started },
     get startError() { return startError },
+    connect() {
+      stoppedByUser = false
+      startError = undefined
+      gateway?.dispose()
+      gateway = undefined
+      started = false
+      void runStartChain().catch((cause: unknown) => {
+        deps.logger?.warn('discord_adapter_connect_failed', String(cause))
+        status.setGateway('disconnected')
+      })
+    },
+    disconnect() {
+      // Operator-initiated offline: the credential stays in the store so the
+      // next Connect (possibly with a replaced token) needs no re-entry.
+      stoppedByUser = true
+      gateway?.dispose()
+      gateway = undefined
+      started = false
+      startError = undefined
+      status.setGateway('disconnected')
+    },
     dispose() {
       gateway?.dispose()
     },

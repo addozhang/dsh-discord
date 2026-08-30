@@ -103,12 +103,25 @@ export type DiscordCardState = CardShell & Record<DiscordCardField, CardFieldSta
   status: AdapterStatusPresentation | undefined
 }
 
+/** The write path for the bot token and the connect trigger. The token
+ * value never enters card state — it flows client → Host over the plugin
+ * management channel and is stored in the credential service. */
+export interface CardManagement {
+  /** Store the token durably and refresh the credential status. */
+  setToken(value: string): Promise<void>
+  /** Re-run the adapter start chain with the stored credential. */
+  connect(): void
+  /** Operator-initiated offline; the stored credential is kept. */
+  disconnect(): void
+}
+
 /** The registration-side face the Discord card's slot entry injects. */
 export interface DiscordCardFace extends CardActions {
   hooks: {
     /** Card snapshot bound by the renderer. */
     discordCard: SnapshotStore<DiscordCardState>
   }
+  management?: CardManagement | undefined
 }
 
 const DISCORD_SNOWFLAKE = /^\d{17,20}$/u

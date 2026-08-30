@@ -21,6 +21,12 @@ interface DiscordPluginsLocale {
   discordAllowedGuildIds: string
   discordAllowedGuildIdsHint: string
   discordGuildIdHelp: string
+  discordTokenLabel: string
+  discordTokenPlaceholder: string
+  discordTokenConnect: string
+  discordTokenConnecting: string
+  discordTokenHelp: string
+  discordDisconnect: string
   discordThreadAutoArchive: string
   discordThreadAutoArchiveHint: string
   discordLanguage: string

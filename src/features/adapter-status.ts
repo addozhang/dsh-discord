@@ -146,6 +146,8 @@ export interface ManagementChannelDeps {
   setToken?: ((value: string) => Promise<void>) | undefined
   /** Re-run the adapter start chain (the card's Connect button). */
   connect?: (() => void) | undefined
+  /** Operator-initiated offline (the card's Disconnect button). */
+  disconnect?: (() => void) | undefined
   /** Guilds the bot is a member of, sanitized (id + name only). */
   guilds?: (() => Promise<Array<{ id: string; name: string }>>) | undefined
 }
@@ -175,6 +177,10 @@ export function createAdapterManagementHandler(deps: ManagementChannelDeps) {
       deps.connect()
       return Promise.resolve({ ok: true, value: { connecting: true } })
     }
+    if (endpoint === 'adapter.disconnect' && deps.disconnect !== undefined) {
+      deps.disconnect()
+      return Promise.resolve({ ok: true, value: { stopped: true } })
+    }
     if (endpoint === 'credentials.set' && deps.setToken !== undefined) {
       const value = (payload as { value?: unknown } | undefined)?.value
       const text = typeof value === 'string' ? value.trim() : ''
@@ -191,8 +197,12 @@ export function createAdapterManagementHandler(deps: ManagementChannelDeps) {
 }
 
 /** Register the management channel; returns the connection service's disposer. */
-export function installAdapterStatusRpc(connection: ConnectionRpc, tracker: AdapterStatusTracker): () => void {
-  return connection.rpc.handle(DISCORD_RPC_CHANNEL, createAdapterManagementHandler({ tracker }), {
+export function installAdapterStatusRpc(
+  connection: ConnectionRpc,
+  tracker: AdapterStatusTracker,
+  deps: ManagementChannelDeps = { tracker },
+): () => void {
+  return connection.rpc.handle(DISCORD_RPC_CHANNEL, createAdapterManagementHandler(deps), {
     authority: 'loopback',
   })
 }
