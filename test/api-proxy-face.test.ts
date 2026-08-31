@@ -18,6 +18,7 @@ import {
   RpcTimeoutError,
   steerSession,
   withRpcTimeout,
+  listSessionSummaries,
   type DshApiProxyFace,
   type RpcResponseShape,
 } from '../src/dsh/api-proxy-face.js'
@@ -33,6 +34,7 @@ function err(code: string, message: string): RpcResponseShape<never> {
 function face(
   workspaceList?: Promise<unknown>,
   prompt?: Promise<unknown>,
+  sessionList?: Promise<unknown>,
 ): DshApiProxyFace {
   return {
     workspace: {
@@ -43,7 +45,7 @@ function face(
       create: () => Promise.resolve(ok({ sessionId: 'sess-1' })) as ReturnType<DshApiProxyFace['sessions']['create']>,
       cancel: () => Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['cancel']>,
       updateQueue: () => Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['updateQueue']>,
-      list: () => Promise.resolve(ok({ items: [] })) as ReturnType<DshApiProxyFace['sessions']['list']>,
+      list: () => (sessionList ?? Promise.resolve(ok({ items: [] }))) as ReturnType<DshApiProxyFace['sessions']['list']>,
       models: () => Promise.resolve(ok({
         current: { provider: 'p', model: 'm' },
         routable: true,
@@ -74,6 +76,29 @@ describe('createWorkspaceCatalogPort', () => {
     await expect(port.listWorkspaces()).resolves.toEqual({
       outcome: 'completed',
       workspaces: [{ id: 'ws-1', title: 'Alpha' }],
+      archivedSessionIds: [],
+    })
+  })
+
+  it('carries the Host-supplied path through to the catalog rows (16.46)', async () => {
+    // Regression 16.46: the narrowing map once dropped `path`, so the
+    // /session resume workspace scoping (cwd === registered path) filtered
+    // to zero candidates in every channel — and /project autocomplete
+    // labels silently lost their abbreviated paths.
+    const port = createWorkspaceCatalogPort(face(Promise.resolve(ok({
+      items: [
+        { workspaceId: 'ws-1', title: 'Alpha', path: '/private/tmp' },
+        { workspaceId: 'ws-2', title: 'NoPath' },
+      ],
+      archivedSessionIds: ['session-abc', 'def-1'],
+    }))))
+    await expect(port.listWorkspaces()).resolves.toEqual({
+      outcome: 'completed',
+      workspaces: [
+        { id: 'ws-1', title: 'Alpha', path: '/private/tmp' },
+        { id: 'ws-2', title: 'NoPath' },
+      ],
+      archivedSessionIds: ['session-abc', 'def-1'],
     })
   })
 
@@ -98,6 +123,26 @@ describe('createWorkspaceCatalogPort', () => {
     })
     await expect(port.listWorkspaces()).resolves.toEqual({ outcome: 'failed' })
     expect(logged.some(([event]) => event === 'discord_workspace_list_malformed')).toBe(true)
+  })
+})
+
+describe('listSessionSummaries', () => {
+  it('narrows wire rows defensively and carries the subagent origin (16.48)', async () => {
+    const port = await listSessionSummaries(face(undefined, undefined, Promise.resolve(ok({
+      items: [
+        { sessionId: 's-1', updatedAt: 5, running: false, blank: false, cwd: '/w', origin: 'subagent', projections: { values: { title: 'Spawned probe' } } },
+        { sessionId: 's-2', updatedAt: 4, running: true, blank: false, cwd: '/w' },
+        { sessionId: '', updatedAt: 3, running: false, blank: false },
+        'garbage',
+      ],
+    }))))
+    expect(port).toEqual({
+      outcome: 'completed',
+      sessions: [
+        { sessionId: 's-1', title: 'Spawned probe', updatedAt: 5, running: false, blank: false, cwd: '/w', origin: 'subagent' },
+        { sessionId: 's-2', title: undefined, updatedAt: 4, running: true, blank: false, cwd: '/w' },
+      ],
+    })
   })
 })
 

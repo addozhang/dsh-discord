@@ -14,7 +14,7 @@ import { abbreviatePath } from '../src/policy/disclosure.js'
 
 function okPort(items: Array<{ id: string; title: string }>): ProjectListPort {
   return {
-    listWorkspaces: () => Promise.resolve({ outcome: 'completed', workspaces: items }),
+    listWorkspaces: () => Promise.resolve({ outcome: 'completed', workspaces: items, archivedSessionIds: [] }),
   }
 }
 

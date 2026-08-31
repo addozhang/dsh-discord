@@ -70,6 +70,7 @@ export interface SessionSummaryShape {
   blank: boolean
   cwd?: string
   agentPreset?: string
+  origin?: 'subagent'
   projections?: SessionProjectionsShape
 }
 
@@ -209,7 +210,7 @@ export function createWorkspaceCatalogPort(
   const log = options.log
   return {
     async listWorkspaces() {
-      let response: RpcResponseShape<{ items: WorkspaceCatalogEntry[] }>
+      let response: RpcResponseShape<{ items: WorkspaceCatalogEntry[]; archivedSessionIds?: unknown }>
       try {
         response = await withRpcTimeout(
           dsh.workspace.list(mintRequest({})),
@@ -225,7 +226,7 @@ export function createWorkspaceCatalogPort(
       }
       // A malformed envelope is a definitive, sanitized failure: the Host
       // answered, so a retry is safe and semantics stay observable-free.
-      const result = (response as Partial<RpcResponseShape<{ items: WorkspaceCatalogEntry[] }>> | undefined)?.result
+      const result = (response as Partial<RpcResponseShape<{ items: WorkspaceCatalogEntry[]; archivedSessionIds?: ReadonlyArray<unknown> }>> | undefined)?.result
       if (result === undefined) {
         log?.('discord_workspace_list_malformed')
         return { outcome: 'failed' }
@@ -239,7 +240,19 @@ export function createWorkspaceCatalogPort(
           workspaces: items.map(workspace => ({
             id: workspace.workspaceId,
             title: workspace.title,
+            // The registered path rides every workspace.* row (Host
+            // WorkspaceView); /session resume scopes candidates by it and
+            // /project autocomplete abbreviates it — dropping it here once
+            // silently emptied the resume list everywhere (16.46).
+            ...(typeof workspace.path === 'string' ? { path: workspace.path } : {}),
           })),
+          // The registry's archived set rides the workspace.list value
+          // (sessions.list rows carry NO archived marker): /session resume
+          // subtracts it — resuming an archived session dead-ends in a
+          // thread whose turns never run (16.49).
+          archivedSessionIds: Array.isArray(result.value.archivedSessionIds)
+            ? result.value.archivedSessionIds.filter((id): id is string => typeof id === 'string')
+            : [],
         }
       }
       log?.('discord_workspace_list_rejected', {
@@ -470,6 +483,7 @@ export interface SessionResumeRow {
   running: boolean
   blank: boolean
   cwd: string | undefined
+  origin: 'subagent' | undefined
 }
 
 export type SessionSummariesOutcome =
@@ -521,6 +535,7 @@ export async function listSessionSummaries(
       running: row.running ?? false,
       blank: row.blank === true,
       cwd: typeof row.cwd === 'string' ? row.cwd : undefined,
+      origin: row.origin === 'subagent' ? 'subagent' : undefined,
     })
   }
   return { outcome: 'completed', sessions }

@@ -91,7 +91,7 @@ export interface InteractionRouterDeps {
    * non-blank, unbound sessions, title-filtered, newest-first, capped at 25
    * (16.44).
    */
-  resumeCandidates: (query: string, workspacePath?: string) => Promise<
+  resumeCandidates: (query: string, workspacePath?: string, archivedSessionIds?: ReadonlySet<string>) => Promise<
     | { outcome: 'ok'; options: Array<{ label: string; value: string; description?: string }> }
     | { outcome: 'unavailable' }
   >
@@ -111,6 +111,8 @@ export interface InteractionRouterDeps {
     | { outcome: 'started'; threadId: string }
     | { outcome: 'already-bound'; threadId: string }
     | { outcome: 'refused-control-channel' }
+    | { outcome: 'refused-subagent' }
+    | { outcome: 'refused-archived' }
     | { outcome: 'failed' }
   >
   /**
@@ -187,7 +189,10 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           const workspacePath = binding !== undefined && catalog.outcome === 'completed'
             ? catalog.workspaces.find(workspace => workspace.id === binding.workspaceId)?.path
             : undefined
-          const outcome = await deps.resumeCandidates(query, workspacePath)
+          const archivedSessionIds = catalog.outcome === 'completed'
+            ? new Set(catalog.archivedSessionIds)
+            : undefined
+          const outcome = await deps.resumeCandidates(query, workspacePath, archivedSessionIds)
           if (outcome.outcome === 'ok') {
             choices.push(...outcome.options.slice(0, 25).map(option => (
               option.description === undefined
@@ -639,6 +644,14 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         })
         if (outcome.outcome === 'refused-control-channel') {
           await followUp(deps.copy.sessionResumeControlChannel)
+          return
+        }
+        if (outcome.outcome === 'refused-subagent') {
+          await followUp(deps.copy.sessionResumeSubagent)
+          return
+        }
+        if (outcome.outcome === 'refused-archived') {
+          await followUp(deps.copy.sessionResumeArchived)
           return
         }
         if (outcome.outcome === 'already-bound') {

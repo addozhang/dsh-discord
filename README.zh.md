@@ -109,7 +109,7 @@ dsh-discord:
 | `/queue list`, `/queue remove` | 会话线程 | 查看与移除待处理队列 |
 | `/steer`, `/stop` | 会话线程 | 插话或取消运行中的 Turn（仅属主） |
 | `/model show` / `select` | 会话线程 | 查看实时模型目录；`select` 不带参数时走交互式 provider → 模型 → 推理强度级联（默认对所有授权成员开放） |
-| `/session resume` | 项目频道 | 按标题自动补全选择历史会话，恢复为当前频道的新线程 |
+| `/session resume` | 项目频道 | 自动补全选择本工作区的历史会话（显示标题与时间，最新优先），恢复为当前频道的新线程；空白、已挂线程、subagent、已归档的会话不会出现 |
 | `/guild forget` | 任意频道 | 仅操作员：移除适配器记录 |
 
 

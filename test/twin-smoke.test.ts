@@ -297,7 +297,7 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
         }),
       },
       catalogPort: {
-        listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [{ id: 'ws-1', title: 'tmp' }] }),
+        listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [{ id: 'ws-1', title: 'tmp' }], archivedSessionIds: [] }),
       },
       resumeCandidates: (query: string) => Promise.resolve({
         outcome: 'ok' as const,
@@ -1127,7 +1127,7 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
         removeQueueItem: () => Promise.resolve({ outcome: 'accepted' as const }),
         readWorkspaceDetail: () => Promise.resolve({ outcome: 'stale' }),
       },
-      catalogPort: { listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [] }) },
+      catalogPort: { listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [], archivedSessionIds: [] }) },
       resolver: { resolve: () => Promise.resolve({ outcome: 'stale' }) },
       channelBinding: () => undefined,
       findBoundChannelFor: () => undefined,
@@ -1635,7 +1635,7 @@ describe('twin smoke: isolation matrix (15.11)', () => {
           })
         },
       },
-      catalogPort: { listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [] }) },
+      catalogPort: { listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [], archivedSessionIds: [] }) },
       resolver: { resolve: () => Promise.resolve({ outcome: 'stale' as const }) },
       channelBinding: (guildId, cid) => rowMap.get(channelBindingKey({ applicationId: BOT, guildId, channelId: cid })),
       findBoundChannelFor: () => undefined,
@@ -1849,7 +1849,7 @@ describe('twin smoke: English copy path (16.25)', () => {
           outcome: 'stale' as const,
         }),
       },
-      catalogPort: { listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [] }) },
+      catalogPort: { listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [], archivedSessionIds: [] }) },
       resolver: { resolve: () => Promise.resolve({ outcome: 'stale' as const }) },
       channelBinding: () => undefined,
       findBoundChannelFor: () => undefined,

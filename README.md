@@ -109,7 +109,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 | `/queue list`, `/queue remove` | session thread | inspect and trim the pending queue |
 | `/steer`, `/stop` | session thread | steer or cancel the running turn (owner only) |
 | `/model show` / `select` | session thread | show the live model directory; `select` without arguments walks the interactive provider → model → reasoning cascade (any authorized member by default) |
-| `/session resume` | project channel | pick a past session (autocomplete by title); it resumes into a new thread of this channel |
+| `/session resume` | project channel | pick one of this workspace's past sessions (autocomplete: title and age, newest first) and resume it into a new thread of this channel; blank, already-bound, subagent, and archived sessions are never offered |
 | `/guild forget` | any channel | operator-only removal of adapter records |
 
 ## Design notes

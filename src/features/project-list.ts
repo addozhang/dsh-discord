@@ -19,7 +19,7 @@ import { abbreviatePath, safeTitle, workspaceLabels, workspaceReference } from '
 /** How the feature reads the DSH Workspace catalog. */
 export interface ProjectListPort {
   listWorkspaces(): Promise<
-    | { outcome: 'completed'; workspaces: ReadonlyArray<{ id: string; title: string; path?: string | undefined }> }
+    | { outcome: 'completed'; workspaces: ReadonlyArray<{ id: string; title: string; path?: string | undefined }>; archivedSessionIds: ReadonlyArray<string> }
     | { outcome: 'failed' }
     | { outcome: 'unknown' }
   >

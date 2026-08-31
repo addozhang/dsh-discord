@@ -138,6 +138,15 @@ const zh = {
   sessionResumeFailed: '⚠️ 会话恢复失败，请稍后重试。',
   sessionResumeAnchor: (title: string) => `📌 恢复会话：${title}`,
   sessionResumeControlChannel: 'general 是控制频道，不承载会话——请到工作区频道使用 /session resume。',
+  sessionResumeSubagent: '⚠️ 这是 subagent 会话，不能恢复为顶层线程——可在 Web 界面查看。',
+  sessionResumeArchived: '⚠️ 该会话已归档，恢复后不会有任何运行——请在 Web 界面先取消归档。',
+  // Discord autocomplete choices carry no description field, so the age and
+  // running marker ride the candidate label (16.47).
+  sessionCandidateJustNow: '刚刚',
+  sessionCandidateMinutesAgo: (minutes: number) => `${String(minutes)} 分钟前`,
+  sessionCandidateHoursAgo: (hours: number) => `${String(hours)} 小时前`,
+  sessionCandidateDaysAgo: (days: number) => `${String(days)} 天前`,
+  sessionCandidateRunning: '运行中',
   // ── approval / question cards ────────────────────────────────────────
   approvalRequired: (label: string) => `Approval required — ${label}`,
 } satisfies Record<string, unknown>
@@ -263,6 +272,13 @@ const en: CopyTable = {
   sessionResumeFailed: '⚠️ Resuming the session failed; try again later.',
   sessionResumeAnchor: title => `📌 Resumed session: ${title}`,
   sessionResumeControlChannel: 'general is the control channel and carries no sessions — use /session resume in a workspace channel.',
+  sessionResumeSubagent: '⚠️ That is a subagent session — it cannot be resumed as a top-level thread; view it in the web UI.',
+  sessionResumeArchived: '⚠️ That session is archived — a resumed one never runs; unarchive it in the web UI first.',
+  sessionCandidateJustNow: 'just now',
+  sessionCandidateMinutesAgo: minutes => `${String(minutes)}m ago`,
+  sessionCandidateHoursAgo: hours => `${String(hours)}h ago`,
+  sessionCandidateDaysAgo: days => `${String(days)}d ago`,
+  sessionCandidateRunning: 'running',
 
   // ── approval / question cards ────────────────────────────────────────
   approvalRequired: label => `Approval required — ${label}`,

@@ -43,7 +43,7 @@ import type { BindingTable } from './state/bindings.js'
 import { createTurnTracker } from './features/turn-ownership.js'
 import { createThreadCreationFlow, type DiscordThreadPort } from './features/thread-creation.js'
 import { createSessionCreationFlow, type DshSessionPort } from './features/session-creation.js'
-import { buildResumeCandidates, filterResumeCandidates } from './features/session-resume.js'
+import { createResumeCandidatesPort } from './features/session-resume.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from './features/prompt-submission.js'
 import { createSessionMainline, requestIdFor } from './features/session-mainline.js'
 import { startLiveRender } from './stream/live.js'
@@ -738,22 +738,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       },
       model: createModelPort(apiProxy, { log: rpcLog }),
       modelSelectOperatorOnly: () => current.modelSelectOperatorOnly,
-      resumeCandidates: async (query, workspaceId) => {
-        const catalog = await catalogPort.listWorkspaces()
-        if (catalog.outcome !== 'completed') return { outcome: 'unavailable' }
-        const workspacePath = catalog.workspaces.find(workspace => workspace.id === workspaceId)?.path
-        if (workspacePath === undefined) return { outcome: 'unavailable' }
-        const summaries = await listSessionSummaries(apiProxy, { log: rpcLog })
-        if (summaries.outcome !== 'completed') return { outcome: 'unavailable' }
-        const bound = new Set<string>()
-        for (const [, record] of threadTable.entries()) bound.add(record.sessionId)
-        const candidates = buildResumeCandidates(summaries.sessions, {
-          workspacePath,
-          boundSessionIds: bound,
-          query,
-        })
-        return { outcome: 'ok', options: filterResumeCandidates(candidates, query, 25) }
-      },
+      resumeCandidates: createResumeCandidatesPort({
+        listSessions: () => listSessionSummaries(apiProxy, { log: rpcLog }),
+        boundSessionIds: () => {
+          const bound = new Set<string>()
+          for (const [, record] of threadTable.entries()) bound.add(record.sessionId)
+          return bound
+        },
+        copy,
+      }),
       resumeSession: async ({ sessionId, workspaceId, guildId, parentChannelId, actorId }) => {
         const rest = await sharedRest()
         if (rest === undefined) return { outcome: 'failed' }
@@ -778,6 +771,17 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (summaries.outcome !== 'completed') return { outcome: 'failed' }
         const summary = summaries.sessions.find(candidate => candidate.sessionId === sessionId)
         if (summary === undefined || summary.blank) return { outcome: 'failed' }
+        // Spec scenario "Subagent Session selected": a subagent spawn is
+        // never a top-level writable thread, even if handed in directly
+        // (the candidates already hide it — 16.48).
+        if (summary.origin === 'subagent') return { outcome: 'refused-subagent' }
+        // Same defense for archived sessions (16.49): adoption would
+        // succeed and the thread would never see a turn.
+        const catalog = await catalogPort.listWorkspaces()
+        if (catalog.outcome === 'completed'
+          && catalog.archivedSessionIds.includes(sessionId)) {
+          return { outcome: 'refused-archived' }
+        }
         const title = summary.title ?? `Resume ${sessionId.slice(0, 8)}`
         // Anchor post: a durable marker the resume thread hangs off.
         const anchor = await rest.request<{ id?: string }>('POST', `/channels/${parentChannelId}/messages`, {
