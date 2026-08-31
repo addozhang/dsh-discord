@@ -6,6 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/addozhang/dsh-discord/ci.yml?branch=main&label=CI)](https://github.com/addozhang/dsh-discord/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/@addozhang/dsh-discord)](./LICENSE)
 [![node](https://img.shields.io/node/v/@addozhang/dsh-discord)](./package.json)
+[![dshfind](https://dshfind.com/api/badge/addozhang/dsh-discord)](https://dshfind.com/en/plugins/addozhang/dsh-discord?ref=badge)
 
 A Discord-first adapter for [DeepSeek Harness](https://github.com/deepseek-ai): run DSH sessions from a Discord guild — mention the bot to open a task thread, steer and stop turns, answer approvals and questions inline, and watch the answer stream in.
 

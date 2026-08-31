@@ -6,6 +6,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/addozhang/dsh-discord/ci.yml?branch=main&label=CI)](https://github.com/addozhang/dsh-discord/actions/workflows/ci.yml)
 [![license](https://img.shields.io/npm/l/@addozhang/dsh-discord)](./LICENSE)
 [![node](https://img.shields.io/node/v/@addozhang/dsh-discord)](./package.json)
+[![dshfind](https://dshfind.com/api/badge/addozhang/dsh-discord)](https://dshfind.com/en/plugins/addozhang/dsh-discord?ref=badge)
 
 [DeepSeek Harness](https://github.com/deepseek-ai) 的 Discord 优先适配器：在 Discord 服务器中运行 DSH 会话——@机器人即可开启任务线程、插话与停止运行、在线审批与回答问题，并实时观看回答流式输出。
 
