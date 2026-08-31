@@ -91,5 +91,16 @@
   "bugs": {
     "url": "https://github.com/addozhang/dsh-discord/issues"
   },
-  "homepage": "https://github.com/addozhang/dsh-discord#readme"
+  "homepage": "https://github.com/addozhang/dsh-discord#readme",
+  "keywords": [
+    "discord",
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "bot",
+    "ai-agent",
+    "claude-code",
+    "coding-agent"
+  ]
 }
