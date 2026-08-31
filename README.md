@@ -8,9 +8,9 @@
 [![node](https://img.shields.io/node/v/@addozhang/dsh-discord)](./package.json)
 [![dshfind](https://dshfind.com/api/badge/addozhang/dsh-discord)](https://dshfind.com/en/plugins/addozhang/dsh-discord?ref=badge)
 
-A Discord-first adapter for [DeepSeek Harness](https://github.com/deepseek-ai): run DSH sessions from a Discord guild — mention the bot to open a task thread, steer and stop turns, answer approvals and questions inline, and watch the answer stream in.
+A Discord-first adapter for [DeepSeek Harness](https://github.com/deepseek-ai): run DSH sessions from your Discord guild — mention the bot with a task, a thread opens, the answer streams in, and approvals and questions arrive as buttons you can answer from your phone.
 
-This is a function/namespace plugin (`inject: ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']`). It mounts the Discord Gateway, command surface, stream renderer, and the settings card onto a DSH web profile; session state lives in DSH and durable adapter bindings live in the profile's storage domain.
+No extra process: the adapter is a DSH plugin that mounts straight onto your `dsh web` profile — no standalone bridge to install, monitor, or restart. Session state stays in DSH; durable bindings live in the profile's storage domain.
 
 <p align="center">
   <img src="docs/images/discord-task-lifecycle.jpg" alt="One task lifecycle: the @mention anchors a thread, tool activity rows stream while the answer edits in place, and the final answer lands as Markdown tables" width="720">
@@ -18,15 +18,13 @@ This is a function/namespace plugin (`inject: ['apiProxy', 'credentials', 'setti
 
 ## Features
 
-- **Mention-driven sessions** — an authorized `@bot <task>` in a bound channel anchors a thread (the author's message becomes the first post), creates the DSH session, and submits the prompt at most once. Follow-ups inside the thread queue without a mention.
-- **Stream rendering** — typing indicators, a single edited head message, per-tool activity rows, fenced long-answer splitting, one-time finalize; the activity message is deleted when the turn ends.
-- **Approvals & questions** — DSH ask frames become Discord buttons, select menus, and a free-text modal; ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and settled controls grey out in place.
-
-- **Session control** — `/steer`, `/stop`, `/queue list|remove` with turn-ownership checks; `/project bind|list|info` for guild↔workspace binding; `/guild forget` for operator cleanup.
-- **Model selection** — `/model show` reads the session's live model directory (current selection, routability, catalog groups); `/model select` walks an interactive provider → model → reasoning cascade (any authorized member by default; restrictable to Host operators), or applies a typed `provider/model` directly.
-- **Settings card** — token onboarding (paste + Connect; stored in the Host credential service, never in settings or logs), connect/disconnect, guild allowlist, thread auto-archive, and bot language.
-- **Bilingual copy** — every Discord-visible string ships in Chinese and English; the bot language defaults to following the DSH language preference and can be pinned from the card.
-- **Hardened by design** — deny-first authorization inside an explicit guild allowlist, mention suppression via `allowed_mentions` plus byte-level neutralization on every wire body, at-most-once DSH submission with unknown-preserving reconciliation, durable bindings that survive restarts, and a READY sweep that rebuilds the deleted category/control channel while treating a deleted workspace channel as user intent (the mapping retires; the workspace stays bindable).
+- **Mention-driven sessions** — an authorized `@bot <task>` in a bound channel anchors a thread (your message becomes the first post), creates the DSH session, and submits the prompt at most once. Follow-ups inside the thread queue without a mention.
+- **Stream rendering** — typing indicator, one head message edited in place, per-tool activity rows, fenced long-answer splitting, one-time finalize; the activity message is deleted when the turn ends.
+- **Approvals & questions** — DSH ask frames become buttons, select menus, and a free-text modal. Ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and settled controls grey out in place.
+- **Session control** — `/steer`, `/stop`, and `/queue list|remove` with turn-ownership checks; `/project bind|list|info` and `/session resume` for guild↔workspace binding and history; `/guild forget` for operator cleanup.
+- **Model selection** — `/model show` reads the session's live model directory; `/model select` walks an interactive provider → model → reasoning cascade, or applies a typed `provider/model` directly. Open to any authorized member by default; restrictable to Host operators.
+- **Settings card, bilingual out of the box** — token onboarding and connect/disconnect (stored in the Host credential service, never in settings or logs), guild allowlist, auto-archive, and language. Every Discord-visible string ships in Chinese and English; the bot follows the DSH language preference or a pinned choice.
+- **Hardened by design** — deny-first authorization inside an explicit guild allowlist. Mentions are suppressed twice: `allowed_mentions` on every request, plus byte-level neutralization of the wire body. DSH submission is at-most-once with unknown-preserving reconciliation — an ambiguous delivery is never blindly resent. Bindings survive restarts, and the READY sweep rebuilds deleted category/control channels while treating a deleted workspace channel as user intent (the mapping retires; the workspace stays bindable).
 
 ## Requirements
 
@@ -42,7 +40,7 @@ Install with the dsh CLI — it installs the package into the profile and regist
 dsh plugin --profile web add @addozhang/dsh-discord
 ```
 
-Then restart `dsh web` and refresh the browser. Under the hood `dsh plugin` is a thin pnpm forwarder into the profile directory; after installing, it reconciles the profile's `dsh.profile.bundles` layer list and appends every dependency that declares a `dsh.bundle` patch — nothing to edit by hand.
+Then restart `dsh web` and refresh the browser. `dsh plugin` reconciles the profile's bundle list for you — nothing to edit by hand.
 
 Upgrade and removal use the same command:
 
@@ -115,6 +113,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 
 ## Design notes
 
+- The adapter is a function/namespace plugin (`inject: ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']`) that mounts the Discord Gateway, command surface, stream renderer, and the settings card onto the DSH web profile.
 - The settings card is the first-run onboarding surface: the token entry writes the credential service's `DSH_DISCORD_BOT_TOKEN` ref over the plugin management channel, then triggers the start chain. Disconnect keeps the credential; an empty reconnect uses it.
 - The publish workflow authenticates to npm via trusted publishing (OIDC) — no publish token is stored anywhere.
 - The adapter start chain is generation-counted, so Connect/Disconnect races with the initial boot yield exactly one gateway.

@@ -8,9 +8,9 @@
 [![node](https://img.shields.io/node/v/@addozhang/dsh-discord)](./package.json)
 [![dshfind](https://dshfind.com/api/badge/addozhang/dsh-discord)](https://dshfind.com/en/plugins/addozhang/dsh-discord?ref=badge)
 
-[DeepSeek Harness](https://github.com/deepseek-ai) 的 Discord 优先适配器：在 Discord 服务器中运行 DSH 会话——@机器人即可开启任务线程、插话与停止运行、在线审批与回答问题，并实时观看回答流式输出。
+[DeepSeek Harness](https://github.com/deepseek-ai) 的 Discord 优先适配器：在 Discord 服务器中运行 DSH 会话——@机器人下一个任务，线程即开，回答流式输出，审批与提问以按钮形式送到手机上，随手即可回应。
 
-本插件为 function/namespace 插件（`inject: ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']`）：将 Discord Gateway、命令面、流式渲染器与设置卡片挂载到 DSH web profile；会话状态保存在 DSH，适配器的持久绑定保存在 profile 的存储域中。
+零额外进程：适配器是 DSH 插件，直接挂载到你的 `dsh web` profile——没有需要单独安装、守护、重启的独立桥接进程。会话状态保存在 DSH，持久绑定保存在 profile 的存储域中。
 
 <p align="center">
   <img src="docs/images/discord-task-lifecycle.jpg" alt="一次任务的完整生命周期：@提及锚定线程、工具活动行随回答流式编辑、最终以 Markdown 表格落地" width="720">
@@ -19,14 +19,12 @@
 ## 功能
 
 - **@提及驱动会话** — 在已绑定的频道中，被授权的 `@机器人 <任务>` 会锚定一个线程（你的消息成为首帖）、创建 DSH 会话，并且至多提交一次。线程内的后续消息无需 @ 即可排队。
-- **流式渲染** — typing 指示、单条头消息编辑、逐工具活动行、代码围栏感知的长文分段、一次性收尾；Turn 结束时活动消息会被删除。
-- **审批与提问** — DSH ask 帧渲染为 Discord 按钮、下拉菜单与自由文本弹窗；所有权强制校验（提问者——或后续 Turn 的线程属主——才能点击），超时清扫 fail-closed，结算后的控件原地置灰。
-
-- **会话控制** — `/steer`、`/stop`、`/queue list|remove` 带运行所有权校验；`/project bind|list|info` 管理 Guild↔工作区绑定；`/guild forget` 供操作员清理。
-- **模型切换** — `/model show` 读取会话的实时模型目录（当前选择、可服务状态、目录分组）；`/model select` 走交互式 provider → 模型 → 推理强度级联（默认对所有授权成员开放，可通过设置收紧为仅 Host 操作员），也可直接填写 `provider/model` 应用。
-- **设置卡片** — Token 引导（粘贴 + 连接；存入 Host 凭据服务，绝不写入设置或日志）、连接/断开、服务器白名单、线程自动归档、Bot 语言。
-- **双语文案** — 所有 Discord 可见文案提供中英双语；Bot 语言默认跟随 DSH 语言偏好，也可从卡片固定。
-- **安全设计** — 显式服务器白名单内的 deny-first 授权、每条 wire 请求携带 `allowed_mentions` 并做字节级提及中和、至多一次的 DSH 提交与保留 unknown 的对账、重启后持久的绑定，以及 READY 扫描：被删的 category/控制频道会重建，被删的工作区频道视为用户意图（解除映射，workspace 保持可重新绑定）。
+- **流式渲染** — typing 指示、单条头消息原地编辑、逐工具活动行、代码围栏感知的长文分段、一次性收尾；Turn 结束时活动消息会被删除。
+- **审批与提问** — DSH ask 帧渲染为按钮、下拉菜单与自由文本弹窗。所有权强制校验（提问者——或后续 Turn 的线程属主——才能点击），超时清扫 fail-closed，结算后的控件原地置灰。
+- **会话控制** — `/steer`、`/stop`、`/queue list|remove` 带运行所有权校验；`/project bind|list|info` 与 `/session resume` 管理 Guild↔工作区绑定与历史会话；`/guild forget` 供操作员清理。
+- **模型切换** — `/model show` 读取会话的实时模型目录；`/model select` 走交互式 provider → 模型 → 推理强度级联，也可直接填写 `provider/model` 应用。默认对所有授权成员开放，可收紧为仅 Host 操作员。
+- **设置卡片，开箱双语** — Token 引导与连接/断开（存入 Host 凭据服务，绝不写入设置或日志）、服务器白名单、自动归档与语言。所有 Discord 可见文案提供中英双语；Bot 默认跟随 DSH 语言偏好，也可从卡片固定。
+- **安全设计** — 显式服务器白名单内的 deny-first 授权。提及抑制双保险：每条请求携带 `allowed_mentions`，外加 wire body 的字节级提及中和。DSH 提交至多一次，并做保留 unknown 的对账——结果不明的投递绝不盲目重发。绑定重启后持久；READY 扫描会重建被删除的 category/控制频道，而把被删除的工作区频道视为用户意图（解除映射，workspace 保持可重新绑定）。
 
 ## 环境要求
 
@@ -42,7 +40,7 @@
 dsh plugin --profile web add @addozhang/dsh-discord
 ```
 
-然后重启 `dsh web` 并刷新浏览器。`dsh plugin` 底层是指向 profile 目录的 pnpm 薄转发；安装完成后它会自动对账 profile 的 `dsh.profile.bundles` 层列表，把所有声明了 `dsh.bundle` patch 的依赖追加进去——无需手动编辑。
+然后重启 `dsh web` 并刷新浏览器。`dsh plugin` 会自动对账 profile 的 bundle 列表——无需手动编辑。
 
 升级与卸载使用同一条命令：
 
@@ -116,6 +114,7 @@ dsh-discord:
 
 ## 设计说明
 
+- 适配器为 function/namespace 插件（`inject: ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']`），将 Discord Gateway、命令面、流式渲染器与设置卡片挂载到 DSH web profile。
 - 设置卡片是首次使用的引导面：Token 输入通过插件管理通道写入凭据服务的 `DSH_DISCORD_BOT_TOKEN` 引用，然后触发启动链。断开连接保留凭据；留空重连直接使用已存 Token。
 - 发布工作流通过 npm trusted publishing (OIDC) 认证——任何地方都不保存发布凭证。
 - 适配器启动链带代际计数，Connect/Disconnect 与初始启动竞争时只会产生一个 Gateway。
