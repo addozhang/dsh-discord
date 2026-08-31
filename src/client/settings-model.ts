@@ -55,6 +55,7 @@ export function createSettingsDraft(
     typingIntervalMs: value.typingIntervalMs ?? 7_000,
     approvalTimeoutMs: value.approvalTimeoutMs ?? 600_000,
     questionTimeoutMs: value.questionTimeoutMs ?? 1_800_000,
+    modelSelectOperatorOnly: value.modelSelectOperatorOnly ?? false,
   }
   const draft = { ...complete } as unknown as DiscordSettingsDraft
   for (const field of ID_FIELDS) {

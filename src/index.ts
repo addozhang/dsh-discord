@@ -23,7 +23,7 @@ import { createRestThreadPort } from './discord/thread-port.js'
 import { createComponentRegistry } from './discord/components.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
-import { createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, type DshApiProxyFace } from './dsh/api-proxy-face.js'
+import { createModelPort, createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, type DshApiProxyFace } from './dsh/api-proxy-face.js'
 import { createApprovalStore, type ApprovalRecord } from './features/approval-store.js'
 import { createAskWiring } from './features/ask-wiring.js'
 import { sweepExpiredApprovals } from './features/approval-expiry.js'
@@ -735,6 +735,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         await channelTable.delete(bindChannelKey(guildId, channelId))
         rpcLog('discord_reconcile_channel_retired', { channelId, reason: 'discord-deleted' })
       },
+      model: createModelPort(apiProxy, { log: rpcLog }),
+      modelSelectOperatorOnly: () => current.modelSelectOperatorOnly,
       log: rpcLog,
       warn: (event, detail) => {
         emitLog(ctx, 'warn', { event, detail: typeof detail === 'string' ? detail : JSON.stringify(detail ?? null) })

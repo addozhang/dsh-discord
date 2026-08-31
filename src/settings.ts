@@ -29,6 +29,13 @@ export interface DiscordSettings {
   questionTimeoutMs: number
   /** Task-thread auto-archive; Discord supports exactly these four values. */
   threadAutoArchiveMinutes: ThreadAutoArchiveMinutes
+  /**
+   * Restrict /model select to the explicit Host-operator allowlist (the
+   * switch reaches the Host-wide default). Defaults to false — single-user
+   * deployments let any authorized member switch (16.42); set true to
+   * re-tighten to the operator allowlist.
+   */
+  modelSelectOperatorOnly: boolean
 }
 
 /** The archive durations Discord's API accepts (minutes). */
@@ -52,6 +59,7 @@ export const DEFAULT_DISCORD_SETTINGS: DiscordSettings = Object.freeze({
   approvalTimeoutMs: 10 * 60_000,
   questionTimeoutMs: 30 * 60_000,
   threadAutoArchiveMinutes: 1440,
+  modelSelectOperatorOnly: false,
 })
 
 const discordIdList = z.array(z.string()).default([])
@@ -75,6 +83,7 @@ export const DiscordSettingsSchema: z<DiscordSettings> = z.object({
   typingIntervalMs: z.number().step(1).min(1_000).max(30_000).default(7_000),
   approvalTimeoutMs: z.number().step(1).min(30_000).max(86_400_000).default(600_000),
   questionTimeoutMs: z.number().step(1).min(30_000).max(86_400_000).default(1_800_000),
+  modelSelectOperatorOnly: z.boolean().default(false),
 })
 
 const DISCORD_SNOWFLAKE = /^\d{17,20}$/u

@@ -47,7 +47,59 @@ export interface DshApiProxyFace {
       action: { kind: 'remove' }
     }>): Promise<RpcResponseShape<{ accepted: true }>>
     list(request: RpcRequestShape<{ cursor?: string }>): Promise<RpcResponseShape<{ items: Array<{ sessionId: string }> }>>
+    models(request: RpcRequestShape<{ sessionId: string }>): Promise<RpcResponseShape<SessionModelsShape>>
+    selectModel(request: RpcRequestShape<{
+      sessionId: string
+      provider: string
+      model: string
+      reasoningEffort?: string
+    }>): Promise<RpcResponseShape<{ selected: ModelSelectionShape }>>
   }
+}
+
+/** One reasoning effort a model's adapter advertises (sessions.d.ts). */
+import type { DshModelPort } from '../features/model-control.js'
+
+export interface ModelReasoningEffortShape {
+  id: string
+  name: string
+  description?: string
+}
+
+/** Exact-route reasoning metadata for one catalog model. */
+export interface ModelReasoningShape {
+  efforts: ModelReasoningEffortShape[]
+  defaultEffort?: string
+}
+
+/** One model inside a provider group (sessions.d.ts ModelCatalogModel). */
+export interface ModelCatalogModelShape {
+  id: string
+  name: string
+  description?: string
+  reasoning?: ModelReasoningShape
+}
+
+/** One provider group and its models (sessions.d.ts ModelProviderGroup). */
+export interface ModelProviderGroupShape {
+  id: string
+  name: string
+  models: ModelCatalogModelShape[]
+}
+
+/** The detached model directory `session.models` returns for one session. */
+export interface SessionModelsShape {
+  current: ModelSelectionShape
+  routable: boolean
+  groups: ModelProviderGroupShape[]
+  failures: Array<{ id: string; name: string; message: string }>
+}
+
+/** The complete provider/model/reasoning selection (dsh-agent ModelSelection). */
+export interface ModelSelectionShape {
+  provider: string
+  model: string
+  reasoningEffort?: string
 }
 
 /** Signature-layer narrow request form (RpcId brand erased at this seam). */
@@ -528,5 +580,113 @@ export function createClientRespondPort(
       }
       return { outcome: 'unknown' }
     },
+  }
+}
+
+/** Bounded window for the per-session model directory read. */
+const MODELS_TIMEOUT_MS = 10_000
+
+export type SessionModelsOutcome =
+  | { outcome: 'completed'; models: SessionModelsShape }
+  | { outcome: 'failed' }
+  | { outcome: 'unknown' }
+
+/**
+ * The session's detached model directory: the live selection, whether the
+ * current route still serves, and the per-provider catalog groups the
+ * /model cascade browses.
+ */
+export async function sessionModels(
+  dsh: DshApiProxyFace,
+  request: { sessionId: string },
+  options: ApiProxyFaceOptions = {},
+): Promise<SessionModelsOutcome> {
+  const timeoutMs = options.timeoutMs ?? MODELS_TIMEOUT_MS
+  let response: RpcResponseShape<SessionModelsShape>
+  try {
+    response = await withRpcTimeout(
+      dsh.sessions.models(mintRequest({ sessionId: request.sessionId })),
+      timeoutMs,
+    )
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      options.log?.('discord_models_timeout', { sessionId: request.sessionId })
+      return { outcome: 'unknown' }
+    }
+    options.log?.('discord_models_threw', { cause: String(cause), sessionId: request.sessionId })
+    return { outcome: 'unknown' }
+  }
+  const result = (response as Partial<RpcResponseShape<SessionModelsShape>> | undefined)?.result
+  if (result === undefined || !result.ok) {
+    options.log?.('discord_models_malformed', {
+      sessionId: request.sessionId,
+      code: result?.ok === false ? result.error.code : 'malformed',
+    })
+    return { outcome: 'failed' }
+  }
+  return { outcome: 'completed', models: result.value }
+}
+
+export type SelectModelOutcome =
+  | { outcome: 'completed'; selected: ModelSelectionShape }
+  | { outcome: 'rejected'; reason: string }
+  | { outcome: 'unknown' }
+
+/**
+ * Select the complete model selection for one session (session.selectModel):
+ * the session switches immediately and the Host records the choice as the
+ * default for sessions that have not logged their own — the response only
+ * proves the session switch, so callers must not claim the persistence
+ * outcome (design.md §7).
+ */
+export async function selectSessionModel(
+  dsh: DshApiProxyFace,
+  request: { sessionId: string; provider: string; model: string; reasoningEffort?: string },
+  options: ApiProxyFaceOptions = {},
+): Promise<SelectModelOutcome> {
+  const timeoutMs = options.timeoutMs ?? PROMPT_TIMEOUT_MS
+  let response: RpcResponseShape<{ selected: ModelSelectionShape }>
+  try {
+    response = await withRpcTimeout(
+      dsh.sessions.selectModel(mintRequest({
+        sessionId: request.sessionId,
+        provider: request.provider,
+        model: request.model,
+        ...(request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort }),
+      })),
+      timeoutMs,
+    )
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      options.log?.('discord_model_select_timeout', { sessionId: request.sessionId })
+      return { outcome: 'unknown' }
+    }
+    options.log?.('discord_model_select_threw', { cause: String(cause), sessionId: request.sessionId })
+    return { outcome: 'unknown' }
+  }
+  const result = (response as Partial<RpcResponseShape<{ selected: ModelSelectionShape }>> | undefined)?.result
+  if (result === undefined) {
+    options.log?.('discord_model_select_malformed', { sessionId: request.sessionId })
+    return { outcome: 'unknown' }
+  }
+  if (result.ok) {
+    return { outcome: 'completed', selected: result.value.selected }
+  }
+  options.log?.('discord_model_select_rejected', { code: result.error.code, sessionId: request.sessionId })
+  return { outcome: 'rejected', reason: result.error.code }
+}
+
+/**
+ * The /model surface over the real session RPCs: the per-session live
+ * directory (`session.models`) and the guarded selection mutation
+ * (`session.selectModel`) — the shapes model-control reasons about.
+ */
+export function createModelPort(
+  dsh: DshApiProxyFace,
+  options: ApiProxyFaceOptions = {},
+): DshModelPort {
+  return {
+    models: sessionId => sessionModels(dsh, { sessionId }, options),
+    selectModel: request => selectSessionModel(dsh, request, options),
   }
 }

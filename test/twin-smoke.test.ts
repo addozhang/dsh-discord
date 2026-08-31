@@ -297,6 +297,19 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
       catalogPort: {
         listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [{ id: 'ws-1', title: 'tmp' }] }),
       },
+      modelSelectOperatorOnly: () => false,
+      model: {
+        models: () => Promise.resolve({
+          outcome: 'completed' as const,
+          models: {
+            current: { provider: 'deepseek', model: 'ds-v3' },
+            routable: true,
+            groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'ds-v3', name: 'V3' }] }],
+            failures: [],
+          },
+        }),
+        selectModel: () => Promise.resolve({ outcome: 'completed' as const, selected: { provider: 'deepseek', model: 'ds-v3' } }),
+      },
       resolver: {
         resolve: (reference) => reference === 'ws-1'
           ? Promise.resolve({ outcome: 'found' as const, workspace: { id: 'ws-1', title: 'tmp' } })
@@ -673,6 +686,46 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     expect(bound).toBeDefined()
     expect(bound?.[0]).not.toContain(staleChannel)
   }, 20_000)
+
+  it('shows the live model directory ephemerally (/model show, 16.35)', async () => {
+    const interaction = await discord.simulateSlashCommand({
+      channelId: threadId, userId: USER, name: 'model', options: [{ name: 'show', type: 1 }],
+    })
+    await discord.channel(threadId).waitForInteractionAck({ interactionId: interaction.id })
+    const reply = await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('当前模型'),
+    })
+    expect(reply.content).toContain('`deepseek/ds-v3`')
+    expect((reply.flags ?? 0) & 64).toBe(64)
+  }, 20_000)
+
+  it('walks the provider → model cascade to apply a selection (/model select, 16.35)', async () => {
+    const interaction = await discord.simulateSlashCommand({
+      channelId: threadId, userId: USER, name: 'model', options: [{ name: 'select', type: 1 }],
+    })
+    await discord.channel(threadId).waitForInteractionAck({ interactionId: interaction.id })
+    const providerMenu = await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('请选择 provider'),
+    })
+    const row = (providerMenu.components?.[0] as { components?: Array<{ custom_id?: string }> } | undefined)?.components ?? []
+    const menuId = row[0]?.custom_id
+    expect(typeof menuId).toBe('string')
+
+    await discord.simulateSelectMenu({ channelId: threadId, userId: USER, messageId: providerMenu.id, customId: menuId ?? '', values: ['deepseek'] })
+    const modelMenu = await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('请选择模型'),
+    })
+    const modelRow = (modelMenu.components?.[0] as { components?: Array<{ custom_id?: string }> } | undefined)?.components ?? []
+    const modelMenuId = modelRow[0]?.custom_id
+    expect(typeof modelMenuId).toBe('string')
+
+    // ds-v3 advertises no reasoning efforts: the model pick applies directly.
+    await discord.simulateSelectMenu({ channelId: threadId, userId: USER, messageId: modelMenu.id, customId: modelMenuId ?? '', values: ['ds-v3'] })
+    const applied = await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('已应用到当前 Session'),
+    })
+    expect(applied.content).toContain('`deepseek/ds-v3`')
+  }, 20_000)
 })
 
 describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () => {
@@ -1016,6 +1069,19 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
           return rest.request(method as never, path as never, body)
         },
       } as never),
+      modelSelectOperatorOnly: () => false,
+      model: {
+        models: () => Promise.resolve({
+          outcome: 'completed' as const,
+          models: {
+            current: { provider: 'deepseek', model: 'ds-v3' },
+            routable: true,
+            groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'ds-v3', name: 'V3' }] }],
+            failures: [],
+          },
+        }),
+        selectModel: () => Promise.resolve({ outcome: 'completed' as const, selected: { provider: 'deepseek', model: 'ds-v3' } }),
+      },
       purgeChannelBinding: async () => {},
       log: () => {},
       warn: () => {},
@@ -1502,6 +1568,19 @@ describe('twin smoke: isolation matrix (15.11)', () => {
       sessionForThread: () => undefined,
       ensureWorkspaceChannel: () => Promise.resolve(undefined),
       rest: () => Promise.resolve(rest),
+      modelSelectOperatorOnly: () => false,
+      model: {
+        models: () => Promise.resolve({
+          outcome: 'completed' as const,
+          models: {
+            current: { provider: 'deepseek', model: 'ds-v3' },
+            routable: true,
+            groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'ds-v3', name: 'V3' }] }],
+            failures: [],
+          },
+        }),
+        selectModel: () => Promise.resolve({ outcome: 'completed' as const, selected: { provider: 'deepseek', model: 'ds-v3' } }),
+      },
       purgeChannelBinding: async () => {},
       log: () => {},
       warn: () => {},
@@ -1701,6 +1780,19 @@ describe('twin smoke: English copy path (16.25)', () => {
       sessionForThread: () => undefined,
       ensureWorkspaceChannel: () => Promise.resolve(undefined),
       rest: () => Promise.resolve(rest),
+      modelSelectOperatorOnly: () => false,
+      model: {
+        models: () => Promise.resolve({
+          outcome: 'completed' as const,
+          models: {
+            current: { provider: 'deepseek', model: 'ds-v3' },
+            routable: true,
+            groups: [{ id: 'deepseek', name: 'DeepSeek', models: [{ id: 'ds-v3', name: 'V3' }] }],
+            failures: [],
+          },
+        }),
+        selectModel: () => Promise.resolve({ outcome: 'completed' as const, selected: { provider: 'deepseek', model: 'ds-v3' } }),
+      },
       purgeChannelBinding: async () => {},
       log: () => {},
       warn: () => {},

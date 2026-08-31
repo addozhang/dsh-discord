@@ -20,6 +20,8 @@ interface DiscordPluginsLocale {
   discordDescription: string
   discordAllowedGuildIds: string
   discordGuildIdHelp: string
+  discordHostOperators: string
+  discordHostOperatorsHelp: string
   discordLanguageAuto: string
   discordTokenLabel: string
   discordTokenPlaceholder: string
@@ -34,6 +36,8 @@ interface DiscordPluginsLocale {
   discordLanguage: string
   discordLanguageHint: string
   discordInvalidLanguage: string
+  discordModelOperatorOnly: string
+  discordModelOperatorOnlyHint: string
   discordInvalidIds: string
   discordInvalidArchive: string
   discordStatusConnected: string

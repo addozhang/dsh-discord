@@ -43,7 +43,9 @@ describe('milestone one command set', () => {
     ])
     expect(subcommands.get('model')).toEqual([
       ['show', []],
-      ['select', [['model', true], ['reasoning', false]]],
+      // The typed model is optional: omitting it opens the interactive
+      // provider → model → reasoning cascade (task 16.35).
+      ['select', [['model', false], ['reasoning', false]]],
     ])
     // `/preset`, `/skill`, and `/host` are deregistered (task 16.32); their
     // control modules stay implemented and unit-tested for the wiring

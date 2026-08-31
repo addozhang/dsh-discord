@@ -105,10 +105,12 @@ const DISCORD_CARD_LOCALE_EN = {
   discordDescription: 'Bind channels to Workspaces and authorize who may use the bot.',
   discordAllowedGuildIds: 'Allowed servers',
   discordGuildIdHelp: 'How to get it: enable Developer Mode in Discord (User Settings → Advanced), then right-click the target server and choose "Copy Server ID". One ID per line.',
+
   discordTokenLabel: 'Bot Token', discordTokenPlaceholder: 'Paste the bot token', discordTokenConnect: 'Connect', discordTokenConnecting: 'Connecting…',
   discordTokenHelp: 'From the Discord Developer Portal → your application → Bot → Reset Token. Stored in the Host credential service; never written to settings or logs.', discordDisconnect: 'Disconnect', discordTokenSaved: 'Saved token — leave empty to reconnect', discordTokenReconnectHint: 'The token is stored in the Host credential service. Leave empty to reconnect, or paste a new one to replace it.',
   discordThreadAutoArchive: 'Task Thread Auto-archive', discordThreadAutoArchiveHint: 'Idle task threads archive automatically',
   discordLanguage: 'Bot Language', discordLanguageHint: 'Language of bot-visible messages', discordLanguageAuto: 'Follow DSH language', discordInvalidLanguage: 'Unsupported language',
+
   discordInvalidIds: 'IDs must be 17–20 digit snowflakes, one per line',
   discordInvalidArchive: 'Unsupported archive duration',
   discordStatusConnected: 'Connected', discordStatusConnecting: 'Connecting…',
@@ -129,10 +131,12 @@ const DISCORD_CARD_LOCALE_ZH = {
   discordDescription: '将频道绑定到工作区，并授权可使用机器人的成员。',
   discordAllowedGuildIds: '允许的服务器',
   discordGuildIdHelp: '获取方式：在 Discord 中开启开发者模式（用户设置 → 高级设置），然后右键点击目标服务器 →「复制服务器 ID」。每行填一个 ID。',
+
   discordTokenLabel: 'Bot Token', discordTokenPlaceholder: '粘贴 Bot Token', discordTokenConnect: '连接', discordTokenConnecting: '连接中…',
   discordTokenHelp: '来自 Discord 开发者门户 → 你的应用 → Bot → Reset Token。由 Host 凭据服务加密保存，不会写入设置或日志。', discordDisconnect: '断开连接', discordTokenSaved: '已保存的 Token — 留空直接重新连接', discordTokenReconnectHint: 'Token 已保存在 Host 凭据服务中。留空直接重连，或粘贴新 Token 进行替换。',
   discordThreadAutoArchive: '任务线程自动归档', discordThreadAutoArchiveHint: '闲置的任务线程到期后自动归档',
   discordLanguage: 'Bot 语言', discordLanguageHint: '机器人可见消息使用的语言', discordLanguageAuto: '跟随 DSH 语言', discordInvalidLanguage: '不支持的语言',
+
   discordInvalidIds: 'ID 必须是 17–20 位雪花数字，每行一个',
   discordInvalidArchive: '不支持的归档时长',
   discordStatusConnected: '已连接', discordStatusConnecting: '连接中…',

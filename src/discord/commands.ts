@@ -64,7 +64,9 @@ export const MILESTONE_ONE_COMMANDS: readonly AdapterCommand[] = [
   leaf('stop', 'Cancel the running turn of this thread'),
   grouped('model', 'Show or select the session model', [
     { name: 'show' },
-    { name: 'select', options: [{ name: 'model', required: true }, { name: 'reasoning', required: false }] },
+    // select without a typed model opens the interactive provider → model
+    // → reasoning cascade (16.35); typing `provider/model` applies directly.
+    { name: 'select', options: [{ name: 'model', required: false }, { name: 'reasoning', required: false }] },
   ]),
   grouped('guild', 'Guild-scoped adapter operations', [
     { name: 'forget' },

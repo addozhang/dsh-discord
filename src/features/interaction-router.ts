@@ -19,6 +19,7 @@ import { planSteer } from './steer-control.js'
 import { planStop } from './stop-control.js'
 import type { TurnTracker } from './turn-ownership.js'
 import { handleApprovalClick, type ApprovalClickOutcome, type DshApprovalRespondPort } from './approval-routing.js'
+import { applyModelSelection, type DshModelPort, type ModelApplyResult } from './model-control.js'
 import type { QuestionInteractionOutcome } from './question-routing.js'
 import type { ApprovalStore } from './approval-store.js'
 import type { ChannelBinding } from '../state/records.js'
@@ -83,11 +84,48 @@ export interface InteractionRouterDeps {
    * fresh; task 16.37).
    */
   purgeChannelBinding: (guildId: string, channelId: string) => Promise<void>
+  /** The session's live model directory + selection mutation (/model surface). */
+  model: DshModelPort
+  /**
+   * Whether /model select stays Host-operator-only (default). Single-user
+   * deployments flip this so any authorized member can switch (16.42).
+   */
+  modelSelectOperatorOnly: () => boolean
   log: (event: string, detail?: unknown) => void
   warn: (event: string, detail?: unknown) => void
 }
 
 type RouterEvent = NormalizedInteraction
+
+/** Discord interactive-component id for string select menus. */
+const SELECT_MENU = 3
+
+/** `provider/model` — or `provider/model (effort)` when an effort is set. */
+function modelSelectionLabel(selection: { provider: string; model: string; reasoningEffort?: string }): string {
+  return selection.reasoningEffort === undefined
+    ? `${selection.provider}/${selection.model}`
+    : `${selection.provider}/${selection.model} (${selection.reasoningEffort})`
+}
+
+function selectMenuRow(customId: string, placeholder: string, options: Array<{ label: string; value: string; description?: string }>): Array<unknown> {
+  return [{
+    type: 1,
+    components: [{ type: SELECT_MENU, custom_id: customId, placeholder, options, max_values: 1 }],
+  }]
+}
+
+/** The ephemeral outcome line for a /model selection attempt. */
+function renderModelApply(copy: CopyTable, result: ModelApplyResult): string {
+  switch (result.outcome) {
+    case 'applied': return copy.modelApplied(modelSelectionLabel(result.selected))
+    case 'rejected': return copy.modelSelectRejected(result.reason)
+    case 'unknown': return copy.modelSelectUnknown
+    case 'refused':
+      return result.reason === 'not-host-operator' ? copy.modelSelectOperatorOnly
+        : result.reason === 'invalid-reasoning-effort' ? copy.modelInvalidReasoning
+        : copy.modelNotInCatalog
+  }
+}
 
 export function createInteractionRouter(deps: InteractionRouterDeps): {
   route(event: NormalizedInteraction, interactionToken?: string): Promise<void>
@@ -440,6 +478,91 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         }])
         return
       }
+      if (event.commandName === 'model') {
+        const options = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string }> }> | undefined
+        const subcommand = Array.isArray(options) ? options[0] : undefined
+        const subName = subcommand?.name
+        const sessionId = deps.sessionForThread(event.guildId, event.channelId)
+        if (sessionId === undefined) {
+          await followUp(deps.copy.modelNeedsThread)
+          return
+        }
+        if (subName === 'select') {
+          // Host-operator authority by default: the switch reaches the
+          // Host-wide default selection (design.md §7). A deployment may
+          // relax it for single-user use (16.42).
+          const requireOperator = deps.modelSelectOperatorOnly()
+          const decision = authorize(event)
+          if (!decision.allowed || (requireOperator && decision.level !== 'host-operator')) {
+            await followUp(deps.copy.modelSelectOperatorOnly)
+            return
+          }
+          const wireOptions = Array.isArray(subcommand?.options) ? subcommand.options : []
+          const typedModel = wireOptions.find(option => option.name === 'model')?.value
+          const typedReasoning = wireOptions.find(option => option.name === 'reasoning')?.value
+          if (typeof typedModel === 'string' && typedModel !== '') {
+            // Typed form: `provider/model` plus an optional reasoning
+            // effort, validated against the live catalog before mutation.
+            const separator = typedModel.indexOf('/')
+            if (separator <= 0 || separator === typedModel.length - 1) {
+              await followUp(deps.copy.modelTypedParseFailed)
+              return
+            }
+            const result = await applyModelSelection(deps.model, {
+              decision,
+              sessionId,
+              provider: typedModel.slice(0, separator),
+              model: typedModel.slice(separator + 1),
+              requireHostOperator: requireOperator,
+              ...(typeof typedReasoning === 'string' && typedReasoning !== '' ? { reasoningEffort: typedReasoning } : {}),
+            })
+            await followUp(renderModelApply(deps.copy, result))
+            return
+          }
+          // Interactive cascade, stage 1: the provider.
+          const directory = await deps.model.models(sessionId)
+          if (directory.outcome !== 'completed') {
+            await followUp(deps.copy.modelShowUnavailable)
+            return
+          }
+          if (directory.models.groups.length === 0) {
+            await followUp(deps.copy.modelSelectNoModels)
+            return
+          }
+          const failures = directory.models.failures.length > 0
+            ? deps.copy.modelShowFailures(directory.models.failures.map(failure => failure.name).join(', '))
+            : ''
+          const truncated = directory.models.groups.length > 25
+            ? deps.copy.modelCascadeTruncated(25, directory.models.groups.length)
+            : ''
+          const menuId = deps.registry.register({ kind: 'model', stage: 'provider', sessionId, expiresAtMs: Date.now() + 15 * 60 * 1000 })
+          await followUp(deps.copy.modelCascadeProviderHeader(modelSelectionLabel(directory.models.current), `${failures}${truncated}`), selectMenuRow(menuId, deps.copy.modelCascadeProviderPlaceholder, directory.models.groups.slice(0, 25).map(group => ({
+            label: group.name,
+            value: group.id,
+            description: `${String(group.models.length)} models`,
+          }))))
+          return
+        }
+        // show (default): the member-readable live model directory.
+        const directory = await deps.model.models(sessionId)
+        if (directory.outcome !== 'completed') {
+          await followUp(deps.copy.modelShowUnavailable)
+          return
+        }
+        const current = directory.models.current
+        const selection = current.reasoningEffort === undefined
+          ? `${current.provider}/${current.model}`
+          : `${current.provider}/${current.model} (${current.reasoningEffort})`
+        let content = deps.copy.modelShowHeader(selection, directory.models.groups.length)
+        if (current.reasoningEffort !== undefined) content += deps.copy.modelShowReasoning(current.reasoningEffort)
+        if (!directory.models.routable) content += deps.copy.modelShowNotRoutable
+        if (directory.models.groups.length === 0) content += deps.copy.modelShowNoGroups
+        if (directory.models.failures.length > 0) {
+          content += deps.copy.modelShowFailures(directory.models.failures.map(failure => failure.name).join(', '))
+        }
+        await followUp(content)
+        return
+      }
       // Terminal guard: a recognized interaction type with an unhandled
       // command name must still answer, never strand on the deferred ack.
       await followUp(deps.copy.unknownSubcommand)
@@ -532,6 +655,133 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       flags: OUTBOUND_EPHEMERAL_FLAGS,
     })
     if (posted.outcome !== 'completed') deps.log('discord_followup_failed', posted.outcome)
+  }
+
+  /** One cascade stage: ack, re-authorize, then advance or apply (16.35). */
+  async function routeModelComponent(event: RouterEvent, interactionToken: string): Promise<void> {
+    const customId = event.data['custom_id']
+    if (typeof customId !== 'string') return
+    const resolved = deps.registry.resolve(customId, Date.now())
+    const context = resolved.found ? resolved.context : undefined
+    const rest = await deps.rest()
+    if (rest === undefined) return
+    // Ack BEFORE the catalog reads and the DSH round trip: component
+    // interactions must receive an initial response within 3s.
+    const acked = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
+    if (acked.outcome !== 'completed') deps.log('discord_ack_failed', acked.outcome)
+    const followUp = async (content: string, components?: Array<unknown>): Promise<void> => {
+      const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, {
+        content,
+        flags: OUTBOUND_EPHEMERAL_FLAGS,
+        ...(components === undefined ? {} : { components }),
+      })
+      if (posted.outcome !== 'completed') {
+        deps.log('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
+      }
+    }
+    if (context === undefined) {
+      await followUp(deps.copy.modelCascadeExpired)
+      return
+    }
+    // Every stage re-checks Host-operator authority: a forwarded menu must
+    // not let another member drive — or enumerate — the selection surface.
+    const requireOperator = deps.modelSelectOperatorOnly()
+    const decision = authorize(event)
+    if (!decision.allowed || (requireOperator && decision.level !== 'host-operator')) {
+      await followUp(deps.copy.modelSelectOperatorOnly)
+      return
+    }
+    const sessionId = typeof context['sessionId'] === 'string' ? context['sessionId'] : undefined
+    const stage = context['stage']
+    if (sessionId === undefined || typeof stage !== 'string') {
+      await followUp(deps.copy.modelCascadeExpired)
+      return
+    }
+    const value = event.selectValues[0]
+    if (typeof value !== 'string' || value === '') {
+      await followUp(deps.copy.modelCascadeExpired)
+      return
+    }
+    try {
+      if (stage === 'provider') {
+        const directory = await deps.model.models(sessionId)
+        const group = directory.outcome === 'completed'
+          ? directory.models.groups.find(candidate => candidate.id === value)
+          : undefined
+        if (group === undefined || group.models.length === 0) {
+          await followUp(deps.copy.modelSelectNoModels)
+          return
+        }
+        const truncated = group.models.length > 25 ? deps.copy.modelCascadeTruncated(25, group.models.length) : ''
+        const menuId = deps.registry.register({ kind: 'model', stage: 'model', sessionId, provider: group.id, expiresAtMs: Date.now() + 15 * 60 * 1000 })
+        await followUp(deps.copy.modelCascadeModelHeader(group.name) + truncated, selectMenuRow(menuId, deps.copy.modelCascadeModelPlaceholder, group.models.slice(0, 25).map(model => ({
+            label: model.name !== '' ? model.name : model.id,
+            value: model.id,
+            ...(model.description === undefined ? {} : { description: model.description.slice(0, 100) }),
+          }))))
+        return
+      }
+      if (stage === 'model') {
+        const provider = typeof context['provider'] === 'string' ? context['provider'] : undefined
+        if (provider === undefined) {
+          await followUp(deps.copy.modelCascadeExpired)
+          return
+        }
+        const directory = await deps.model.models(sessionId)
+        const group = directory.outcome === 'completed'
+          ? directory.models.groups.find(candidate => candidate.id === provider)
+          : undefined
+        const model = group?.models.find(candidate => candidate.id === value)
+        const efforts = model?.reasoning?.efforts ?? []
+        if (efforts.length === 0) {
+          // No reasoning metadata: apply with the provider/default behavior.
+          const result = await applyModelSelection(deps.model, { decision, sessionId, provider, model: value, requireHostOperator: requireOperator })
+          await followUp(renderModelApply(deps.copy, result))
+          return
+        }
+        const menuId = deps.registry.register({ kind: 'model', stage: 'reasoning', sessionId, provider, model: value, expiresAtMs: Date.now() + 15 * 60 * 1000 })
+        const defaultEffort = model?.reasoning?.defaultEffort
+        const options = [
+          {
+            label: deps.copy.modelCascadeReasoningDefault,
+            value: '__default__',
+            description: (defaultEffort === undefined
+              ? deps.copy.modelCascadeReasoningDefaultHint
+              : `${deps.copy.modelCascadeReasoningDefaultHint} (${defaultEffort})`).slice(0, 100),
+          },
+          ...efforts.slice(0, 24).map(effort => ({
+            label: effort.name,
+            value: effort.id,
+            ...(effort.description === undefined ? {} : { description: effort.description.slice(0, 100) }),
+          })),
+        ]
+        const modelLabel = model?.name !== undefined && model.name !== '' ? model.name : value
+        await followUp(deps.copy.modelCascadeReasoningHeader(modelLabel), selectMenuRow(menuId, deps.copy.modelCascadeReasoningPlaceholder, options))
+        return
+      }
+      if (stage === 'reasoning') {
+        const provider = typeof context['provider'] === 'string' ? context['provider'] : undefined
+        const model = typeof context['model'] === 'string' ? context['model'] : undefined
+        if (provider === undefined || model === undefined) {
+          await followUp(deps.copy.modelCascadeExpired)
+          return
+        }
+        const result = await applyModelSelection(deps.model, {
+          decision,
+          sessionId,
+          provider,
+          model,
+          requireHostOperator: requireOperator,
+          ...(value === '__default__' ? {} : { reasoningEffort: value }),
+        })
+        await followUp(renderModelApply(deps.copy, result))
+        return
+      }
+      await followUp(deps.copy.modelCascadeExpired)
+    } catch (cause) {
+      deps.warn('discord_model_cascade_failed', String(cause))
+      await deps.componentFollowUp(event.interactionId, interactionToken, deps.copy.commandFailed).catch(() => {})
+    }
   }
 
   async function settleQuestionInteraction(
@@ -632,6 +882,10 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       }
       if (bindContext?.['kind'] === 'guild-forget') {
         await routeGuildForGetComponent(event, interactionToken)
+        return
+      }
+      if (bindContext?.['kind'] === 'model') {
+        await routeModelComponent(event, interactionToken)
         return
       }
       // A not-found custom_id means the control was never registered or has

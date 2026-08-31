@@ -44,6 +44,13 @@ function face(
       cancel: () => Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['cancel']>,
       updateQueue: () => Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['updateQueue']>,
       list: () => Promise.resolve(ok({ items: [] })) as ReturnType<DshApiProxyFace['sessions']['list']>,
+      models: () => Promise.resolve(ok({
+        current: { provider: 'p', model: 'm' },
+        routable: true,
+        groups: [],
+        failures: [],
+      })) as ReturnType<DshApiProxyFace['sessions']['models']>,
+      selectModel: () => Promise.resolve(ok({ selected: { provider: 'p', model: 'm' } })) as ReturnType<DshApiProxyFace['sessions']['selectModel']>,
     },
   }
 }

@@ -74,6 +74,7 @@ function isLanguageField(field: DiscordCardField): boolean {
   return field === LANGUAGE_FIELD
 }
 
+
 export type DiscordCardField = typeof DISCORD_ID_FIELDS[number] | typeof ARCHIVE_FIELD | typeof LANGUAGE_FIELD
 
 /** The adapter copy languages, as select choices (labels are endonyms). */
@@ -239,7 +240,7 @@ export class DiscordCardForm {
     const value = section?.[field]
     if (Array.isArray(value)) return value.join('\n')
     if (typeof value === 'string') return value
-    if (typeof value === 'number') return String(value)
+    if (typeof value === 'boolean' || typeof value === 'number') return String(value)
     return ''
   }
 
@@ -287,7 +288,7 @@ export class DiscordCardForm {
     return !this.stored(field)
   }
 
-  private async store(field: DiscordCardField, value: string[] | number | string): Promise<boolean> {
+  private async store(field: DiscordCardField, value: string[] | number | string | boolean): Promise<boolean> {
     await this.scope.set(field, value)
     return this.userLayer()?.[field] !== undefined
   }

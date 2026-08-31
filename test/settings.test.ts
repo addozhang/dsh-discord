@@ -21,6 +21,7 @@ describe('Discord settings', () => {
       deniedRoleIds: [],
       hostOperatorUserIds: [],
       defaultVerbosity: 'essential-tools',
+      modelSelectOperatorOnly: false,
     })
   })
 

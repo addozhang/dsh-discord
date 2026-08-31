@@ -104,6 +104,33 @@ const zh = {
   // ── stream renderer ──────────────────────────────────────────────────
   interruptedMarker: '*（已被中断）*',
 
+  // ── /model show / select ─────────────────────────────────────────────
+  modelNeedsThread: '⚠️ /model 需要在已绑定 Session 的任务线程中使用（先在项目频道 @ 机器人）。',
+  modelShowUnavailable: '⚠️ 模型目录暂时不可用，请稍后重试。',
+  modelShowHeader: (sel: string, groups: number) => `**当前模型：** \`${sel}\`\n**可用 provider：** ${String(groups)}`,
+  modelShowReasoning: (effort: string) => `\n**推理强度：** \`${effort}\``,
+  modelShowNotRoutable: '\n⚠️ 当前 provider 暂时无法服务请求。',
+  modelShowFailures: (names: string) => `\n⚠️ 目录加载失败的 provider：${names}`,
+  modelShowNoGroups: '\n（当前没有 provider 提供模型）',
+  modelSelectOperatorOnly: '⚠️ 只有 Host 操作员可以切换模型（此操作会切换当前 Session 并更新 Host 默认）。',
+  modelSelectNoModels: '⚠️ 当前没有 provider 提供模型，无法选择。',
+  modelCascadeProviderHeader: (current: string, extra: string) => `当前模型：\`${current}\`${extra}\n请选择 provider：`,
+  modelCascadeProviderPlaceholder: '选择 provider',
+  modelCascadeModelHeader: (provider: string) => `Provider：**${provider}**\n请选择模型：`,
+  modelCascadeModelPlaceholder: '选择模型',
+  modelCascadeReasoningHeader: (model: string) => `模型：**${model}**\n请选择推理强度：`,
+  modelCascadeReasoningPlaceholder: '选择推理强度',
+  modelCascadeReasoningDefault: '跟随默认',
+  modelCascadeReasoningDefaultHint: '使用 provider/默认推理行为',
+  modelCascadeTruncated: (shown: number, total: number) => `（共 ${String(total)} 项，仅显示前 ${String(shown)} 项）`,
+  modelCascadeExpired: '⚠️ 该选择已过期，请重新运行 /model select。',
+  modelApplied: (sel: string) => `✅ 已应用到当前 Session：\`${sel}\`，并已请求 DSH 记为 Host 默认。`,
+  modelSelectUnknown: '⚠️ 选择结果未知（请求可能未送达），请用 /model show 确认。',
+  modelSelectRejected: (reason: string) => `⚠️ DSH 拒绝了此次选择：${reason}`,
+  modelNotInCatalog: '⚠️ 该 provider/模型不在当前会话的目录中。',
+  modelInvalidReasoning: '⚠️ 该推理强度对此模型无效。',
+  modelTypedParseFailed: '⚠️ 模型需按 `provider/model` 格式填写，或留空进入交互式选择。',
+
   // ── approval / question cards ────────────────────────────────────────
   approvalRequired: (label: string) => `Approval required — ${label}`,
 } satisfies Record<string, unknown>
@@ -194,6 +221,33 @@ const en: CopyTable = {
   unboundNoticeMember: '💡 This channel is not bound to a workspace; ask a workspace administrator to run `/project bind`.',
 
   interruptedMarker: '*(interrupted)*',
+
+  // ── /model show / select ─────────────────────────────────────────────
+  modelNeedsThread: '⚠️ /model needs a thread bound to a Session (mention the bot in a project channel first).',
+  modelShowUnavailable: '⚠️ The model catalog is temporarily unavailable; try again later.',
+  modelShowHeader: (sel, groups) => `**Current model:** \`${sel}\`\n**Available providers:** ${String(groups)}`,
+  modelShowReasoning: effort => `\n**Reasoning effort:** \`${effort}\``,
+  modelShowNotRoutable: '\n⚠️ The current provider is not serving requests right now.',
+  modelShowFailures: names => `\n⚠️ Providers failing catalog lookup: ${names}`,
+  modelShowNoGroups: '\n(no providers currently advertise models)',
+  modelSelectOperatorOnly: '⚠️ Only Host operators can switch the model (it switches this Session and updates the Host default).',
+  modelSelectNoModels: '⚠️ No providers currently advertise models; nothing to select.',
+  modelCascadeProviderHeader: (current, extra) => `Current model: \`${current}\`${extra}\nSelect a provider:`,
+  modelCascadeProviderPlaceholder: 'Select a provider',
+  modelCascadeModelHeader: provider => `Provider: **${provider}**\nSelect a model:`,
+  modelCascadeModelPlaceholder: 'Select a model',
+  modelCascadeReasoningHeader: model => `Model: **${model}**\nSelect a reasoning effort:`,
+  modelCascadeReasoningPlaceholder: 'Select a reasoning effort',
+  modelCascadeReasoningDefault: 'Provider default',
+  modelCascadeReasoningDefaultHint: 'Use the provider/default reasoning behavior',
+  modelCascadeTruncated: (shown, total) => `(${String(total)} total, showing the first ${String(shown)})`,
+  modelCascadeExpired: '⚠️ This selection expired; run /model select again.',
+  modelApplied: sel => `✅ Applied to this session: \`${sel}\`. DSH has also been asked to record it as the Host default.`,
+  modelSelectUnknown: '⚠️ The selection outcome is unknown (the request may not have landed); check /model show.',
+  modelSelectRejected: reason => `⚠️ DSH rejected the selection: ${reason}`,
+  modelNotInCatalog: "⚠️ That provider/model is not in this session's catalog.",
+  modelInvalidReasoning: '⚠️ That reasoning effort is not valid for this model.',
+  modelTypedParseFailed: '⚠️ The model must be `provider/model`, or left empty for the interactive cascade.',
 
   // ── approval / question cards ────────────────────────────────────────
   approvalRequired: label => `Approval required — ${label}`,

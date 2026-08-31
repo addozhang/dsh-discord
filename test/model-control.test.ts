@@ -1,130 +1,142 @@
 /**
- * `/model` tests (10.2 + 10.3): show reads the catalog; select is restricted
- * to the explicit global Host-operator allowlist (Guild administrators are
- * denied), validates the reasoning effort against the catalog before calling
- * DSH, and reports EXACTLY what DSH proved — including the partial case where
- * the session selection succeeded but the host-default persistence did not.
+ * `/model` tests (10.2 + 10.3 + 16.35): show reads the session's live model
+ * directory; the selection mutation is restricted to the explicit global
+ * Host-operator allowlist (Guild administrators are denied), validates the
+ * provider, model, and reasoning effort against the live catalog before
+ * calling DSH, and reports EXACTLY what DSH proved — the response proves the
+ * session switch; the Host-default persistence attempt is never claimed as
+ * an observed outcome.
  */
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { showModelCatalog, selectModel, type DshModelPort } from '../src/features/model-control.js'
+import { applyModelSelection, showModels, type DshModelPort } from '../src/features/model-control.js'
 
 const OPERATOR = { allowed: true, level: 'host-operator' } as const
 const GUILD_ADMIN = { allowed: true, level: 'workspace-administrator' } as const
 
-function catalogPort(select?: DshModelPort['selectModel']): DshModelPort {
+function makePort(overrides: {
+  models?: DshModelPort['models']
+  select?: DshModelPort['selectModel']
+} = {}): DshModelPort {
   return {
-    catalog: () => Promise.resolve({
-      outcome: 'completed',
-      providers: [
-        { provider: 'deepseek', models: [{ id: 'ds-v3', reasonings: ['off', 'medium'] }, { id: 'ds-r1', reasonings: [] }] },
-      ],
-    }),
-    selectModel: select ?? ((): ReturnType<DshModelPort['selectModel']> =>
-      Promise.resolve({ outcome: 'completed', sessionApplied: true, defaultPersisted: true })),
+    models: overrides.models ?? ((): ReturnType<DshModelPort['models']> =>
+      Promise.resolve({
+        outcome: 'completed',
+        models: {
+          current: { provider: 'deepseek', model: 'ds-v3' },
+          routable: true,
+          groups: [
+            {
+              id: 'deepseek',
+              name: 'DeepSeek',
+              models: [
+                { id: 'ds-v3', name: 'V3', reasoning: { efforts: [{ id: 'off', name: 'Off' }, { id: 'medium', name: 'Medium' }] } },
+                { id: 'ds-r1', name: 'R1' },
+              ],
+            },
+          ],
+          failures: [],
+        },
+      })),
+    selectModel: overrides.select ?? ((): ReturnType<DshModelPort['selectModel']> =>
+      Promise.resolve({ outcome: 'completed', selected: { provider: 'deepseek', model: 'ds-v3' } })),
   }
 }
 
 describe('/model show', () => {
-  it('renders the provider/model catalog', async () => {
-    const view = await showModelCatalog(catalogPort(), { sessionId: 'sess-1' })
-    expect(view.outcome).toBe('ok')
-    if (view.outcome !== 'ok') return
-    expect(view.providers[0]?.models.map(model => model.id)).toEqual(['ds-v3', 'ds-r1'])
+  it('returns the session directory for the router to render', async () => {
+    const view = await showModels(makePort(), { sessionId: 'sess-1' })
+    expect(view.outcome).toBe('completed')
+    if (view.outcome === 'completed') {
+      expect(view.models.current).toEqual({ provider: 'deepseek', model: 'ds-v3' })
+      expect(view.models.groups[0]?.models).toHaveLength(2)
+    }
   })
 
-  it('sanitizes catalog failures', async () => {
-    const failed: DshModelPort = { catalog: () => Promise.resolve({ outcome: 'failed' }), selectModel: () => Promise.resolve({ outcome: 'unknown' }) }
-    expect(await showModelCatalog(failed, { sessionId: 's' })).toEqual({ outcome: 'failed', reason: 'model-catalog-unavailable' })
-
-    const unknown: DshModelPort = { catalog: () => Promise.resolve({ outcome: 'unknown' }), selectModel: () => Promise.resolve({ outcome: 'unknown' }) }
-    expect(await showModelCatalog(unknown, { sessionId: 's' })).toEqual({ outcome: 'failed', reason: 'model-catalog-unknown' })
+  it('passes through failed and unknown directory reads', async () => {
+    expect((await showModels(makePort({ models: () => Promise.resolve({ outcome: 'failed' }) }), { sessionId: 's' })).outcome).toBe('failed')
+    expect((await showModels(makePort({ models: () => Promise.resolve({ outcome: 'unknown' }) }), { sessionId: 's' })).outcome).toBe('unknown')
   })
 })
 
-describe('/model select authorization', () => {
-  it('allows the host operator', async () => {
-    const select = vi.fn((): ReturnType<DshModelPort['selectModel']> =>
-      Promise.resolve({ outcome: 'completed', sessionApplied: true, defaultPersisted: true }))
-    const result = await selectModel(catalogPort(select), {
-      decision: OPERATOR,
-      sessionId: 'sess-1',
-      modelId: 'ds-v3',
-      reasoning: 'medium',
-    })
-    expect(result.outcome).toBe('applied-with-host-default')
+describe('/model select (applyModelSelection)', () => {
+  const request = {
+    sessionId: 'sess-1',
+    provider: 'deepseek',
+    model: 'ds-v3',
+  }
+
+  it('denies a Guild administrator: only Host operators may switch', async () => {
+    const result = await applyModelSelection(makePort(), { ...request, decision: GUILD_ADMIN })
+    expect(result).toEqual({ outcome: 'refused', reason: 'not-host-operator' })
   })
 
-  it('denies a guild-only administrator before any DSH call', async () => {
-    const select = vi.fn((): ReturnType<DshModelPort['selectModel']> =>
-      Promise.resolve({ outcome: 'completed', sessionApplied: true, defaultPersisted: true }))
-    const result = await selectModel(catalogPort(select), {
-      decision: GUILD_ADMIN,
-      sessionId: 'sess-1',
-      modelId: 'ds-v3',
+  it('admits an authorized member when the operator restriction is dropped (16.42)', async () => {
+    const result = await applyModelSelection(makePort(), {
+      ...request,
+      decision: { allowed: true, level: 'member' },
+      requireHostOperator: false,
+    })
+    expect(result).toEqual({ outcome: 'applied', selected: { provider: 'deepseek', model: 'ds-v3' } })
+  })
+
+  it('still refuses a denied decision even with the restriction dropped', async () => {
+    const result = await applyModelSelection(makePort(), {
+      ...request,
+      decision: { allowed: false, reason: 'denied' },
+      requireHostOperator: false,
     })
     expect(result).toEqual({ outcome: 'refused', reason: 'not-host-operator' })
+  })
+
+  it('refuses an unknown provider or model before any DSH mutation', async () => {
+    const select = vi.fn()
+    const port = makePort({ select: select as unknown as DshModelPort['selectModel'] })
+    expect(await applyModelSelection(port, { ...request, decision: OPERATOR, provider: 'nope' }))
+      .toEqual({ outcome: 'refused', reason: 'model-not-in-catalog' })
+    expect(await applyModelSelection(port, { ...request, decision: OPERATOR, model: 'nope' }))
+      .toEqual({ outcome: 'refused', reason: 'model-not-in-catalog' })
     expect(select).not.toHaveBeenCalled()
   })
 
-  it('rejects an unknown model without calling DSH', async () => {
-    const select = vi.fn((): ReturnType<DshModelPort['selectModel']> =>
-      Promise.resolve({ outcome: 'completed', sessionApplied: true, defaultPersisted: true }))
-    const result = await selectModel(catalogPort(select), {
-      decision: OPERATOR,
-      sessionId: 'sess-1',
-      modelId: 'nope',
-    })
-    expect(result).toEqual({ outcome: 'refused', reason: 'model-not-in-catalog' })
-    expect(select).not.toHaveBeenCalled()
-  })
-
-  it('rejects an invalid reasoning effort without calling DSH', async () => {
-    const select = vi.fn((): ReturnType<DshModelPort['selectModel']> =>
-      Promise.resolve({ outcome: 'completed', sessionApplied: true, defaultPersisted: true }))
-    const result = await selectModel(catalogPort(select), {
-      decision: OPERATOR,
-      sessionId: 'sess-1',
-      modelId: 'ds-r1',
-      reasoning: 'medium',
-    })
+  it('refuses a reasoning effort the model does not advertise', async () => {
+    const result = await applyModelSelection(makePort(), { ...request, decision: OPERATOR, reasoningEffort: 'max' })
     expect(result).toEqual({ outcome: 'refused', reason: 'invalid-reasoning-effort' })
-    expect(select).not.toHaveBeenCalled()
   })
-})
 
-describe('/model select outcome presentation (10.3)', () => {
-  it('presents the host-default side effect when both effects landed', async () => {
-    const result = await selectModel(catalogPort(), {
-      decision: OPERATOR, sessionId: 's', modelId: 'ds-v3',
+  it('applies a valid selection and forwards the reasoning effort', async () => {
+    let seen: Parameters<DshModelPort['selectModel']>[0] | undefined
+    const port = makePort({
+      select: request0 => {
+        seen = request0
+        return Promise.resolve({ outcome: 'completed', selected: { provider: 'deepseek', model: 'ds-v3', reasoningEffort: 'medium' } })
+      },
     })
+    const result = await applyModelSelection(port, { ...request, decision: OPERATOR, reasoningEffort: 'medium' })
     expect(result).toEqual({
-      outcome: 'applied-with-host-default',
-      sessionApplied: true,
-      defaultPersisted: true,
+      outcome: 'applied',
+      selected: { provider: 'deepseek', model: 'ds-v3', reasoningEffort: 'medium' },
     })
+    expect(seen?.reasoningEffort).toBe('medium')
   })
 
-  it('reports the partial failure: session applied, default persistence did not', async () => {
-    const result = await selectModel(catalogPort(() =>
-      Promise.resolve({ outcome: 'completed', sessionApplied: true, defaultPersisted: false })), {
-      decision: OPERATOR, sessionId: 's', modelId: 'ds-v3',
+  it('omits the reasoning field entirely when no effort is chosen', async () => {
+    let seen: Record<string, unknown> | undefined
+    const port = makePort({
+      select: request0 => {
+        seen = { ...request0 }
+        return Promise.resolve({ outcome: 'completed', selected: { provider: 'deepseek', model: 'ds-v3' } })
+      },
     })
-    expect(result).toEqual({
-      outcome: 'partial-session-only',
-      sessionApplied: true,
-      defaultPersisted: false,
-    })
+    await applyModelSelection(port, { ...request, decision: OPERATOR })
+    expect('reasoningEffort' in (seen ?? {})).toBe(false)
   })
 
-  it('maps DSH rejection and unknown outcomes without claiming success', async () => {
-    const rejected = catalogPort(() => Promise.resolve({ outcome: 'rejected', reason: 'model-unavailable' }))
-    expect(await selectModel(rejected, { decision: OPERATOR, sessionId: 's', modelId: 'ds-v3' }))
-      .toEqual({ outcome: 'rejected' })
-
-    const unknown = catalogPort(() => Promise.resolve({ outcome: 'unknown' }))
-    expect(await selectModel(unknown, { decision: OPERATOR, sessionId: 's', modelId: 'ds-v3' }))
+  it('passes DSH rejections and unknown outcomes through unchanged', async () => {
+    expect(await applyModelSelection(makePort({ select: () => Promise.resolve({ outcome: 'rejected', reason: 'agent-busy' }) }), { ...request, decision: OPERATOR }))
+      .toEqual({ outcome: 'rejected', reason: 'agent-busy' })
+    expect(await applyModelSelection(makePort({ select: () => Promise.resolve({ outcome: 'unknown' }) }), { ...request, decision: OPERATOR }))
       .toEqual({ outcome: 'unknown' })
   })
 })
