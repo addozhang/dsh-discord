@@ -17,6 +17,7 @@ This is a function/namespace plugin (`inject: ['apiProxy', 'credentials', 'setti
 - **Stream rendering** — typing indicators, a single edited head message, per-tool activity rows, fenced long-answer splitting, one-time finalize; the activity message is deleted when the turn ends.
 - **Approvals & questions** — DSH ask frames become Discord buttons, select menus, and a free-text modal; ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and remote resolution retires the controls.
 - **Session control** — `/steer`, `/stop`, `/queue list|remove` with turn-ownership checks; `/project bind|list|info` for guild↔workspace binding; `/guild forget` for operator cleanup.
+- **Model selection** — `/model show` reads the session's live model directory (current selection, routability, catalog groups); `/model select` walks an interactive provider → model → reasoning cascade (any authorized member by default; restrictable to Host operators), or applies a typed `provider/model` directly.
 - **Settings card** — token onboarding (paste + Connect; stored in the Host credential service, never in settings or logs), connect/disconnect, guild allowlist, thread auto-archive, and bot language.
 - **Bilingual copy** — every Discord-visible string ships in Chinese and English; the bot language defaults to following the DSH language preference and can be pinned from the card.
 - **Hardened by design** — deny-first authorization inside an explicit guild allowlist, mention suppression via `allowed_mentions` plus byte-level neutralization on every wire body, at-most-once DSH submission with unknown-preserving reconciliation, durable bindings that survive restarts, and a READY sweep that rebuilds the deleted category/control channel while treating a deleted workspace channel as user intent (the mapping retires; the workspace stays bindable).
@@ -61,9 +62,10 @@ All keys live in the `dsh-discord` settings namespace and can be set either from
 | `enabled` | `false` | Adapter master switch; the card's Connect starts it once a token is stored. |
 | `allowedGuildIds` | `[]` | Guild allowlist. Anything outside is ignored with zero adapter or DSH calls. |
 | `memberUserIds` / `memberRoleIds` | `[]` | Member-level authorization inside an allowed guild. |
-| `administratorUserIds` / `administratorRoleIds` | `[]` | Workspace-administrator level (`/project bind`, preset changes). |
+| `administratorUserIds` / `administratorRoleIds` | `[]` | Workspace-administrator level (`/project bind`). |
 | `deniedUserIds` / `deniedRoleIds` | `[]` | Deny entries; they win over every grant above. |
-| `hostOperatorUserIds` | `[]` | Host operators (`/guild forget`). |
+| `hostOperatorUserIds` | `[]` | Host operators (`/guild forget`; `/model select` when `modelSelectOperatorOnly` is enabled). |
+| `modelSelectOperatorOnly` | `false` | Restrict `/model select` to Host operators (`settings.yaml` only; the card does not expose it). Default `false`: any authorized member may switch, and the switch still updates the Host default. |
 | `defaultVerbosity` | `essential-tools` | Tool-activity row granularity: `text-only`, `essential-tools`, or `full-tools`. |
 | `language` | `auto` | Bot-visible copy language: `auto` follows the DSH language preference (non-Chinese renders English), or pin `zh`/`en`. |
 | `streamUpdateIntervalMs` | `800` | Coalescing budget for stream edits (250–10000). |
@@ -86,7 +88,8 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 2. Boot the profile and open the web UI.
 3. In **Settings → Discord**, paste the bot token (Developer Portal → your application → Bot → Reset Token) and press **Connect**. The token is stored by the Host credential service — never in settings, logs, or the client.
 4. Fill in **Allowed servers** (server IDs via Discord's Developer Mode → right-click a server → Copy Server ID). Everything outside this allowlist is ignored.
-5. Pick the bot language and mention the bot in a bound channel to start a session.
+5. `/model select` works for any authorized member by default (single-user deployments). To restrict it to Host operators, add their IDs under `hostOperatorUserIds` and set `modelSelectOperatorOnly: true` in `settings.yaml`. `/guild forget` always requires a Host operator.
+6. Pick the bot language and mention the bot in a bound channel to start a session.
 
 ## Commands
 
@@ -96,8 +99,8 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 | `/project list` / `info` | any channel | list workspaces / inspect this channel's binding |
 | `/queue list`, `/queue remove` | session thread | inspect and trim the pending queue |
 | `/steer`, `/stop` | session thread | steer or cancel the running turn (owner only) |
+| `/model show` / `select` | session thread | show the live model directory; `select` without arguments walks the interactive provider → model → reasoning cascade (any authorized member by default) |
 | `/guild forget` | any channel | operator-only removal of adapter records |
-
 
 ## Design notes
 
@@ -111,7 +114,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 ## Known Limitations and Deferred Work
 
 - **`/session new|resume` is not registered** — the selector and cold-adoption modules are implemented and unit-tested, but the Host RPC face cannot back them yet (`sessions.list` v1 returns bare ids; no `session.inspect`). They return with the next milestone.
-- **`/model` is registered but not routed yet** — its control module (model catalog with guarded selection) is implemented and unit-tested; the interactive provider → model → thinking/reasoning cascade lands with the router-wiring milestone. `/preset`, `/skill`, and `/host` stay deregistered until the same pass wires them (the `/preset` thread-context guard rides along).
+- **`/preset`, `/skill`, and `/host` stay deregistered** — their control modules are implemented and unit-tested and return when the router wires them (the `/preset` thread-context guard rides along).
 - **Verbosity is a single global setting** (the DSH ecosystem has per-channel precedent).
 - **Deferred after a Kimaki parity pass**: reconcile-interactions wiring, typing pause during ask waits, fail-closed binding/session-owner store wiring, and credential-rotation watching.
 - **Known tension**: the 250ms minimum stream-edit interval against Discord's edit budget under heavy load (429s self-heal), and typing has no duration-capped watchdog.
@@ -120,7 +123,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 
 ```sh
 pnpm install --ignore-scripts
-pnpm test          # 642 tests incl. gateway/REST twin E2E
+pnpm test          # 650 tests incl. gateway/REST twin E2E
 pnpm typecheck
 pnpm lint
 pnpm build         # lib + client bundle

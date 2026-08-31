@@ -17,6 +17,7 @@
 - **流式渲染** — typing 指示、单条头消息编辑、逐工具活动行、代码围栏感知的长文分段、一次性收尾；Turn 结束时活动消息会被删除。
 - **审批与提问** — DSH ask 帧渲染为 Discord 按钮、下拉菜单与自由文本弹窗；所有权强制校验（提问者——或后续 Turn 的线程属主——才能点击），超时清扫 fail-closed，远端决议自动退役控件。
 - **会话控制** — `/steer`、`/stop`、`/queue list|remove` 带运行所有权校验；`/project bind|list|info` 管理 Guild↔工作区绑定；`/guild forget` 供操作员清理。
+- **模型切换** — `/model show` 读取会话的实时模型目录（当前选择、可服务状态、目录分组）；`/model select` 走交互式 provider → 模型 → 推理强度级联（默认对所有授权成员开放，可通过设置收紧为仅 Host 操作员），也可直接填写 `provider/model` 应用。
 - **设置卡片** — Token 引导（粘贴 + 连接；存入 Host 凭据服务，绝不写入设置或日志）、连接/断开、服务器白名单、线程自动归档、Bot 语言。
 - **双语文案** — 所有 Discord 可见文案提供中英双语；Bot 语言默认跟随 DSH 语言偏好，也可从卡片固定。
 - **安全设计** — 显式服务器白名单内的 deny-first 授权、每条 wire 请求携带 `allowed_mentions` 并做字节级提及中和、至多一次的 DSH 提交与保留 unknown 的对账、重启后持久的绑定，以及 READY 扫描：被删的 category/控制频道会重建，被删的工作区频道视为用户意图（解除映射，workspace 保持可重新绑定）。
@@ -61,9 +62,10 @@ dsh plugin --profile web rm @addozhang/dsh-discord   # 卸载；先执行 /guild
 | `enabled` | `false` | 适配器总开关；卡片 Connect 在 Token 存入后启动。 |
 | `allowedGuildIds` | `[]` | 服务器白名单。白名单之外零响应、零 DSH 调用。 |
 | `memberUserIds` / `memberRoleIds` | `[]` | 白名单 Guild 内的成员级授权。 |
-| `administratorUserIds` / `administratorRoleIds` | `[]` | 工作区管理员级（`/project bind`、预设修改）。 |
+| `administratorUserIds` / `administratorRoleIds` | `[]` | 工作区管理员级（`/project bind`）。 |
 | `deniedUserIds` / `deniedRoleIds` | `[]` | 拒绝名单；优先级高于上述一切授权。 |
-| `hostOperatorUserIds` | `[]` | Host 操作员（`/guild forget`）。 |
+| `hostOperatorUserIds` | `[]` | Host 操作员（`/guild forget`；启用 `modelSelectOperatorOnly` 后也包括 `/model select`）。 |
+| `modelSelectOperatorOnly` | `false` | 将 `/model select` 限制为 Host 操作员（仅 `settings.yaml`，卡片不展示）。默认 `false`：任何授权成员均可切换，且切换仍会更新 Host 默认。 |
 | `defaultVerbosity` | `essential-tools` | 工具活动行粒度：`text-only`、`essential-tools`、`full-tools`。 |
 | `language` | `auto` | Bot 可见文案语言：`auto` 跟随 DSH 语言偏好（非中文渲染英文），或固定 `zh`/`en`。 |
 | `streamUpdateIntervalMs` | `800` | 流式编辑合并间隔（250–10000）。 |
@@ -86,7 +88,8 @@ dsh-discord:
 2. 启动 profile 并打开 Web 界面。
 3. 在 **Settings → Discord** 中粘贴 Bot Token（开发者门户 → 你的应用 → Bot → Reset Token）并点击 **Connect**。Token 由 Host 凭据服务保存——绝不写入设置、日志或客户端。
 4. 填写 **允许的服务器**（服务器 ID 获取方式：Discord 开发者模式 → 右键服务器 → 复制服务器 ID）。白名单之外的一切都会被忽略。
-5. 选择 Bot 语言，然后在已绑定的频道 @机器人 开始会话。
+5. `/model select` 默认对任何授权成员开放（单人自用部署）。如需限制为 Host 操作员：在 `hostOperatorUserIds` 中加入其用户 ID，并把 `modelSelectOperatorOnly` 设为 `true`（`settings.yaml`）。`/guild forget` 始终需要 Host 操作员。
+6. 选择 Bot 语言，然后在已绑定的频道 @机器人 开始会话。
 
 ## 命令
 
@@ -96,6 +99,7 @@ dsh-discord:
 | `/project list` / `info` | 任意频道 | 列出工作区 / 查看当前频道绑定 |
 | `/queue list`, `/queue remove` | 会话线程 | 查看与移除待处理队列 |
 | `/steer`, `/stop` | 会话线程 | 插话或取消运行中的 Turn（仅属主） |
+| `/model show` / `select` | 会话线程 | 查看实时模型目录；`select` 不带参数时走交互式 provider → 模型 → 推理强度级联（默认对所有授权成员开放） |
 | `/guild forget` | 任意频道 | 仅操作员：移除适配器记录 |
 
 
@@ -111,7 +115,7 @@ dsh-discord:
 ## 已知限制与推迟项
 
 - **`/session new|resume` 未注册** — 选择器与冷收养模块已实现并通过单元测试，但 Host RPC 面尚不支持（`sessions.list` v1 只返回裸 id；缺少 `session.inspect`）。将在下个里程碑回归。
-- **`/model` 已注册但尚未接线** — 其控制模块（模型目录与受控选择）已实现并通过单元测试；交互式 provider → 模型 → thinking/reasoning 级联将随路由接线里程碑落地。`/preset`、`/skill`、`/host` 保持注销状态，同一次接线时回归（`/preset` 的会话线程守卫一并处理）。
+- **`/preset`、`/skill`、`/host` 保持注销状态** — 控制模块已实现并通过单元测试，待路由接线时回归（`/preset` 的会话线程守卫一并处理）。
 - **verbosity 为全局设置**（DSH 生态有按频道设置的先例）。
 - **经 Kimaki 对齐后有意推迟**：reconcile-interactions 接线、ask 等待期暂停 typing、fail-closed 绑定/会话属主 store 接线、凭据轮换监听。
 - **已知张力**：流式编辑 250ms 下限与高负载下 Discord 编辑预算的冲突（429 自愈），以及 typing 缺少时长上限看门狗。
@@ -120,7 +124,7 @@ dsh-discord:
 
 ```sh
 pnpm install --ignore-scripts
-pnpm test          # 642 tests incl. gateway/REST twin E2E
+pnpm test          # 650 tests incl. gateway/REST twin E2E
 pnpm typecheck
 pnpm lint
 pnpm build         # lib + client bundle
