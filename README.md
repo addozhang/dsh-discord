@@ -21,9 +21,6 @@ This is a function/namespace plugin (`inject: ['apiProxy', 'credentials', 'setti
 - **Stream rendering** — typing indicators, a single edited head message, per-tool activity rows, fenced long-answer splitting, one-time finalize; the activity message is deleted when the turn ends.
 - **Approvals & questions** — DSH ask frames become Discord buttons, select menus, and a free-text modal; ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and settled controls grey out in place.
 
-<p align="center">
-  <img src="docs/images/discord-approval-flow.jpg" alt="An inline approval: Allow once / Reject buttons, the submitted choice, and the completed turn" width="330">
-</p>
 - **Session control** — `/steer`, `/stop`, `/queue list|remove` with turn-ownership checks; `/project bind|list|info` for guild↔workspace binding; `/guild forget` for operator cleanup.
 - **Model selection** — `/model show` reads the session's live model directory (current selection, routability, catalog groups); `/model select` walks an interactive provider → model → reasoning cascade (any authorized member by default; restrictable to Host operators), or applies a typed `provider/model` directly.
 - **Settings card** — token onboarding (paste + Connect; stored in the Host credential service, never in settings or logs), connect/disconnect, guild allowlist, thread auto-archive, and bot language.

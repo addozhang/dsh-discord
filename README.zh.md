@@ -21,9 +21,6 @@
 - **流式渲染** — typing 指示、单条头消息编辑、逐工具活动行、代码围栏感知的长文分段、一次性收尾；Turn 结束时活动消息会被删除。
 - **审批与提问** — DSH ask 帧渲染为 Discord 按钮、下拉菜单与自由文本弹窗；所有权强制校验（提问者——或后续 Turn 的线程属主——才能点击），超时清扫 fail-closed，结算后的控件原地置灰。
 
-<p align="center">
-  <img src="docs/images/discord-approval-flow.jpg" alt="内联审批：Allow once / Reject 按钮、提交回执与完成的回合" width="330">
-</p>
 - **会话控制** — `/steer`、`/stop`、`/queue list|remove` 带运行所有权校验；`/project bind|list|info` 管理 Guild↔工作区绑定；`/guild forget` 供操作员清理。
 - **模型切换** — `/model show` 读取会话的实时模型目录（当前选择、可服务状态、目录分组）；`/model select` 走交互式 provider → 模型 → 推理强度级联（默认对所有授权成员开放，可通过设置收紧为仅 Host 操作员），也可直接填写 `provider/model` 应用。
 - **设置卡片** — Token 引导（粘贴 + 连接；存入 Host 凭据服务，绝不写入设置或日志）、连接/断开、服务器白名单、线程自动归档、Bot 语言。
