@@ -12,15 +12,18 @@ A Discord-first adapter for [DeepSeek Harness](https://github.com/deepseek-ai): 
 This is a function/namespace plugin (`inject: ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']`). It mounts the Discord Gateway, command surface, stream renderer, and the settings card onto a DSH web profile; session state lives in DSH and durable adapter bindings live in the profile's storage domain.
 
 <p align="center">
-  <img src="docs/images/discord-thread-streaming.jpg" alt="A task thread: the @mention anchors a thread, tool activity rows stream, and the answer edits in place" width="350">
-  <img src="docs/images/discord-approval-flow.jpg" alt="An inline approval: Allow once / Reject buttons, the submitted choice, and the completed turn" width="350">
+  <img src="docs/images/discord-task-lifecycle.jpg" alt="One task lifecycle: the @mention anchors a thread, tool activity rows stream while the answer edits in place, and the final answer lands as Markdown tables" width="720">
 </p>
 
 ## Features
 
 - **Mention-driven sessions** — an authorized `@bot <task>` in a bound channel anchors a thread (the author's message becomes the first post), creates the DSH session, and submits the prompt at most once. Follow-ups inside the thread queue without a mention.
 - **Stream rendering** — typing indicators, a single edited head message, per-tool activity rows, fenced long-answer splitting, one-time finalize; the activity message is deleted when the turn ends.
-- **Approvals & questions** — DSH ask frames become Discord buttons, select menus, and a free-text modal; ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and remote resolution retires the controls.
+- **Approvals & questions** — DSH ask frames become Discord buttons, select menus, and a free-text modal; ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and settled controls grey out in place.
+
+<p align="center">
+  <img src="docs/images/discord-approval-flow.jpg" alt="An inline approval: Allow once / Reject buttons, the submitted choice, and the completed turn" width="330">
+</p>
 - **Session control** — `/steer`, `/stop`, `/queue list|remove` with turn-ownership checks; `/project bind|list|info` for guild↔workspace binding; `/guild forget` for operator cleanup.
 - **Model selection** — `/model show` reads the session's live model directory (current selection, routability, catalog groups); `/model select` walks an interactive provider → model → reasoning cascade (any authorized member by default; restrictable to Host operators), or applies a typed `provider/model` directly.
 - **Settings card** — token onboarding (paste + Connect; stored in the Host credential service, never in settings or logs), connect/disconnect, guild allowlist, thread auto-archive, and bot language.
