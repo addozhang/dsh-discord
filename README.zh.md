@@ -11,6 +11,11 @@
 
 本插件为 function/namespace 插件（`inject: ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']`）：将 Discord Gateway、命令面、流式渲染器与设置卡片挂载到 DSH web profile；会话状态保存在 DSH，适配器的持久绑定保存在 profile 的存储域中。
 
+<p align="center">
+  <img src="docs/images/discord-thread-streaming.jpg" alt="任务线程：@提及锚定线程、工具活动行、流式回答" width="350">
+  <img src="docs/images/discord-approval-flow.jpg" alt="内联审批：Allow once / Reject 按钮、提交回执与完成的回合" width="350">
+</p>
+
 ## 功能
 
 - **@提及驱动会话** — 在已绑定的频道中，被授权的 `@机器人 <任务>` 会锚定一个线程（你的消息成为首帖）、创建 DSH 会话，并且至多提交一次。线程内的后续消息无需 @ 即可排队。
@@ -81,6 +86,10 @@ dsh-discord:
 ```
 
 设置卡片暴露三个高频项（服务器白名单、自动归档、语言）以及连接与 Token 面；其余键完全支持通过 `settings.yaml` 配置。非法的已存配置会保留最近一次有效配置。
+
+<p align="center">
+  <img src="docs/images/settings-card.png" alt="Discord 设置卡片：连接状态、服务器白名单、归档、语言" width="560">
+</p>
 
 ## 初始设置
 

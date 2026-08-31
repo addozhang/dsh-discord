@@ -11,6 +11,11 @@ A Discord-first adapter for [DeepSeek Harness](https://github.com/deepseek-ai): 
 
 This is a function/namespace plugin (`inject: ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']`). It mounts the Discord Gateway, command surface, stream renderer, and the settings card onto a DSH web profile; session state lives in DSH and durable adapter bindings live in the profile's storage domain.
 
+<p align="center">
+  <img src="docs/images/discord-thread-streaming.jpg" alt="A task thread: the @mention anchors a thread, tool activity rows stream, and the answer edits in place" width="350">
+  <img src="docs/images/discord-approval-flow.jpg" alt="An inline approval: Allow once / Reject buttons, the submitted choice, and the completed turn" width="350">
+</p>
+
 ## Features
 
 - **Mention-driven sessions** — an authorized `@bot <task>` in a bound channel anchors a thread (the author's message becomes the first post), creates the DSH session, and submits the prompt at most once. Follow-ups inside the thread queue without a mention.
@@ -81,6 +86,10 @@ dsh-discord:
 ```
 
 The settings card exposes the three high-frequency fields (guild allowlist, auto-archive, language) plus the connection and token surface; every other key is fully supported through `settings.yaml`. An invalid stored section preserves the last known-good configuration.
+
+<p align="center">
+  <img src="docs/images/settings-card.png" alt="The Discord settings card: connection, guild allowlist, auto-archive, bot language" width="560">
+</p>
 
 ## Setup
 
