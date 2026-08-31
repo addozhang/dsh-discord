@@ -10,7 +10,7 @@ import {
   } from './settings.js'
 import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { installCancellationRoot } from './lifecycle.js'
-import { ALLOWED_MENTIONS_NONE, DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, OUTBOUND_EPHEMERAL_FLAGS } from './policy/disclosure.js'
+import { ALLOWED_MENTIONS_NONE, DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, OUTBOUND_EPHEMERAL_FLAGS, safeTitle } from './policy/disclosure.js'
 import { validateHostCapabilities } from './startup.js'
 import {
   createAdapterStatusTracker,
@@ -36,13 +36,14 @@ import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
 import { planBindingReconciliation } from './features/reconcile-bindings.js'
 import { guildKeysToForget, sweepExpired } from './state/retention.js'
-import { listSessionIds, createClientRespondPort } from './dsh/api-proxy-face.js'
+import { listSessionIds, listSessionSummaries, createClientRespondPort } from './dsh/api-proxy-face.js'
 import { createBindingStore } from './state/bindings.js'
 import { createIntentStore, type InboundIntentRecord, type IntentTable } from './state/intents.js'
 import type { BindingTable } from './state/bindings.js'
 import { createTurnTracker } from './features/turn-ownership.js'
 import { createThreadCreationFlow, type DiscordThreadPort } from './features/thread-creation.js'
 import { createSessionCreationFlow, type DshSessionPort } from './features/session-creation.js'
+import { buildResumeCandidates, filterResumeCandidates } from './features/session-resume.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from './features/prompt-submission.js'
 import { createSessionMainline, requestIdFor } from './features/session-mainline.js'
 import { startLiveRender } from './stream/live.js'
@@ -737,6 +738,81 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       },
       model: createModelPort(apiProxy, { log: rpcLog }),
       modelSelectOperatorOnly: () => current.modelSelectOperatorOnly,
+      resumeCandidates: async (query, workspaceId) => {
+        const catalog = await catalogPort.listWorkspaces()
+        if (catalog.outcome !== 'completed') return { outcome: 'unavailable' }
+        const workspacePath = catalog.workspaces.find(workspace => workspace.id === workspaceId)?.path
+        if (workspacePath === undefined) return { outcome: 'unavailable' }
+        const summaries = await listSessionSummaries(apiProxy, { log: rpcLog })
+        if (summaries.outcome !== 'completed') return { outcome: 'unavailable' }
+        const bound = new Set<string>()
+        for (const [, record] of threadTable.entries()) bound.add(record.sessionId)
+        const candidates = buildResumeCandidates(summaries.sessions, {
+          workspacePath,
+          boundSessionIds: bound,
+          query,
+        })
+        return { outcome: 'ok', options: filterResumeCandidates(candidates, query, 25) }
+      },
+      resumeSession: async ({ sessionId, workspaceId, guildId, parentChannelId, actorId }) => {
+        const rest = await sharedRest()
+        if (rest === undefined) return { outcome: 'failed' }
+        // threadBindings is the Discord-ownership record: a session with a
+        // binding already lives in a thread (16.44; the owners-store wiring
+        // stays deferred per 16.28).
+        const existingThread = threadForSession(sessionId)
+        if (existingThread !== undefined) return { outcome: 'already-bound', threadId: existingThread }
+        // The control channel never carries sessions: refuse explicitly so
+        // the user is pointed at the workspace channel (16.44 rev).
+        const listedChannels = await rest.request<Array<{ id: string; name: string; type: number; parent_id?: string }>>('GET', `/guilds/${guildId}/channels`)
+        if (listedChannels.outcome === 'completed') {
+          const category = listedChannels.body.find(channel => channel.type === 4 && channel.name.toLowerCase() === CATEGORY_NAME.toLowerCase())
+          const control = category !== undefined
+            ? listedChannels.body.find(channel => channel.type === 0 && channel.parent_id === category.id && channel.name.toLowerCase() === 'general')
+            : undefined
+          if (control !== undefined && control.id === parentChannelId) {
+            return { outcome: 'refused-control-channel' }
+          }
+        }
+        const summaries = await listSessionSummaries(apiProxy, { log: rpcLog })
+        if (summaries.outcome !== 'completed') return { outcome: 'failed' }
+        const summary = summaries.sessions.find(candidate => candidate.sessionId === sessionId)
+        if (summary === undefined || summary.blank) return { outcome: 'failed' }
+        const title = summary.title ?? `Resume ${sessionId.slice(0, 8)}`
+        // Anchor post: a durable marker the resume thread hangs off.
+        const anchor = await rest.request<{ id?: string }>('POST', `/channels/${parentChannelId}/messages`, {
+          content: copy.sessionResumeAnchor(safeTitle(title)),
+          flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG,
+          allowed_mentions: ALLOWED_MENTIONS_NONE,
+        })
+        if (anchor.outcome === 'rejected') {
+          rpcLog('discord_session_resume_anchor_failed', { sessionId, status: `HTTP ${String(anchor.status)}` })
+          return { outcome: 'failed' }
+        }
+        if (anchor.outcome === 'unknown' || typeof anchor.body.id !== 'string') {
+          rpcLog('discord_session_resume_anchor_unknown', { sessionId })
+          return { outcome: 'failed' }
+        }
+        const thread = await rest.request<{ id?: string }>('POST', `/channels/${parentChannelId}/messages/${anchor.body.id}/threads`, {
+          name: safeTitle(title),
+        })
+        if (thread.outcome === 'rejected') {
+          rpcLog('discord_session_resume_thread_failed', { sessionId, status: `HTTP ${String(thread.status)}` })
+          return { outcome: 'failed' }
+        }
+        if (thread.outcome === 'unknown' || typeof thread.body.id !== 'string') {
+          rpcLog('discord_session_resume_thread_unknown', { sessionId })
+          return { outcome: 'failed' }
+        }
+        await threadBindingStore.bind(threadBindingKey({ applicationId: applicationIdRef.current, guildId, threadId: thread.body.id }), {
+          sessionId,
+          workspaceId,
+          createdBy: actorId,
+          createdAtMs: Date.now(),
+        })
+        rpcLog('discord_session_resumed', { sessionId, threadId: thread.body.id, title })
+        return { outcome: 'started', threadId: thread.body.id }
+      },
       log: rpcLog,
       warn: (event, detail) => {
         emitLog(ctx, 'warn', { event, detail: typeof detail === 'string' ? detail : JSON.stringify(detail ?? null) })

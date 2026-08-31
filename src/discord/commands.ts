@@ -68,6 +68,12 @@ export const MILESTONE_ONE_COMMANDS: readonly AdapterCommand[] = [
     // → reasoning cascade (16.35); typing `provider/model` applies directly.
     { name: 'select', options: [{ name: 'model', required: false }, { name: 'reasoning', required: false }] },
   ]),
+  grouped('session', 'Resume a DSH session into a new thread', [
+    // Typing filters live candidates by session title (autocomplete);
+    // /session new is deliberately absent — the @mention IS the new-session
+    // path (design.md §13).
+    { name: 'resume', options: [{ name: 'session', required: true, autocomplete: true }] },
+  ]),
   grouped('guild', 'Guild-scoped adapter operations', [
     { name: 'forget' },
   ]),

@@ -131,6 +131,13 @@ const zh = {
   modelInvalidReasoning: '⚠️ 该推理强度对此模型无效。',
   modelTypedParseFailed: '⚠️ 模型需按 `provider/model` 格式填写，或留空进入交互式选择。',
 
+  // ── /session resume ──────────────────────────────────────────────────
+  sessionResumeNeedsBoundChannel: '⚠️ /session resume 需要在已绑定工作区的项目频道中使用。',
+  sessionResumeStarted: (threadId: string) => `✅ 会话已恢复到 <#${threadId}>——历史在 Web 界面查看，线程内直接续聊。`,
+  sessionResumeAlreadyBound: (threadId: string) => `该会话已在 <#${threadId}> 中。`,
+  sessionResumeFailed: '⚠️ 会话恢复失败，请稍后重试。',
+  sessionResumeAnchor: (title: string) => `📌 恢复会话：${title}`,
+  sessionResumeControlChannel: 'general 是控制频道，不承载会话——请到工作区频道使用 /session resume。',
   // ── approval / question cards ────────────────────────────────────────
   approvalRequired: (label: string) => `Approval required — ${label}`,
 } satisfies Record<string, unknown>
@@ -248,6 +255,14 @@ const en: CopyTable = {
   modelNotInCatalog: "⚠️ That provider/model is not in this session's catalog.",
   modelInvalidReasoning: '⚠️ That reasoning effort is not valid for this model.',
   modelTypedParseFailed: '⚠️ The model must be `provider/model`, or left empty for the interactive cascade.',
+
+  // ── /session resume ──────────────────────────────────────────────────
+  sessionResumeNeedsBoundChannel: '⚠️ /session resume must run in a bound project channel.',
+  sessionResumeStarted: threadId => `✅ Session resumed into <#${threadId}> — full history lives in the web UI; continue in the thread.`,
+  sessionResumeAlreadyBound: threadId => `This session already lives in <#${threadId}>.`,
+  sessionResumeFailed: '⚠️ Resuming the session failed; try again later.',
+  sessionResumeAnchor: title => `📌 Resumed session: ${title}`,
+  sessionResumeControlChannel: 'general is the control channel and carries no sessions — use /session resume in a workspace channel.',
 
   // ── approval / question cards ────────────────────────────────────────
   approvalRequired: label => `Approval required — ${label}`,

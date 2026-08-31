@@ -31,7 +31,7 @@ import { createPromptSubmissionFlow, type DshPromptPort } from '../src/features/
 import { createTurnTracker } from '../src/features/turn-ownership.js'
 import { createAdapterStatusTracker } from '../src/features/adapter-status.js'
 import { createQuestionStore } from '../src/features/question-store.js'
-import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey } from '../src/state/domain.js'
+import { channelBindingKey, threadBindingKey, parseChannelBindingKey, parseThreadBindingKey } from '../src/state/domain.js'
 import { createBindingStore } from '../src/state/bindings.js'
 import { createIntentStore } from '../src/state/intents.js'
 import { createKvTableStub } from './helpers/kv-table.js'
@@ -212,6 +212,8 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
   const steerCalls: Array<{ sessionId: string; prompt: string }> = []
   const queueSnapshotsHandle = new Map<string, Array<{ id: string; summary: string }>>()
   const threadRows = new Map<string, ThreadBinding>()
+  const resumeSeed: Array<{ label: string; value: string; description?: string }> = []
+  const resumeBindings = new Map<string, string>()
   const rowMap = new Map<string, ChannelBinding>()
   let turnTracker: ReturnType<typeof createTurnTracker>
 
@@ -296,6 +298,23 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
       },
       catalogPort: {
         listWorkspaces: () => Promise.resolve({ outcome: 'completed' as const, workspaces: [{ id: 'ws-1', title: 'tmp' }] }),
+      },
+      resumeCandidates: (query: string) => Promise.resolve({
+        outcome: 'ok' as const,
+        options: resumeSeed.filter(option => option.label.toLowerCase().includes(query.trim().toLowerCase())),
+      }),
+      resumeSession: async (input: { sessionId: string; guildId: string; parentChannelId: string; actorId: string }) => {
+        for (const [threadId, owned] of resumeBindings.entries()) {
+          if (owned === input.sessionId) return { outcome: 'already-bound' as const, threadId }
+        }
+        const anchor = await rest.request('POST', `/channels/${input.parentChannelId}/messages`, { content: `📌 恢复会话：${input.sessionId}` })
+        const anchorId = anchor.outcome === 'completed' ? (anchor.body as { id?: string }).id : undefined
+        if (anchorId === undefined) return { outcome: 'failed' as const }
+        const thread = await rest.request('POST', `/channels/${input.parentChannelId}/messages/${anchorId}/threads`, { name: `Resume ${input.sessionId.slice(0, 8)}` })
+        const threadId = thread.outcome === 'completed' ? (thread.body as { id?: string }).id : undefined
+        if (threadId === undefined) return { outcome: 'failed' as const }
+        resumeBindings.set(threadId, input.sessionId)
+        return { outcome: 'started' as const, threadId }
       },
       modelSelectOperatorOnly: () => false,
       model: {
@@ -726,6 +745,59 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     })
     expect(applied.content).toContain('`deepseek/ds-v3`')
   }, 20_000)
+
+  it('answers /session resume autocomplete with live title candidates (16.44)', async () => {
+    resumeSeed.length = 0
+    resumeSeed.push({ label: 'Fix auth flow', value: 'sess-9', description: '5 分钟前' })
+    const ack = await discord.simulateInteraction({
+      type: 4, channelId, userId: USER, guildId: GUILD,
+      data: { id: 'cmd-ac', name: 'session', options: [{ name: 'resume', type: 1, options: [{ name: 'session', type: 3, value: 'auth', focused: true }] }] },
+    })
+    await discord.channel(channelId).waitForInteractionAck({ interactionId: ack.id })
+    const response = await discord.channel(channelId).getInteractionResponse(ack.id)
+    const data = JSON.parse((response?.data as string | undefined) ?? '{}') as { choices?: Array<{ name: string }> }
+    expect(data.choices?.map(choice => choice.name)).toContain('Fix auth flow')
+  }, 20_000)
+
+  it('resumes a picked session into a new bound thread (16.44)', async () => {
+    resumeSeed.length = 0
+    resumeSeed.push({ label: 'Fix auth flow', value: 'sess-9', description: '5 分钟前' })
+    // Resume runs in a bound project channel: seed the channel binding.
+    rowMap.set(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId }), {
+      workspaceId: 'ws-1', revision: 1, boundBy: USER, boundAtMs: 1,
+    })
+    const interaction = await discord.simulateSlashCommand({
+      channelId, userId: USER, name: 'session',
+      options: [{ name: 'resume', type: 1, options: [{ name: 'session', type: 3, value: 'sess-9' }] }],
+    })
+    await discord.channel(channelId).waitForInteractionAck({ interactionId: interaction.id })
+    const done = await discord.channel(channelId).waitForMessage({
+      predicate: message => message.content.includes('会话已恢复到'),
+    })
+    expect(done.content).toContain('<#')
+    expect([...resumeBindings.values()]).toContain('sess-9')
+  }, 20_000)
+
+  it('answers already-bound sessions with their existing thread (16.44)', async () => {
+    // Seed: sess-9 owns a thread (from the previous test) and the command
+    // channel is bound.
+    resumeBindings.set('9999999999999999', 'sess-9')
+    rowMap.set(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId }), {
+      workspaceId: 'ws-1', revision: 1, boundBy: USER, boundAtMs: 1,
+    })
+    const interaction = await discord.simulateSlashCommand({
+      channelId, userId: USER, name: 'session',
+      options: [{ name: 'resume', type: 1, options: [{ name: 'session', type: 3, value: 'sess-9' }] }],
+    })
+    await discord.channel(channelId).waitForInteractionAck({ interactionId: interaction.id })
+    await new Promise(r => { setTimeout(r, 1500) })
+    const reply = await discord.channel(channelId).waitForMessage({
+      predicate: message => message.content.includes('该会话已在'),
+    })
+    // Whichever existing thread the mapping names, the reply must not offer
+    // a fresh adoption for an already-owned session.
+    expect(reply.content).toContain('<#')
+  }, 20_000)
 })
 
 describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () => {
@@ -1069,6 +1141,8 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
           return rest.request(method as never, path as never, body)
         },
       } as never),
+      resumeCandidates: () => Promise.resolve({ outcome: 'ok' as const, options: [] }),
+      resumeSession: () => Promise.resolve({ outcome: 'failed' as const }),
       modelSelectOperatorOnly: () => false,
       model: {
         models: () => Promise.resolve({
@@ -1568,6 +1642,8 @@ describe('twin smoke: isolation matrix (15.11)', () => {
       sessionForThread: () => undefined,
       ensureWorkspaceChannel: () => Promise.resolve(undefined),
       rest: () => Promise.resolve(rest),
+      resumeCandidates: () => Promise.resolve({ outcome: 'ok' as const, options: [] }),
+      resumeSession: () => Promise.resolve({ outcome: 'failed' as const }),
       modelSelectOperatorOnly: () => false,
       model: {
         models: () => Promise.resolve({
@@ -1780,6 +1856,8 @@ describe('twin smoke: English copy path (16.25)', () => {
       sessionForThread: () => undefined,
       ensureWorkspaceChannel: () => Promise.resolve(undefined),
       rest: () => Promise.resolve(rest),
+      resumeCandidates: () => Promise.resolve({ outcome: 'ok' as const, options: [] }),
+      resumeSession: () => Promise.resolve({ outcome: 'failed' as const }),
       modelSelectOperatorOnly: () => false,
       model: {
         models: () => Promise.resolve({

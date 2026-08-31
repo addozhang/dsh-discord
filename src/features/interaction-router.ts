@@ -87,6 +87,33 @@ export interface InteractionRouterDeps {
   /** The session's live model directory + selection mutation (/model surface). */
   model: DshModelPort
   /**
+   * /session resume autocomplete candidates: rich Host rows filtered to
+   * non-blank, unbound sessions, title-filtered, newest-first, capped at 25
+   * (16.44).
+   */
+  resumeCandidates: (query: string, workspacePath?: string) => Promise<
+    | { outcome: 'ok'; options: Array<{ label: string; value: string; description?: string }> }
+    | { outcome: 'unavailable' }
+  >
+  /**
+   * Cold-adopt a session into a NEW thread of the bound project channel:
+   * anchor post → message-anchored thread creation → durable thread→session
+   * binding. Already-bound sessions resolve to their existing thread
+   * (16.44).
+   */
+  resumeSession: (input: {
+    sessionId: string
+    workspaceId: string
+    guildId: string
+    parentChannelId: string
+    actorId: string
+  }) => Promise<
+    | { outcome: 'started'; threadId: string }
+    | { outcome: 'already-bound'; threadId: string }
+    | { outcome: 'refused-control-channel' }
+    | { outcome: 'failed' }
+  >
+  /**
    * Whether /model select stays Host-operator-only (default). Single-user
    * deployments flip this so any authorized member can switch (16.42).
    */
@@ -142,18 +169,37 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
   }
 
   async function routeAutocomplete(event: RouterEvent, interactionToken: string): Promise<void> {
-    if (event.commandName !== 'project') return
+    if (event.commandName !== 'project' && event.commandName !== 'session') return
     // Autocomplete has no deferred-ack form: whatever happens below, Discord
     // must receive exactly one type-8 answer, even if only empty choices.
     try {
       const decision = authorize(event)
-      const choices: Array<{ name: string; value: string }> = []
-      if (decision.allowed) {
+      const choices: Array<{ name: string; value: string; description?: string }> = []
+      const wireOptions = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string; focused?: boolean }> }> | undefined
+      const sub = Array.isArray(wireOptions) ? wireOptions[0] : undefined
+      const focused = Array.isArray(sub?.options) ? sub.options.find(option => option.focused === true) : undefined
+      const query = typeof focused?.value === 'string' ? focused.value : ''
+      if (decision.allowed && event.commandName === 'session') {
+        // /session resume: live candidates scoped to the bound workspace.
         try {
-          const wireOptions = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string; focused?: boolean }> }> | undefined
-          const sub = Array.isArray(wireOptions) ? wireOptions[0] : undefined
-          const focused = Array.isArray(sub?.options) ? sub.options.find(option => option.focused === true) : undefined
-          const query = typeof focused?.value === 'string' ? focused.value : ''
+          const binding = deps.channelBinding(event.guildId, event.channelId)
+          const catalog = await deps.catalogPort.listWorkspaces()
+          const workspacePath = binding !== undefined && catalog.outcome === 'completed'
+            ? catalog.workspaces.find(workspace => workspace.id === binding.workspaceId)?.path
+            : undefined
+          const outcome = await deps.resumeCandidates(query, workspacePath)
+          if (outcome.outcome === 'ok') {
+            choices.push(...outcome.options.slice(0, 25).map(option => (
+              option.description === undefined
+                ? { name: option.label, value: option.value }
+                : { name: option.label, value: option.value, description: option.description }
+            )))
+          }
+        } catch (cause) {
+          deps.warn('discord_autocomplete_sessions_failed', String(cause))
+        }
+      } else if (decision.allowed && event.commandName === 'project') {
+        try {
           const catalog = await deps.catalogPort.listWorkspaces()
           if (catalog.outcome === 'completed') {
             choices.push(...workspaceAutocompleteChoices(catalog.workspaces, query).slice(0, 25))
@@ -561,6 +607,49 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           content += deps.copy.modelShowFailures(directory.models.failures.map(failure => failure.name).join(', '))
         }
         await followUp(content)
+        return
+      }
+      if (event.commandName === 'session') {
+        // /session resume: cold-adopt an existing DSH session into a new
+        // thread of the bound project channel (16.44). /session new is
+        // deliberately absent — the @mention is the new-session path.
+        const options = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string }> }> | undefined
+        const subcommand = Array.isArray(options) ? options[0] : undefined
+        if (subcommand?.name !== 'resume') {
+          await followUp(deps.copy.unknownSubcommand)
+          return
+        }
+        const binding = deps.channelBinding(event.guildId, event.channelId)
+        if (binding === undefined) {
+          await followUp(deps.copy.sessionResumeNeedsBoundChannel)
+          return
+        }
+        const wireOptions = Array.isArray(subcommand.options) ? subcommand.options : []
+        const sessionId = wireOptions.find(option => option.name === 'session')?.value
+        if (typeof sessionId !== 'string' || sessionId === '') {
+          await followUp(deps.copy.sessionResumeFailed)
+          return
+        }
+        const outcome = await deps.resumeSession({
+          sessionId,
+          workspaceId: binding.workspaceId,
+          guildId: event.guildId,
+          parentChannelId: event.channelId,
+          actorId: event.actorId,
+        })
+        if (outcome.outcome === 'refused-control-channel') {
+          await followUp(deps.copy.sessionResumeControlChannel)
+          return
+        }
+        if (outcome.outcome === 'already-bound') {
+          await followUp(deps.copy.sessionResumeAlreadyBound(outcome.threadId))
+          return
+        }
+        if (outcome.outcome === 'started') {
+          await followUp(deps.copy.sessionResumeStarted(outcome.threadId))
+          return
+        }
+        await followUp(deps.copy.sessionResumeFailed)
         return
       }
       // Terminal guard: a recognized interaction type with an unhandled

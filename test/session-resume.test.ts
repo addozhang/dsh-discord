@@ -1,69 +1,89 @@
 /**
- * `/session resume` selector tests (9.1): lists the CURRENT workspace's
- * sessions filtered by id/title substring, falls back to the session id when
- * no title exists, marks archived sessions, pages within Discord limits, and
- * never includes content snippets — metadata only, no full-text search.
+ * `/session resume` candidate tests (9.1 + 16.44): the Host's rich
+ * `sessions.list` rows become autocomplete candidates — blank sessions and
+ * sessions this adapter already owns are excluded, rows sort newest-first,
+ * untitled sessions fall back to a short id, and the query filters over
+ * title/id case-insensitively.
  */
 
 import { describe, expect, it } from 'vitest'
 
-import { buildResumeSelector, type SessionCatalogPort } from '../src/features/session-resume.js'
+import { buildResumeCandidates, filterResumeCandidates, relativeTime, type SessionResumeRow } from '../src/features/session-resume.js'
 
-function catalog(sessions: Array<{ sessionId: string; title: string | null; archived: boolean }>): SessionCatalogPort {
+const NOW = 1_800_000_000_000
+
+function row(overrides: Partial<SessionResumeRow> & { sessionId: string }): SessionResumeRow {
   return {
-    listSessions: () => Promise.resolve({ outcome: 'completed', sessions }),
+    title: undefined,
+    updatedAt: NOW - 60_000,
+    running: false,
+    blank: false,
+    cwd: undefined,
+    ...overrides,
   }
 }
 
-describe('resume selector', () => {
-  it('lists the workspace sessions with id-fallback labels and archived marks', async () => {
-    const view = await buildResumeSelector(catalog([
-      { sessionId: 'sess-1', title: 'Fix auth flow', archived: false },
-      { sessionId: 'sess-2', title: null, archived: false },
-      { sessionId: 'sess-3', title: 'Old spike', archived: true },
-    ]), { workspaceId: 'ws-1', selectionId: 'sr-1' })
-
-    expect(view.outcome).toBe('ok')
-    if (view.outcome !== 'ok') return
-    expect(view.items.map(item => item.label)).toEqual([
-      'Fix auth flow',
-      'sess-2',
-      '[archived] Old spike',
-    ])
-    expect(view.items.map(item => item.value)).toEqual(['sess:1', 'sess:2', 'sess:3'])
+describe('resume candidates (16.44)', () => {
+  it('sorts newest-first, hides blank and bound sessions, labels untitled with a short id', () => {
+    const options = buildResumeCandidates(
+      [
+        row({  sessionId: 'aaaaaaaa-old', updatedAt: NOW - 3 * 3600_000 , cwd: '/private/tmp' }),
+        row({  sessionId: 'cccccccc-new', title: 'Fresh fix', updatedAt: NOW - 5_000 , cwd: '/private/tmp' }),
+        row({  sessionId: 'bbbbbbbb-blank', blank: true, updatedAt: NOW - 1_000 , cwd: '/private/tmp' }),
+        row({  sessionId: 'dddddddd-bound', updatedAt: NOW - 2_000 , cwd: '/private/tmp' }),
+      ],
+      { workspacePath: '/private/tmp', boundSessionIds: new Set(['dddddddd-bound']), query: '', nowMs: NOW },
+    )
+    expect(options.map(option => option.label)).toEqual(['Fresh fix', 'aaaaaaaa'])
+    expect(options[0]?.description).toContain('刚刚')
+    expect(options[1]?.description).toContain('3 小时前')
   })
 
-  it('filters by id/title substring case-insensitively', async () => {
-    const view = await buildResumeSelector(catalog([
-      { sessionId: 'sess-1', title: 'Fix auth flow', archived: false },
-      { sessionId: 'sess-2', title: 'DB migration', archived: false },
-      { sessionId: 'sess-migration', title: null, archived: false },
-    ]), { workspaceId: 'ws-1', selectionId: 'sr-1', query: 'MIG' })
-    if (view.outcome !== 'ok') return
-    expect(view.items.map(item => item.label)).toEqual(['DB migration', 'sess-migration'])
+  it('marks a running session in the description', () => {
+    const options = buildResumeCandidates(
+      [row({  sessionId: 'rrrrrrrr-run', title: 'Running one', running: true, updatedAt: NOW , cwd: '/private/tmp' })],
+      { workspacePath: '/private/tmp', query: '', nowMs: NOW },
+    )
+    expect(options[0]?.description).toContain('运行中')
   })
 
-  it('pages large catalogs inside the component limit', async () => {
-    const many = Array.from({ length: 60 }, (_, index) => ({
-      sessionId: `sess-${String(index)}`,
-      title: `session ${String(index)}`,
-      archived: false,
-    }))
-    const view = await buildResumeSelector(catalog(many), { workspaceId: 'ws-1', selectionId: 'sr-9', page: 1 })
-    expect(view.outcome).toBe('ok')
-    if (view.outcome !== 'ok') return
-    expect(view.pageCount).toBeGreaterThan(1)
-    expect(view.items.length + Object.keys(view.navValues).length).toBeLessThanOrEqual(25)
-    expect(view.navValues.next).toBe('sr-9:page:2')
+  it('filters by title and id substrings case-insensitively', () => {
+    const options = buildResumeCandidates(
+      [
+        row({  sessionId: 'aaaaaaaa-auth-retry', title: 'Fix AUTH flow', updatedAt: NOW , cwd: '/private/tmp' }),
+        row({  sessionId: 'bbbbbbbb-billing', title: 'Billing cleanup', updatedAt: NOW - 1 , cwd: '/private/tmp' }),
+        row({  sessionId: 'cccccccc-other', updatedAt: NOW - 2 , cwd: '/private/tmp' }),
+      ],
+      { workspacePath: '/private/tmp', query: 'aUTh', nowMs: NOW },
+    )
+    expect(options.map(option => option.label)).toEqual(['Fix AUTH flow'])
+    const byId = buildResumeCandidates(
+      [
+        row({  sessionId: 'aaaaaaaa-auth-retry' , cwd: '/private/tmp' }),
+        row({  sessionId: 'bbbbbbbb-BBBB' , cwd: '/private/tmp' }),
+      ],
+      { workspacePath: '/private/tmp', query: 'bbbb', nowMs: NOW },
+    )
+    expect(byId.map(option => option.label)).toEqual(['bbbbbbbb'])
   })
+})
 
-  it('sanitizes catalog failures', async () => {
-    const failed: SessionCatalogPort = { listSessions: () => Promise.resolve({ outcome: 'failed' }) }
-    expect(await buildResumeSelector(failed, { workspaceId: 'ws-1', selectionId: 's' }))
-      .toEqual({ outcome: 'failed', reason: 'session-catalog-unavailable' })
+describe('resume autocomplete capping', () => {
+  it('caps the choices at Discord\'s 25 ceiling with prefix ranking', () => {
+    const rows = Array.from({ length: 40 }, (_, i) =>
+      row({ sessionId: `sess-${String(i).padStart(4, '0')}`, title: `Session ${String(i)}`, updatedAt: NOW - i * 1_000, cwd: '/private/tmp' }))
+    const options = buildResumeCandidates(rows, { workspacePath: '/private/tmp', query: 'session', nowMs: NOW })
+    expect(options.length).toBe(40)
+    const capped = filterResumeCandidates(options, 'session')
+    expect(capped.length).toBe(25)
+  })
+})
 
-    const unknown: SessionCatalogPort = { listSessions: () => Promise.resolve({ outcome: 'unknown' }) }
-    expect(await buildResumeSelector(unknown, { workspaceId: 'ws-1', selectionId: 's' }))
-      .toEqual({ outcome: 'failed', reason: 'session-catalog-unknown' })
+describe('relativeTime', () => {
+  it('renders the coarse buckets', () => {
+    expect(relativeTime(NOW - 30_000, NOW)).toBe('刚刚')
+    expect(relativeTime(NOW - 5 * 60_000, NOW)).toBe('5 分钟前')
+    expect(relativeTime(NOW - 3 * 3600_000, NOW)).toBe('3 小时前')
+    expect(relativeTime(NOW - 2 * 86_400_000, NOW)).toBe('2 天前')
   })
 })

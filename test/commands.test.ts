@@ -13,12 +13,13 @@ import { describe, expect, it } from 'vitest'
 import { MILESTONE_ONE_COMMANDS, buildCommandRegistrations } from '../src/discord/commands.js'
 
 describe('milestone one command set', () => {
-  it('declares exactly the six live commands', () => {
+  it('declares exactly the seven live commands', () => {
     // Only routed commands are registered: `/preset`, `/skill`, and `/host`
-    // are deregistered until the router wires them (task 16.32), and
-    // `/session new|resume` stays deferred to the next milestone (16.26).
+    // are deregistered until the router wires them (task 16.32); `/session
+    // new` is dropped (the @mention is the new-session path) and `/session
+    // resume` is wired with autocomplete (16.44).
     expect(MILESTONE_ONE_COMMANDS.map(command => command.name)).toEqual([
-      'project', 'queue', 'steer', 'stop', 'model', 'guild',
+      'project', 'queue', 'steer', 'stop', 'model', 'session', 'guild',
     ])
   })
 
@@ -46,6 +47,10 @@ describe('milestone one command set', () => {
       // The typed model is optional: omitting it opens the interactive
       // provider → model → reasoning cascade (task 16.35).
       ['select', [['model', false], ['reasoning', false]]],
+    ])
+    expect(subcommands.get('session')).toEqual([
+      // Typing filters live candidates by session title (autocomplete 16.44).
+      ['resume', [['session', true]]],
     ])
     // `/preset`, `/skill`, and `/host` are deregistered (task 16.32); their
     // control modules stay implemented and unit-tested for the wiring

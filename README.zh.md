@@ -109,6 +109,7 @@ dsh-discord:
 | `/queue list`, `/queue remove` | 会话线程 | 查看与移除待处理队列 |
 | `/steer`, `/stop` | 会话线程 | 插话或取消运行中的 Turn（仅属主） |
 | `/model show` / `select` | 会话线程 | 查看实时模型目录；`select` 不带参数时走交互式 provider → 模型 → 推理强度级联（默认对所有授权成员开放） |
+| `/session resume` | 项目频道 | 按标题自动补全选择历史会话，恢复为当前频道的新线程 |
 | `/guild forget` | 任意频道 | 仅操作员：移除适配器记录 |
 
 
@@ -123,7 +124,6 @@ dsh-discord:
 
 ## 已知限制与推迟项
 
-- **`/session new|resume` 未注册** — 选择器与冷收养模块已实现并通过单元测试，但 Host RPC 面尚不支持（`sessions.list` v1 只返回裸 id；缺少 `session.inspect`）。将在下个里程碑回归。
 - **`/preset`、`/skill`、`/host` 保持注销状态** — 控制模块已实现并通过单元测试，待路由接线时回归（`/preset` 的会话线程守卫一并处理）。
 - **verbosity 为全局设置**（DSH 生态有按频道设置的先例）。
 - **经 Kimaki 对齐后有意推迟**：reconcile-interactions 接线、ask 等待期暂停 typing、fail-closed 绑定/会话属主 store 接线、凭据轮换监听。

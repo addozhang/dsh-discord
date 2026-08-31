@@ -109,6 +109,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 | `/queue list`, `/queue remove` | session thread | inspect and trim the pending queue |
 | `/steer`, `/stop` | session thread | steer or cancel the running turn (owner only) |
 | `/model show` / `select` | session thread | show the live model directory; `select` without arguments walks the interactive provider → model → reasoning cascade (any authorized member by default) |
+| `/session resume` | project channel | pick a past session (autocomplete by title); it resumes into a new thread of this channel |
 | `/guild forget` | any channel | operator-only removal of adapter records |
 
 ## Design notes
@@ -122,7 +123,6 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 
 ## Known Limitations and Deferred Work
 
-- **`/session new|resume` is not registered** — the selector and cold-adoption modules are implemented and unit-tested, but the Host RPC face cannot back them yet (`sessions.list` v1 returns bare ids; no `session.inspect`). They return with the next milestone.
 - **`/preset`, `/skill`, and `/host` stay deregistered** — their control modules are implemented and unit-tested and return when the router wires them (the `/preset` thread-context guard rides along).
 - **Verbosity is a single global setting** (the DSH ecosystem has per-channel precedent).
 - **Deferred after a Kimaki parity pass**: reconcile-interactions wiring, typing pause during ask waits, fail-closed binding/session-owner store wiring, and credential-rotation watching.

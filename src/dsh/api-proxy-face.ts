@@ -46,7 +46,7 @@ export interface DshApiProxyFace {
       itemId: string
       action: { kind: 'remove' }
     }>): Promise<RpcResponseShape<{ accepted: true }>>
-    list(request: RpcRequestShape<{ cursor?: string }>): Promise<RpcResponseShape<{ items: Array<{ sessionId: string }> }>>
+    list(request: RpcRequestShape<{ cursor?: string }>): Promise<RpcResponseShape<{ items: SessionSummaryShape[] }>>
     models(request: RpcRequestShape<{ sessionId: string }>): Promise<RpcResponseShape<SessionModelsShape>>
     selectModel(request: RpcRequestShape<{
       sessionId: string
@@ -55,6 +55,29 @@ export interface DshApiProxyFace {
       reasoningEffort?: string
     }>): Promise<RpcResponseShape<{ selected: ModelSelectionShape }>>
   }
+}
+
+/** Defensive read of the title projection in a list row's values. */
+export interface SessionProjectionsShape {
+  values?: { title?: unknown }
+}
+
+/** The per-session summary `sessions.list` returns (rc.2 rich rows). */
+export interface SessionSummaryShape {
+  sessionId: string
+  updatedAt: number
+  running: boolean
+  blank: boolean
+  cwd?: string
+  agentPreset?: string
+  projections?: SessionProjectionsShape
+}
+
+/** The complete provider/model/reasoning selection (dsh-agent ModelSelection). */
+export interface ModelSelectionShape {
+  provider: string
+  model: string
+  reasoningEffort?: string
 }
 
 /** One reasoning effort a model's adapter advertises (sessions.d.ts). */
@@ -93,13 +116,6 @@ export interface SessionModelsShape {
   routable: boolean
   groups: ModelProviderGroupShape[]
   failures: Array<{ id: string; name: string; message: string }>
-}
-
-/** The complete provider/model/reasoning selection (dsh-agent ModelSelection). */
-export interface ModelSelectionShape {
-  provider: string
-  model: string
-  reasoningEffort?: string
 }
 
 /** Signature-layer narrow request form (RpcId brand erased at this seam). */
@@ -444,6 +460,70 @@ export async function listSessionIds(
   }
   log?.('discord_session_list_rejected', { code: result.error.code })
   return { outcome: 'failed' }
+}
+
+/** A list row narrowed to what the /session resume surface renders. */
+export interface SessionResumeRow {
+  sessionId: string
+  title: string | undefined
+  updatedAt: number
+  running: boolean
+  blank: boolean
+  cwd: string | undefined
+}
+
+export type SessionSummariesOutcome =
+  | { outcome: 'completed'; sessions: SessionResumeRow[] }
+  | { outcome: 'failed' }
+  | { outcome: 'unknown' }
+
+/**
+ * The rich `sessions.list` for the /session resume surface: titles ride each
+ * row's projection values (absence = the session has no title yet), blank
+ * sessions are flagged, and rows arrive updatedAt-descending. Defensive
+ * narrowing: the wire is untrusted, extra/missing fields never throw.
+ */
+export async function listSessionSummaries(
+  dsh: DshApiProxyFace,
+  options: ApiProxyFaceOptions = {},
+): Promise<SessionSummariesOutcome> {
+  const timeoutMs = options.timeoutMs ?? CATALOG_TIMEOUT_MS
+  const log = options.log
+  let response: RpcResponseShape<{ items: SessionSummaryShape[] }>
+  try {
+    response = await withRpcTimeout(dsh.sessions.list(mintRequest({})), timeoutMs)
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      log?.('discord_session_summaries_timeout', { timeoutMs })
+      return { outcome: 'unknown' }
+    }
+    log?.('discord_session_summaries_threw', { cause: String(cause) })
+    return { outcome: 'unknown' }
+  }
+  const result = (response as Partial<RpcResponseShape<{ items: SessionSummaryShape[] }>> | undefined)?.result
+  if (result === undefined || !result.ok || !Array.isArray(result.value.items)) {
+    log?.('discord_session_summaries_malformed')
+    return { outcome: 'failed' }
+  }
+  const sessions: SessionResumeRow[] = []
+  // The wire is untrusted: narrow every row defensively before use.
+  const items: unknown[] = Array.isArray(result.value.items) ? result.value.items : []
+  for (const item of items) {
+    if (typeof item !== 'object' || item === null) continue
+    const row = item as Partial<SessionSummaryShape> & { projections?: { values?: { title?: unknown } } }
+    if (typeof row.sessionId !== 'string' || row.sessionId === '') continue
+    const values = row.projections?.values
+    const title = typeof values?.title === 'string' && values.title !== '' ? values.title : undefined
+    sessions.push({
+      sessionId: row.sessionId,
+      title,
+      updatedAt: typeof row.updatedAt === 'number' ? row.updatedAt : 0,
+      running: row.running ?? false,
+      blank: row.blank === true,
+      cwd: typeof row.cwd === 'string' ? row.cwd : undefined,
+    })
+  }
+  return { outcome: 'completed', sessions }
 }
 
 export type CancelOutcome =
