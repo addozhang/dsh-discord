@@ -61,11 +61,24 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   不再收养，被删除的绑定频道按用户意图 retire 映射
 - **控制频道（类目下 general）**不承载会话，也不参与 /session resume
 
-## rc.2 Host RPC 面的事实（2026-08 核对）
+## rc.2 Host RPC 面的事实（2026-08 核对；图片项 2026-09-01 真机核实）
 
 - `sessions.list` 行含 `updatedAt`（倒序）/`running`/`blank`/`cwd`/
   `origin`（"subagent"）/`projections.values.title`（缺省 = 尚无标题）；
   **无** `session.inspect`、history RPC、archived 字段（行不标记归档）
+- `session.prompt` 载荷 zod schema（`dsh-host-apiproxy` 内
+  `promptContentPartSchema`）：`content` 是 parts 数组——
+  `{type:'text',text}` 与 `{type:'image',mediaType,data,name?}`；
+  media type 仅 `image/png|jpeg|webp|gif`；另有独立的 `session.attachment`
+  上传 RPC（浏览器路径），base64 直发 parts 同样合法
+- **图片 modality 门在 Host 侧**：prompt 带图时 Host 用 pi-ai **静态目录**
+  的 `input` 字段判定（`resolveModelInfo → inputModalities`；缺省
+  `DEFAULT_INPUT = ["text"]`），不声明 `input: [text, image]` 的模型会在
+  准入层被拒（`attachment-error`/`MODEL_DOES_NOT_SUPPORT_IMAGES`），与其
+  真实视觉能力无关。适配器**不要**自建 modality 门。让某模型收图 =
+  在 `~/.dsh/settings.yaml` 该模型条目加 `input: [text, image]`
+- `model-unavailable` = 会话当前 provider 无服务适配器（老会话指向已下线
+  provider 时任何消息都被拒），与消息内容无关
 - `workspace.list` 值含每行 `path`（realpath 规范化，如 /tmp→/private/tmp）
   与 registry 级 `archivedSessionIds`——**归档信息只在这里**；归档会话可被
   恢复/adopt 但永远不运行 turn（表现：线程里发消息无任何响应）

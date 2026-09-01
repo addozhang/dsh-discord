@@ -9,7 +9,7 @@
  * cap, not by streaming. Refusals are plain values.
  */
 
-import type { HttpFetchPort } from './image-download.js'
+import { createHttpFetchPort, fetchSafeImage, type HttpFetchPort } from './image-download.js'
 
 /** Per-image cap (design: bounded by DSH-advertised limits; adapter-capped). */
 export const MAX_IMAGE_BYTES = 8 * 1_024 * 1_024
@@ -33,8 +33,26 @@ export interface ImageAttachment {
   contentType: string
 }
 
+/**
+ * The production download port (16.50): every fetch rides the safe boundary
+ * — allowlisted Discord CDN hosts over HTTPS, one revalidated redirect hop,
+ * supported media types only.
+ */
+export function createSafeImageDownloadPort(): ImageDownloadPort {
+  const http: HttpFetchPort = createHttpFetchPort()
+  return {
+    download: request => fetchSafeImage(http, { url: request.url }),
+  }
+}
+
 export type ImageCollectionResult =
-  | { outcome: 'collected'; images: number; totalBytes: number }
+  | {
+    outcome: 'collected'
+    images: number
+    totalBytes: number
+    /** The downloaded images in attachment order (16.50): callers encode them for submission. */
+    downloaded: ReadonlyArray<{ mediaType: string; body: Uint8Array }>
+  }
   | { outcome: 'too-large'; reason: 'declared' | 'actual' | 'aggregate' }
   | { outcome: 'timeout' }
   | { outcome: 'download-failed' }
@@ -72,6 +90,7 @@ export function collectImages(
   let remainingAggregate = MAX_AGGREGATE_IMAGE_BYTES
   let images = 0
   let totalBytes = 0
+  const downloaded: Array<{ mediaType: string; body: Uint8Array }> = []
 
   const inner = port as ImageDownloadPort & HttpFetchPort
 
@@ -91,29 +110,30 @@ export function collectImages(
         timer = setTimeout(() => { resolve('timeout') }, request.timeoutMs)
       })
 
-      const downloaded = await Promise.race([
+      const downloadedImage = await Promise.race([
         bounded.download({ url: attachment.url }).then((result): ImageCollectionResult | typeof result => result),
         timeout,
       ]).finally(() => {
         if (timer !== undefined) clearTimeout(timer)
       })
 
-      if (downloaded === 'timeout') return { outcome: 'timeout' }
-      if (downloaded.outcome === 'downloaded') {
-        if (downloaded.body.byteLength > MAX_IMAGE_BYTES) {
+      if (downloadedImage === 'timeout') return { outcome: 'timeout' }
+      if (downloadedImage.outcome === 'downloaded') {
+        if (downloadedImage.body.byteLength > MAX_IMAGE_BYTES) {
           return { outcome: 'too-large', reason: 'actual' }
         }
         images += 1
-        totalBytes += downloaded.body.byteLength
-        remainingAggregate -= downloaded.body.byteLength
+        totalBytes += downloadedImage.body.byteLength
+        remainingAggregate -= downloadedImage.body.byteLength
+        downloaded.push({ mediaType: downloadedImage.mediaType, body: downloadedImage.body })
         continue
       }
-      if (downloaded.outcome === 'http-error' && downloaded.status === 413) {
+      if (downloadedImage.outcome === 'http-error' && downloadedImage.status === 413) {
         return { outcome: 'too-large', reason: 'actual' }
       }
       return { outcome: 'download-failed' }
     }
-    return { outcome: 'collected', images, totalBytes }
+    return { outcome: 'collected', images, totalBytes, downloaded }
   }
 
   return run()

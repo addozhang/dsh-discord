@@ -82,3 +82,51 @@ describe('prompt submission', () => {
     expect(submitFn).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('prompt submission with images (16.50)', () => {
+  const PNG = { mediaType: 'image/png', base64: 'cG5n' }
+  const GIF = { mediaType: 'image/gif', base64: 'Z2lm' }
+
+  it('carries images through to the port on the submitted request', async () => {
+    const { flow, submitFn } = setup(() => Promise.resolve({ outcome: 'accepted' }))
+    const result = await flow.submitOnce({ ...REQUEST, images: [PNG] })
+    expect(result).toEqual({ outcome: 'accepted' })
+    expect(submitFn.mock.calls[0]?.[0]).toEqual({
+      requestId: 'req-1',
+      sessionId: 'sess-1',
+      prompt: 'do the thing',
+      mode: 'queue',
+      images: [PNG],
+    })
+  })
+
+  it('keeps text-only requests at the exact legacy wire shape (no images key)', async () => {
+    const { flow, submitFn } = setup(() => Promise.resolve({ outcome: 'accepted' }))
+    await flow.submitOnce(REQUEST)
+    expect(Object.keys(submitFn.mock.calls[0]?.[0] ?? {})).toEqual(['requestId', 'sessionId', 'prompt', 'mode'])
+  })
+
+  it('dedupes a replay of the same id with the same images', async () => {
+    const { flow, submitFn } = setup(() => Promise.resolve({ outcome: 'accepted' }))
+    await flow.submitOnce({ ...REQUEST, images: [PNG] })
+    const replay = await flow.submitOnce({ ...REQUEST, images: [PNG] })
+    expect(replay).toEqual({ outcome: 'already-submitted' })
+    expect(submitFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('conflicts when the same request id carries a different image', async () => {
+    const { flow, submitFn } = setup(() => Promise.resolve({ outcome: 'accepted' }))
+    await flow.submitOnce({ ...REQUEST, images: [PNG] })
+    const conflict = await flow.submitOnce({ ...REQUEST, images: [GIF] })
+    expect(conflict).toEqual({ outcome: 'conflict' })
+    expect(submitFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('hashes images separately from text: same image + different text conflicts', async () => {
+    const { flow, submitFn } = setup(() => Promise.resolve({ outcome: 'accepted' }))
+    await flow.submitOnce({ ...REQUEST, images: [PNG] })
+    const conflict = await flow.submitOnce({ ...REQUEST, prompt: 'DIFFERENT', images: [PNG] })
+    expect(conflict).toEqual({ outcome: 'conflict' })
+    expect(submitFn).toHaveBeenCalledTimes(1)
+  })
+})

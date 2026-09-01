@@ -5,9 +5,9 @@
  * before any fetch.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { fetchSafeImage, validateImageUrl, type HttpFetchPort } from '../src/features/image-download.js'
+import { createHttpFetchPort, fetchSafeImage, validateImageUrl, type HttpFetchPort } from '../src/features/image-download.js'
 
 interface StubResponse {
   status?: number
@@ -109,5 +109,45 @@ describe('fetchSafeImage', () => {
     const port = fetchPort({ status: 404 })
     expect(await fetchSafeImage(port, { url: 'https://cdn.discordapp.com/gone.png' }))
       .toEqual({ outcome: 'http-error', status: 404 })
+  })
+})
+
+describe('createHttpFetchPort (production fetch boundary)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('maps a 200 image response onto the port shape with the body bytes', async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71])
+    vi.stubGlobal('fetch', vi.fn((_url: string | URL | Request) =>
+      Promise.resolve(new Response(bytes, {
+        status: 200,
+        headers: { 'content-type': 'image/png' },
+      }))))
+    const result = await createHttpFetchPort().fetch('https://cdn.discordapp.com/a.png')
+    expect(result.status).toBe(200)
+    expect(result.contentType).toBe('image/png')
+    expect(result.location).toBeUndefined()
+    expect(result.body).toEqual(bytes)
+  })
+
+  it('exposes the redirect location without reading a body', async () => {
+    const fetchMock = vi.fn((_url: string | URL | Request) =>
+      Promise.resolve(new Response(null, {
+        status: 302,
+        headers: { location: 'https://cdn.discordapp.com/real.png' },
+      })))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await createHttpFetchPort().fetch('https://cdn.discordapp.com/a.png')
+    expect(result.status).toBe(302)
+    expect(result.location).toBe('https://cdn.discordapp.com/real.png')
+    expect(result.body).toBeUndefined()
+  })
+
+  it('leaves content type and body undefined when the response omits them', async () => {
+    vi.stubGlobal('fetch', vi.fn((_url: string | URL | Request) =>
+      Promise.resolve(new Response(null, { status: 404 }))))
+    const result = await createHttpFetchPort().fetch('https://cdn.discordapp.com/gone.png')
+    expect(result.status).toBe(404)
+    expect(result.contentType).toBeUndefined()
+    expect(result.body).toBeUndefined()
   })
 })

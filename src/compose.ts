@@ -36,6 +36,8 @@ export interface SessionMainlinePort {
     authorId: string
     workspaceId: string
     prompt: string
+    /** Declared image attachments carried by the message (16.50). */
+    images: ReadonlyArray<{ url: string; filename: string; declaredSize: number; contentType: string }>
   }): Promise<
     | { outcome: 'admitted'; threadId: string; sessionId: string }
     | { outcome: 'thread-conflict' }
@@ -44,6 +46,7 @@ export interface SessionMainlinePort {
     | { outcome: 'session-unknown' }
     | { outcome: 'prompt-rejected' }
     | { outcome: 'prompt-unknown' }
+    | { outcome: 'image-failed'; reason: string }
   >
   continueInThread(request: {
     applicationId: string
@@ -52,12 +55,15 @@ export interface SessionMainlinePort {
     sessionId: string
     messageId: string
     prompt: string
+    /** Declared image attachments carried by the message (16.50). */
+    images: ReadonlyArray<{ url: string; filename: string; declaredSize: number; contentType: string }>
   }): Promise<
     | { outcome: 'queued' }
     | { outcome: 'already-submitted' }
     | { outcome: 'conflict' }
     | { outcome: 'rejected' }
     | { outcome: 'unknown' }
+    | { outcome: 'image-failed'; reason: string }
   >
 }
 
@@ -145,11 +151,14 @@ export interface DiscordAdapterRuntime {
 export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent, decision: AccessDecision): void {
   if (event.kind === 'message') {
     const prompt = event.content.trim()
+    const images = event.images
+    // Text and images are independent task carriers: either alone admits.
+    const hasTask = prompt !== '' || images.length > 0
 
     // Adapter-owned thread: ordinary continuation, no mention required.
     const sessionId = deps.bindings.sessionForThread(event.guildId, event.channelId)
     if (sessionId !== undefined) {
-      if (prompt === '') return
+      if (!hasTask) return
       const request = {
         applicationId: deps.applicationId(),
         guildId: event.guildId,
@@ -157,10 +166,11 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
         sessionId,
         messageId: event.messageId,
         prompt,
+        images,
       }
       void deps.mainline.continueInThread(request)
         .then((result) => {
-          if (result.outcome === 'rejected' || result.outcome === 'unknown') {
+          if (result.outcome === 'rejected' || result.outcome === 'unknown' || result.outcome === 'image-failed') {
             deps.logger?.warn('discord_continuation_not_queued', { ...result, messageId: event.messageId })
           }
         })
@@ -190,7 +200,7 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
       }
       return
     }
-    if (prompt === '') return
+    if (!hasTask) return
     void deps.mainline.admitMention({
       applicationId: deps.applicationId(),
       guildId: event.guildId,
@@ -199,6 +209,7 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
       authorId: event.authorId,
       workspaceId,
       prompt,
+      images,
     })
       .then((result) => {
         if (result.outcome !== 'admitted') {

@@ -33,7 +33,7 @@ export interface DshApiProxyFace {
     prompt(request: RpcRequestShape<{
       sessionId: string
       mode: 'queue' | 'steer'
-      content: Array<{ type: 'text'; text: string }>
+      content: Array<{ type: 'text'; text: string } | { type: 'image'; mediaType: string; data: string }>
     }>): Promise<RpcResponseShape<{ accepted: true }>>
     create(request: RpcRequestShape<{
       workspaceId?: string
@@ -328,10 +328,16 @@ export type PromptOutcome =
  * the turn may or may not have been admitted, so callers must not resubmit.
  * `options.rpcId` pins the adapter-owned stable request id, which the Host
  * records on the durable `user/message` (`source.rpcId`) for reconciliation.
+ * Images (16.50) encode as ordered `image` parts after the text part — the
+ * rc.2 `session.prompt` content is parts-shaped at this seam.
  */
 export async function promptSession(
   dsh: DshApiProxyFace,
-  request: { sessionId: string; prompt: string },
+  request: {
+    sessionId: string
+    prompt: string
+    images?: ReadonlyArray<{ mediaType: string; base64: string }>
+  },
   options: ApiProxyFaceOptions & { rpcId?: string } = {},
 ): Promise<PromptOutcome> {
   return submitPromptTurn(dsh, { ...request, mode: 'queue' }, options)
@@ -351,7 +357,12 @@ export async function steerSession(
 
 async function submitPromptTurn(
   dsh: DshApiProxyFace,
-  request: { sessionId: string; prompt: string; mode: 'queue' | 'steer' },
+  request: {
+    sessionId: string
+    prompt: string
+    mode: 'queue' | 'steer'
+    images?: ReadonlyArray<{ mediaType: string; base64: string }>
+  },
   options: ApiProxyFaceOptions & { rpcId?: string },
 ): Promise<PromptOutcome> {
   const timeoutMs = options.timeoutMs ?? PROMPT_TIMEOUT_MS
@@ -362,7 +373,10 @@ async function submitPromptTurn(
       dsh.sessions.prompt(mintRequest({
         sessionId: request.sessionId,
         mode: request.mode,
-        content: [{ type: 'text', text: request.prompt }],
+        content: [
+          { type: 'text', text: request.prompt },
+          ...(request.images ?? []).map(image => ({ type: 'image' as const, mediaType: image.mediaType, data: image.base64 })),
+        ],
       }, options.rpcId)),
       timeoutMs,
     )

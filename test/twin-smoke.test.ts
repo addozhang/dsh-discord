@@ -108,6 +108,13 @@ describe('twin smoke: mention mainline over the real wire', () => {
         return Promise.resolve({ outcome: 'accepted' })
       },
     }
+    /** Deterministic collector: proves declared wire metadata reached the flow. */
+    const images = {
+      collect: (request: { attachments: ReadonlyArray<unknown> }) => Promise.resolve({
+        outcome: 'collected' as const,
+        images: request.attachments.map((_attachment, index) => ({ mediaType: 'image/png', base64: `img-${String(index)}` })),
+      }),
+    }
     const mainline = createSessionMainline({
       threads: createThreadCreationFlow({ intents, discord: threadPort, nowMs: () => Date.now() }),
       sessions: createSessionCreationFlow({
@@ -117,6 +124,7 @@ describe('twin smoke: mention mainline over the real wire', () => {
       }),
       prompts: createPromptSubmissionFlow({ prompts, intents, nowMs: () => Date.now() }),
       turns: createTurnTracker(),
+      images,
     })
 
     runtime = startDiscordAdapter({
@@ -199,6 +207,29 @@ describe('twin smoke: mention mainline over the real wire', () => {
       mode: 'queue',
     })
     expect(promptCalls[1]?.requestId).not.toBe(promptCalls[0]?.requestId)
+  }, 20_000)
+
+  it('carries a message attachment through the wire into the prompt as image parts (16.50)', async () => {
+    const scope = discord.channel(CHANNEL)
+    const thread = await scope.waitForThread({ timeout: 10_000, predicate: t => t.name === 'hello world' })
+
+    await discord.thread(thread.id).user(USER).sendMessage({
+      content: 'and what is in this picture?',
+      attachments: [{
+        id: '999999999999999999',
+        filename: 'chart.png',
+        content_type: 'image/png',
+        size: 2048,
+        url: 'https://cdn.discordapp.com/attachments/1/2/chart.png?ex=abc',
+      } as never],
+    })
+    await vi.waitFor(() => { expect(promptCalls).toHaveLength(3) })
+    expect(promptCalls[2]).toMatchObject({
+      sessionId: 'sess-twin-1',
+      prompt: 'and what is in this picture?',
+      mode: 'queue',
+      images: [{ mediaType: 'image/png', base64: 'img-0' }],
+    })
   }, 20_000)
 })
 
@@ -851,6 +882,9 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
       }),
       prompts: createPromptSubmissionFlow({ prompts, intents, nowMs: () => Date.now() }),
       turns: createTurnTracker(),
+      images: {
+        collect: () => Promise.resolve({ outcome: 'collected' as const, images: [] }),
+      },
     })
 
     // The fake DSH mux: a pushable frame source the test drives after admission.

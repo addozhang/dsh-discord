@@ -12,11 +12,24 @@ import { hashPayload, type IntentStore } from '../state/intents.js'
 
 /** The DSH prompt surface the flow needs (session.prompt in production). */
 export interface DshPromptPort {
-  submit(request: { requestId: string; sessionId: string; prompt: string; mode: 'queue' }): Promise<
+  submit(request: {
+    requestId: string
+    sessionId: string
+    prompt: string
+    mode: 'queue'
+    /** Collected images (16.50); omitted for text-only prompts so legacy shapes are untouched. */
+    images?: ReadonlyArray<PromptRequestImage>
+  }): Promise<
     | { outcome: 'accepted' }
     | { outcome: 'rejected'; reason: string }
     | { outcome: 'unknown' }
   >
+}
+
+/** One collected image, ready for the prompt parts encoding. */
+export interface PromptRequestImage {
+  mediaType: string
+  base64: string
 }
 
 export interface PromptSubmissionDeps {
@@ -36,6 +49,8 @@ export interface PromptRequest {
   requestId: string
   sessionId: string
   prompt: string
+  /** Collected images (16.50); omitted for text-only prompts. */
+  images?: ReadonlyArray<PromptRequestImage>
 }
 
 export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
@@ -43,7 +58,12 @@ export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
   retry(request: PromptRequest, options: { newRequestId: string }): Promise<PromptSubmissionResult>
 } {
   async function submit(requestId: string, request: PromptRequest): Promise<PromptSubmissionResult> {
-    const contentHash = await hashPayload({ sessionId: request.sessionId, prompt: request.prompt })
+    const images = request.images ?? []
+    const contentHash = await hashPayload({
+      sessionId: request.sessionId,
+      prompt: request.prompt,
+      ...(images.length > 0 ? { images } : {}),
+    })
     const claim = await deps.intents.claim({
       messageId: requestId,
       contentHash,
@@ -60,6 +80,7 @@ export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
       sessionId: request.sessionId,
       prompt: request.prompt,
       mode: 'queue',
+      ...(images.length > 0 ? { images } : {}),
     })
 
     if (submitted.outcome === 'accepted') {

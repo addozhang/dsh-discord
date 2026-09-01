@@ -107,3 +107,25 @@ function isParseable(rawUrl: string): boolean {
 export function fetchSafeImage(port: HttpFetchPort, request: { url: string }): Promise<SafeImageResult> {
   return fetchOnce(port, MAX_REDIRECTS, request)
 }
+
+/**
+ * The production fetch boundary over the platform `fetch` (16.50). Redirects
+ * are NOT followed here — `fetchSafeImage` revalidates every hop itself —
+ * and the body is only read for a terminal 200 response.
+ */
+export function createHttpFetchPort(): HttpFetchPort {
+  return {
+    async fetch(url: string) {
+      const response = await fetch(url, { redirect: 'manual' })
+      const location = response.headers.get('location')
+      const contentType = response.headers.get('content-type')
+      const body = response.status === 200 ? new Uint8Array(await response.arrayBuffer()) : undefined
+      return {
+        status: response.status,
+        contentType: contentType ?? undefined,
+        location: location ?? undefined,
+        body,
+      }
+    },
+  }
+}

@@ -18,7 +18,7 @@
 
 ## 功能
 
-- **@提及驱动会话** — 在已绑定的频道中，被授权的 `@机器人 <任务>` 会锚定一个线程（你的消息成为首帖）、创建 DSH 会话，并且至多提交一次。线程内的后续消息无需 @ 即可排队。
+- **@提及驱动会话** — 在已绑定的频道中，被授权的 `@机器人 <任务>` 会锚定一个线程（你的消息成为首帖）、创建 DSH 会话，并且至多提交一次。线程内的后续消息无需 @ 即可排队。消息附带的图片会一并送达：在严格的大小与主机白名单约束下从 Discord CDN 下载，并作为 image parts 提交给多模态模型。
 - **流式渲染** — typing 指示、单条头消息原地编辑、逐工具活动行、代码围栏感知的长文分段、一次性收尾；Turn 结束时活动消息会被删除。
 - **审批与提问** — DSH ask 帧渲染为按钮、下拉菜单与自由文本弹窗。所有权强制校验（提问者——或后续 Turn 的线程属主——才能点击），超时清扫 fail-closed，结算后的控件原地置灰。
 - **会话控制** — `/steer`、`/stop`、`/queue list|remove` 带运行所有权校验；`/project bind|list|info` 与 `/session resume` 管理 Guild↔工作区绑定与历史会话；`/guild forget` 供操作员清理。
@@ -133,7 +133,7 @@ dsh-discord:
 
 ```sh
 pnpm install --ignore-scripts
-pnpm test          # 650 tests incl. gateway/REST twin E2E
+pnpm test          # 683 tests incl. gateway/REST twin E2E
 pnpm typecheck
 pnpm lint
 pnpm build         # lib + client bundle

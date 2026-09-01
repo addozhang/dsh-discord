@@ -219,6 +219,32 @@ describe('promptSession', () => {
       content: [{ type: 'text', text: 'hi' }],
     })
   })
+
+  it('encodes image attachments as ordered image parts after the text part (16.50)', async () => {
+    const seen: Array<{ payload: unknown }> = []
+    const capturing = face(undefined, Promise.resolve(ok({ accepted: true })))
+    capturing.sessions.prompt = (request) => {
+      seen.push({ payload: request.payload })
+      return Promise.resolve(ok({ accepted: true })) as ReturnType<DshApiProxyFace['sessions']['prompt']>
+    }
+    await promptSession(capturing, {
+      sessionId: 's-1',
+      prompt: 'what is this',
+      images: [
+        { mediaType: 'image/png', base64: 'cG5n' },
+        { mediaType: 'image/gif', base64: 'Z2lm' },
+      ],
+    })
+    expect(seen[0]?.payload).toEqual({
+      sessionId: 's-1',
+      mode: 'queue',
+      content: [
+        { type: 'text', text: 'what is this' },
+        { type: 'image', mediaType: 'image/png', data: 'cG5n' },
+        { type: 'image', mediaType: 'image/gif', data: 'Z2lm' },
+      ],
+    })
+  })
 })
 
 describe('createSessionViaProxy', () => {

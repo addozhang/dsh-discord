@@ -45,7 +45,8 @@ import { createThreadCreationFlow, type DiscordThreadPort } from './features/thr
 import { createSessionCreationFlow, type DshSessionPort } from './features/session-creation.js'
 import { createResumeCandidatesPort } from './features/session-resume.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from './features/prompt-submission.js'
-import { createSessionMainline, requestIdFor } from './features/session-mainline.js'
+import { createSessionMainline, requestIdFor, type MainlineImageCollector } from './features/session-mainline.js'
+import { collectImages, createSafeImageDownloadPort } from './features/image-collection.js'
 import { startLiveRender } from './stream/live.js'
 import type { ChannelBinding, ThreadBinding } from './state/records.js'
 import type { PolicyTable } from './policy/authorization.js'
@@ -320,9 +321,39 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const dshPromptPort: DshPromptPort = {
       submit: request => promptSession(
         apiProxy,
-        { sessionId: request.sessionId, prompt: request.prompt },
+        {
+          sessionId: request.sessionId,
+          prompt: request.prompt,
+          ...(request.images === undefined ? {} : { images: request.images }),
+        },
         { log: rpcLog, rpcId: request.requestId },
       ),
+    }
+    /**
+     * The bounded image collection boundary (16.50): downloads ride the
+     * safe-download port (allowlisted CDN hosts, capped sizes, timeout) and
+     * come back base64-encoded for the prompt parts.
+     */
+    const IMAGE_DOWNLOAD_TIMEOUT_MS = 15_000
+    const imageCollector: MainlineImageCollector = {
+      collect: async ({ attachments }) => {
+        const result = await collectImages(createSafeImageDownloadPort(), {
+          nowMs: Date.now(),
+          timeoutMs: IMAGE_DOWNLOAD_TIMEOUT_MS,
+          attachments,
+        })
+        if (result.outcome !== 'collected') {
+          const reason = result.outcome === 'too-large' ? `too-large:${result.reason}` : result.outcome
+          return { outcome: 'failed', reason }
+        }
+        return {
+          outcome: 'collected',
+          images: result.downloaded.map(image => ({
+            mediaType: image.mediaType,
+            base64: Buffer.from(image.body).toString('base64'),
+          })),
+        }
+      },
     }
     const composedMainline = createSessionMainline({
       threads: createThreadCreationFlow({
@@ -341,6 +372,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         nowMs: () => Date.now(),
       }),
       turns: turnTracker,
+      images: imageCollector,
     })
     /** Mainline outcome → copy key; the string resolves live per language. */
     const MAINLINE_FAILURE_KEYS = {
@@ -350,6 +382,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       'session-unknown': 'mainlineSessionUnknown',
       'prompt-rejected': 'mainlinePromptRejected',
       'prompt-unknown': 'mainlinePromptUnknown',
+      'image-failed': 'mainlineImageFailed',
     } as const satisfies Record<string, keyof CopyTable>
     const mainline = {
       admitMention: async (request: Parameters<typeof composedMainline.admitMention>[0]) => {
@@ -369,9 +402,13 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       },
       continueInThread: async (request: Parameters<typeof composedMainline.continueInThread>[0]) => {
         const result = await composedMainline.continueInThread(request)
-        if (result.outcome === 'rejected' || result.outcome === 'unknown') {
+        if (result.outcome === 'rejected' || result.outcome === 'unknown' || result.outcome === 'image-failed') {
           rpcLog('discord_continuation_not_queued', { messageId: request.messageId, outcome: result.outcome })
-          const notice = result.outcome === 'rejected' ? copy.continuationRejected : copy.continuationUnknown
+          const notice = result.outcome === 'rejected'
+            ? copy.continuationRejected
+            : result.outcome === 'image-failed'
+              ? copy.mainlineImageFailed
+              : copy.continuationUnknown
           void withRest(rest => rest.request('POST', `/channels/${request.threadId}/messages`, { content: notice, flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, allowed_mentions: ALLOWED_MENTIONS_NONE }))
             .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
         }

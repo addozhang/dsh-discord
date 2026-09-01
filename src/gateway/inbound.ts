@@ -52,6 +52,21 @@ export interface NormalizedMessage {
   mentionedBot: boolean
   /** The snowflake of the message this one replies to, when present and valid. */
   repliedToId: DiscordSnowflake | undefined
+  /**
+   * DECLARED image-attachment metadata (16.50): supported types only,
+   * malformed entries skipped, capped at Discord's per-message limit. No
+   * bytes cross this boundary — download happens later, behind the
+   * allowlisted fetch boundary.
+   */
+  images: DiscordImageAttachment[]
+}
+
+/** One supported image attachment, as declared by the wire. */
+export interface DiscordImageAttachment {
+  url: string
+  filename: string
+  declaredSize: number
+  contentType: string
 }
 
 /** A validated guild interaction with its actor identity. */
@@ -110,6 +125,42 @@ function asSnowflake(value: unknown): DiscordSnowflake | undefined {
   return isDiscordSnowflake(value) ? value : undefined
 }
 
+/** Image content types the adapter carries (design.md §12). */
+const SUPPORTED_IMAGE_TYPES: ReadonlySet<string> = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+])
+
+/** Discord's per-message attachment cap; a defensive bound on untrusted input. */
+const MAX_MESSAGE_IMAGES = 10
+
+/**
+ * Narrow untrusted `attachments` onto declared image metadata. Entries that
+ * are not records, lack any required field, or declare an unsupported media
+ * type are skipped — a malformed attachment never rejects the message.
+ */
+function extractImages(payload: Record<string, unknown>): DiscordImageAttachment[] {
+  const raw = payload['attachments']
+  if (!Array.isArray(raw)) return []
+  const images: DiscordImageAttachment[] = []
+  for (const entry of raw) {
+    if (images.length >= MAX_MESSAGE_IMAGES) break
+    if (!isRecord(entry)) continue
+    const url = entry['url']
+    const filename = entry['filename']
+    const size = entry['size']
+    const contentType = entry['content_type']
+    if (typeof url !== 'string' || url === '') continue
+    if (typeof filename !== 'string' || filename === '') continue
+    if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) continue
+    if (typeof contentType !== 'string' || !SUPPORTED_IMAGE_TYPES.has(contentType)) continue
+    images.push({ url, filename, declaredSize: size, contentType })
+  }
+  return images
+}
+
 function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowflake): IngestResult {
   // Webhook-authored messages are app-driven surfaces, not member input:
   // their author object need not carry `bot: true`, and anyone with
@@ -164,6 +215,7 @@ function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowf
       content: stripped.text,
       mentionedBot: stripped.mentioned,
       repliedToId,
+      images: extractImages(payload),
     },
   }
 }

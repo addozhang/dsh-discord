@@ -10,6 +10,7 @@ import {
   extractBotMention,
   isDiscordSnowflake,
   parseGatewayDispatch,
+  type DiscordImageAttachment,
   type GatewayDispatch,
 } from '../src/gateway/inbound.js'
 
@@ -84,6 +85,7 @@ describe('parseGatewayDispatch', () => {
         content: 'ship it',
         mentionedBot: true,
         repliedToId: undefined,
+        images: [],
       },
     })
   })
@@ -206,5 +208,75 @@ describe('parseGatewayDispatch', () => {
     const result = parseGatewayDispatch(messageDispatch(payload), SELF_USER_ID)
     expect(result.accepted).toBe(false)
     if (!result.accepted) expect(result.reason).toBe('non-guild-event')
+  })
+})
+
+describe('message image attachments (16.50)', () => {
+  function attachment(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: '999999999999999999',
+      filename: 'chart.png',
+      content_type: 'image/png',
+      size: 1234,
+      url: 'https://cdn.discordapp.com/attachments/1/2/chart.png?ex=abc&is=def&hm=ghi',
+      ...overrides,
+    }
+  }
+
+  function parsedImages(payload: Record<string, unknown>): DiscordImageAttachment[] {
+    const result = parseGatewayDispatch(messageDispatch(messagePayload(payload)), SELF_USER_ID)
+    if (!result.accepted || result.event.kind !== 'message') throw new Error('expected an accepted message')
+    return result.event.images
+  }
+
+  it('carries declared image metadata on the normalized message', () => {
+    expect(parsedImages({ attachments: [attachment()] })).toEqual([{
+      url: 'https://cdn.discordapp.com/attachments/1/2/chart.png?ex=abc&is=def&hm=ghi',
+      filename: 'chart.png',
+      declaredSize: 1234,
+      contentType: 'image/png',
+    }])
+  })
+
+  it('keeps only the supported image content types', () => {
+    const images = parsedImages({
+      attachments: [
+        attachment({ filename: 'a.jpeg', content_type: 'image/jpeg' }),
+        attachment({ filename: 'b.webp', content_type: 'image/webp' }),
+        attachment({ filename: 'c.gif', content_type: 'image/gif' }),
+        attachment({ filename: 'paper.pdf', content_type: 'application/pdf' }),
+        attachment({ filename: 'clip.mov', content_type: 'video/quicktime' }),
+        attachment({ filename: 'nope', content_type: 'image/heic' }),
+      ],
+    })
+    expect(images.map(image => image.filename)).toEqual(['a.jpeg', 'b.webp', 'c.gif'])
+  })
+
+  it('skips malformed attachment entries without rejecting the message', () => {
+    const images = parsedImages({
+      attachments: [
+        'not-a-record',
+        attachment({ url: '' }),
+        attachment({ size: '1234' }),
+        attachment({ size: -1 }),
+        attachment({ content_type: 42 }),
+        { id: '888888888888888888' },
+        attachment(),
+      ],
+    })
+    expect(images).toHaveLength(1)
+    expect(images[0]?.filename).toBe('chart.png')
+  })
+
+  it('caps parsed attachments at Discord\'s per-message image limit', () => {
+    const attachments = Array.from({ length: 12 }, (_, index) =>
+      attachment({ id: String(8000000000000000000 + index), filename: `img-${String(index)}.png` }))
+    const images = parsedImages({ attachments })
+    expect(images).toHaveLength(10)
+  })
+
+  it('normalizes to an empty list when the message carries no usable attachments field', () => {
+    expect(parsedImages({})).toEqual([])
+    expect(parsedImages({ attachments: 'garbage' })).toEqual([])
   })
 })

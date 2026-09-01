@@ -142,6 +142,7 @@ describe('composed adapter runtime', () => {
       authorId: '555555555555555555',
       workspaceId: 'ws-1',
       prompt: 'deploy the service',
+      images: [],
     })
     expect(runtime.started).toBe(true)
   })
@@ -165,8 +166,49 @@ describe('composed adapter runtime', () => {
       sessionId: 'sess-9',
       messageId: '222222222222222222',
       prompt: 'plain follow-up, no mention',
+      images: [],
     })
     expect(admitMention).not.toHaveBeenCalled()
+  })
+
+  it('admits an image-only mention: empty text with a supported attachment reaches the mainline', async () => {
+    const { admitMention, gatewaySocketRef } = setup('token-abc', undefined)
+    await vi.waitFor(() => { expect(gatewaySocketRef.current).toBeDefined() })
+    gatewaySocketRef.current?.onopen?.()
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({ op: 10, d: { heartbeat_interval: 30_000 } }))
+
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({
+      op: 0,
+      t: 'MESSAGE_CREATE',
+      s: 4,
+      d: dispatchMessage({
+        content: '<@111111111111111111>',
+        attachments: [{
+          id: '999999999999999999',
+          filename: 'screenshot.png',
+          content_type: 'image/png',
+          size: 2048,
+          url: 'https://cdn.discordapp.com/attachments/1/2/screenshot.png?ex=abc',
+        }],
+      }).d,
+    }))
+
+    await vi.waitFor(() => { expect(admitMention).toHaveBeenCalledTimes(1) })
+    expect(admitMention.mock.calls[0]?.[0]).toEqual({
+      applicationId: 'app-1',
+      guildId: '333333333333333333',
+      channelId: '444444444444444444',
+      messageId: '222222222222222222',
+      authorId: '555555555555555555',
+      workspaceId: 'ws-1',
+      prompt: '',
+      images: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/screenshot.png?ex=abc',
+        filename: 'screenshot.png',
+        declaredSize: 2048,
+        contentType: 'image/png',
+      }],
+    })
   })
 
   it('stays silent for unbound channels and unauthorized guilds', async () => {

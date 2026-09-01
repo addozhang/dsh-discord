@@ -18,7 +18,7 @@ No extra process: the adapter is a DSH plugin that mounts straight onto your `ds
 
 ## Features
 
-- **Mention-driven sessions** — an authorized `@bot <task>` in a bound channel anchors a thread (your message becomes the first post), creates the DSH session, and submits the prompt at most once. Follow-ups inside the thread queue without a mention.
+- **Mention-driven sessions** — an authorized `@bot <task>` in a bound channel anchors a thread (your message becomes the first post), creates the DSH session, and submits the prompt at most once. Follow-ups inside the thread queue without a mention. Attached images ride along: they are downloaded from the Discord CDN within strict size/host bounds and submitted as image parts for multimodal models.
 - **Stream rendering** — typing indicator, one head message edited in place, per-tool activity rows, fenced long-answer splitting, one-time finalize; the activity message is deleted when the turn ends.
 - **Approvals & questions** — DSH ask frames become buttons, select menus, and a free-text modal. Ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and settled controls grey out in place.
 - **Session control** — `/steer`, `/stop`, and `/queue list|remove` with turn-ownership checks; `/project bind|list|info` and `/session resume` for guild↔workspace binding and history; `/guild forget` for operator cleanup.
@@ -132,7 +132,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 
 ```sh
 pnpm install --ignore-scripts
-pnpm test          # 650 tests incl. gateway/REST twin E2E
+pnpm test          # 683 tests incl. gateway/REST twin E2E
 pnpm typecheck
 pnpm lint
 pnpm build         # lib + client bundle
