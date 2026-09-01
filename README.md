@@ -10,7 +10,7 @@
 
 A Discord-first adapter for [DeepSeek Harness](https://github.com/deepseek-ai): run DSH sessions from your Discord guild — mention the bot with a task, a thread opens, the answer streams in, and approvals and questions arrive as buttons you can answer from your phone.
 
-No extra process: the adapter is a DSH plugin that mounts straight onto your `dsh web` profile — no standalone bridge to install, monitor, or restart. Session state stays in DSH; durable bindings live in the profile's storage domain.
+No extra process: the adapter is a DSH plugin that mounts straight onto your `dsh web` profile. Session state stays in DSH; durable bindings live in the profile's storage domain.
 
 <p align="center">
   <img src="docs/images/discord-task-lifecycle.jpg" alt="One task lifecycle: the @mention anchors a thread, tool activity rows stream while the answer edits in place, and the final answer lands as Markdown tables" width="720">

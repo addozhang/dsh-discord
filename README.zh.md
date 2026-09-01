@@ -10,7 +10,7 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai) 的 Discord 优先适配器：在 Discord 服务器中运行 DSH 会话——@机器人下一个任务，线程即开，回答流式输出，审批与提问以按钮形式送到手机上，随手即可回应。
 
-零额外进程：适配器是 DSH 插件，直接挂载到你的 `dsh web` profile——没有需要单独安装、守护、重启的独立桥接进程。会话状态保存在 DSH，持久绑定保存在 profile 的存储域中。
+零额外进程：适配器是 DSH 插件，直接挂载到你的 `dsh web` profile。会话状态保存在 DSH，持久绑定保存在 profile 的存储域中。
 
 <p align="center">
   <img src="docs/images/discord-task-lifecycle.jpg" alt="一次任务的完整生命周期：@提及锚定线程、工具活动行随回答流式编辑、最终以 Markdown 表格落地" width="720">
