@@ -12,6 +12,7 @@ import type { createThreadCreationFlow, ThreadCreationResult } from './thread-cr
 import type { createSessionCreationFlow, SessionCreationResult } from './session-creation.js'
 import type { createPromptSubmissionFlow, PromptSubmissionResult } from './prompt-submission.js'
 import type { TurnTracker } from './turn-ownership.js'
+import type { DiscordAttachment } from '../gateway/inbound.js'
 import { hashPayload } from '../state/intents.js'
 import { safeTitle } from '../policy/disclosure.js'
 
@@ -40,6 +41,7 @@ export interface MentionMainlineRequest {
   authorId: string
   workspaceId: string
   prompt: string
+  images?: DiscordAttachment[]
 }
 
 export type ContinuationMainlineResult =
@@ -56,6 +58,7 @@ export interface ContinuationMainlineRequest {
   sessionId: string
   messageId: string
   prompt: string
+  images?: DiscordAttachment[]
 }
 
 /**
@@ -117,6 +120,7 @@ export function createSessionMainline(deps: SessionMainlineDeps): {
         requestId,
         sessionId,
         prompt: request.prompt,
+        ...(request.images !== undefined ? { images: request.images } : {}),
       })
       if (submitted.outcome === 'accepted') {
         ownTurn(deps, { sessionId, requestId, threadId })
@@ -137,6 +141,7 @@ export function createSessionMainline(deps: SessionMainlineDeps): {
         requestId,
         sessionId: request.sessionId,
         prompt: request.prompt,
+        ...(request.images !== undefined ? { images: request.images } : {}),
       })
       if (submitted.outcome === 'accepted') {
         ownTurn(deps, { sessionId: request.sessionId, requestId, threadId: request.threadId })

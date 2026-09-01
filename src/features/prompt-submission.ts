@@ -9,10 +9,17 @@
  */
 
 import { hashPayload, type IntentStore } from '../state/intents.js'
+import type { DiscordAttachment } from '../gateway/inbound.js'
 
 /** The DSH prompt surface the flow needs (session.prompt in production). */
 export interface DshPromptPort {
-  submit(request: { requestId: string; sessionId: string; prompt: string; mode: 'queue' }): Promise<
+  submit(request: {
+    requestId: string
+    sessionId: string
+    prompt: string
+    images?: DiscordAttachment[]
+    mode: 'queue'
+  }): Promise<
     | { outcome: 'accepted' }
     | { outcome: 'rejected'; reason: string }
     | { outcome: 'unknown' }
@@ -36,6 +43,7 @@ export interface PromptRequest {
   requestId: string
   sessionId: string
   prompt: string
+  images?: DiscordAttachment[]
 }
 
 export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
@@ -59,6 +67,7 @@ export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
       requestId,
       sessionId: request.sessionId,
       prompt: request.prompt,
+      ...(request.images !== undefined ? { images: request.images } : {}),
       mode: 'queue',
     })
 

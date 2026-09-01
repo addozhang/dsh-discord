@@ -35,6 +35,19 @@ export type IngestRejectReason = 'unsupported-event' | 'malformed-payload' | 'bo
 export type IngestResult =
   | { accepted: true; event: NormalizedMessage | NormalizedInteraction }
   | { accepted: false; reason: IngestRejectReason }
+
+/** An image-capable Discord message attachment (normalized from the wire). */
+export interface DiscordAttachment {
+  id: string | undefined
+  /** CDN URL used to download the image; validated against an allowlist downstream. */
+  url: string
+  proxyUrl: string | undefined
+  contentType: string | undefined
+  /** Byte size declared by Discord; used as a pre-fetch bound. */
+  declaredSize: number
+  filename: string | undefined
+}
+
 /** A validated guild message with its mention-stripped content. */
 export interface NormalizedMessage {
   kind: 'message'
@@ -48,6 +61,8 @@ export interface NormalizedMessage {
   memberPermissions: string | undefined
   /** Content after stripping every bot-mention token and trimming. */
   content: string
+  /** Image-capable attachments carried on the message (empty when absent). */
+  attachments: DiscordAttachment[]
   /** Whether the message explicitly mentioned the adapter's bot user. */
   mentionedBot: boolean
   /** The snowflake of the message this one replies to, when present and valid. */
@@ -110,6 +125,26 @@ function asSnowflake(value: unknown): DiscordSnowflake | undefined {
   return isDiscordSnowflake(value) ? value : undefined
 }
 
+/** Extract Discord message attachments into a normalized, image-capable list. */
+function extractAttachments(payload: Record<string, unknown>): DiscordAttachment[] {
+  if (!Array.isArray(payload['attachments'])) return []
+  const attachments: DiscordAttachment[] = []
+  for (const att of payload['attachments']) {
+    if (!isRecord(att)) continue
+    const url = typeof att['url'] === 'string' ? att['url'] : undefined
+    if (url === undefined) continue
+    attachments.push({
+      id: typeof att['id'] === 'string' ? att['id'] : undefined,
+      url,
+      proxyUrl: typeof att['proxy_url'] === 'string' ? att['proxy_url'] : undefined,
+      contentType: typeof att['content_type'] === 'string' ? att['content_type'] : undefined,
+      declaredSize: typeof att['size'] === 'number' ? att['size'] : 0,
+      filename: typeof att['filename'] === 'string' ? att['filename'] : undefined,
+    })
+  }
+  return attachments
+}
+
 function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowflake): IngestResult {
   // Webhook-authored messages are app-driven surfaces, not member input:
   // their author object need not carry `bot: true`, and anyone with
@@ -162,6 +197,7 @@ function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowf
       roleIds: extractRoleIds(payload),
       memberPermissions: rawPermissions,
       content: stripped.text,
+      attachments: extractAttachments(payload),
       mentionedBot: stripped.mentioned,
       repliedToId,
     },

@@ -13,6 +13,7 @@ import { startGateway, type GatewayDispatch, type GatewayHandle, type GatewaySoc
 import { createAuthorizedIngress } from './policy/guard.js'
 import type { AccessDecision, PolicyTable } from './policy/authorization.js'
 import type { NormalizedInboundEvent } from './gateway/ingress.js'
+import type { DiscordAttachment } from './gateway/inbound.js'
 import { planUnboundMention } from './features/unbound-mention.js'
 import { createComponentRegistry, type ComponentRegistry } from './discord/components.js'
 import type { AdapterStatusTracker } from './features/adapter-status.js'
@@ -36,6 +37,7 @@ export interface SessionMainlinePort {
     authorId: string
     workspaceId: string
     prompt: string
+    images?: DiscordAttachment[]
   }): Promise<
     | { outcome: 'admitted'; threadId: string; sessionId: string }
     | { outcome: 'thread-conflict' }
@@ -52,6 +54,7 @@ export interface SessionMainlinePort {
     sessionId: string
     messageId: string
     prompt: string
+    images?: DiscordAttachment[]
   }): Promise<
     | { outcome: 'queued' }
     | { outcome: 'already-submitted' }
@@ -157,6 +160,7 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
         sessionId,
         messageId: event.messageId,
         prompt,
+        images: event.attachments,
       }
       void deps.mainline.continueInThread(request)
         .then((result) => {
@@ -199,6 +203,7 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
       authorId: event.authorId,
       workspaceId,
       prompt,
+      images: event.attachments,
     })
       .then((result) => {
         if (result.outcome !== 'admitted') {

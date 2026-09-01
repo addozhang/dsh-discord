@@ -15,6 +15,13 @@
 import type { ProjectListPort } from '../features/project-list.js'
 import type { WorkspaceResolver } from '../features/project-bind.js'
 import { parseWorkspaceReference } from '../policy/disclosure.js'
+import { validateImageUrl } from '../features/image-download.js'
+import type { DiscordAttachment } from '../gateway/inbound.js'
+
+/** One prompt content part accepted by the DSH session.prompt wire schema. */
+export type PromptContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; mediaType: string; data: string }
 
 /** The workspace rows the catalog port needs (subset of WorkspaceView). */
 export interface WorkspaceCatalogEntry {
@@ -33,7 +40,7 @@ export interface DshApiProxyFace {
     prompt(request: RpcRequestShape<{
       sessionId: string
       mode: 'queue' | 'steer'
-      content: Array<{ type: 'text'; text: string }>
+      content: PromptContentPart[]
     }>): Promise<RpcResponseShape<{ accepted: true }>>
     create(request: RpcRequestShape<{
       workspaceId?: string
@@ -331,7 +338,7 @@ export type PromptOutcome =
  */
 export async function promptSession(
   dsh: DshApiProxyFace,
-  request: { sessionId: string; prompt: string },
+  request: { sessionId: string; prompt: string; images?: DiscordAttachment[] },
   options: ApiProxyFaceOptions & { rpcId?: string } = {},
 ): Promise<PromptOutcome> {
   return submitPromptTurn(dsh, { ...request, mode: 'queue' }, options)
@@ -343,26 +350,71 @@ export async function promptSession(
  */
 export async function steerSession(
   dsh: DshApiProxyFace,
-  request: { sessionId: string; prompt: string },
+  request: { sessionId: string; prompt: string; images?: DiscordAttachment[] },
   options: ApiProxyFaceOptions & { rpcId?: string } = {},
 ): Promise<PromptOutcome> {
   return submitPromptTurn(dsh, { ...request, mode: 'steer' }, options)
 }
 
+/** Image media types accepted by the DSH prompt content schema. */
+const SUPPORTED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif'])
+
+/** Build the DSH prompt `content` array: text parts plus any downloaded image parts. */
+async function buildPromptContent(
+  request: { prompt: string; images?: DiscordAttachment[] },
+): Promise<PromptContentPart[] | undefined> {
+  const parts: PromptContentPart[] = []
+  const trimmed = typeof request.prompt === 'string' ? request.prompt.trim() : ''
+  if (trimmed !== '') parts.push({ type: 'text', text: trimmed })
+  const images = Array.isArray(request.images) ? request.images : []
+  for (const image of images) {
+    const part = await downloadImagePart(image)
+    if (part === undefined) return undefined
+    parts.push(part)
+  }
+  return parts
+}
+
+/** Download one Discord attachment and encode it as a DSH image content part. */
+async function downloadImagePart(image: DiscordAttachment): Promise<PromptContentPart | undefined> {
+  const url = image.url
+  if (typeof url !== 'string' || url === '') return undefined
+  const validation = validateImageUrl(url)
+  if (!validation.ok) return undefined
+  let response: Response
+  try {
+    response = await fetch(url)
+  } catch {
+    return undefined
+  }
+  if (response.status !== 200) return undefined
+  const mediaType = (response.headers.get('content-type') ?? '').split(';')[0]?.trim().toLowerCase() ?? ''
+  if (!SUPPORTED_IMAGE_TYPES.has(mediaType)) return undefined
+  const buf = await response.arrayBuffer()
+  if (buf.byteLength === 0) return undefined
+  const data = Buffer.from(buf).toString('base64')
+  return { type: 'image', mediaType, data }
+}
+
 async function submitPromptTurn(
   dsh: DshApiProxyFace,
-  request: { sessionId: string; prompt: string; mode: 'queue' | 'steer' },
+  request: { sessionId: string; prompt: string; mode: 'queue' | 'steer'; images?: DiscordAttachment[] },
   options: ApiProxyFaceOptions & { rpcId?: string },
 ): Promise<PromptOutcome> {
   const timeoutMs = options.timeoutMs ?? PROMPT_TIMEOUT_MS
   const log = options.log
+  const content = await buildPromptContent(request)
+  if (content === undefined) {
+    log?.('discord_prompt_image_download_failed', { sessionId: request.sessionId })
+    return { outcome: 'rejected', reason: 'image-download-failed' }
+  }
   let response: RpcResponseShape<{ accepted: true }>
   try {
     response = await withRpcTimeout(
       dsh.sessions.prompt(mintRequest({
         sessionId: request.sessionId,
         mode: request.mode,
-        content: [{ type: 'text', text: request.prompt }],
+        content,
       }, options.rpcId)),
       timeoutMs,
     )

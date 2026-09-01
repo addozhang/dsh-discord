@@ -142,6 +142,7 @@ describe('composed adapter runtime', () => {
       authorId: '555555555555555555',
       workspaceId: 'ws-1',
       prompt: 'deploy the service',
+      images: [],
     })
     expect(runtime.started).toBe(true)
   })
@@ -165,6 +166,7 @@ describe('composed adapter runtime', () => {
       sessionId: 'sess-9',
       messageId: '222222222222222222',
       prompt: 'plain follow-up, no mention',
+      images: [],
     })
     expect(admitMention).not.toHaveBeenCalled()
   })

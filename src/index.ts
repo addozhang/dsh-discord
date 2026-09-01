@@ -320,7 +320,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const dshPromptPort: DshPromptPort = {
       submit: request => promptSession(
         apiProxy,
-        { sessionId: request.sessionId, prompt: request.prompt },
+        {
+          sessionId: request.sessionId,
+          prompt: request.prompt,
+          ...(request.images !== undefined ? { images: request.images } : {}),
+        },
         { log: rpcLog, rpcId: request.requestId },
       ),
     }

@@ -182,6 +182,7 @@ describe('twin smoke: mention mainline over the real wire', () => {
       requestId: `discord:${source.id}`,
       sessionId: 'sess-twin-1',
       prompt: 'hello world',
+      images: [],
       mode: 'queue',
     })
   }, 20_000)

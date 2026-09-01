@@ -82,6 +82,7 @@ describe('parseGatewayDispatch', () => {
         authorId: '555555555555555555',
         roleIds: [],
         content: 'ship it',
+        attachments: [],
         mentionedBot: true,
         repliedToId: undefined,
       },
@@ -97,6 +98,46 @@ describe('parseGatewayDispatch', () => {
     )
     if (!result.accepted) throw new Error('expected acceptance')
     expect(result.event.kind === 'message' && result.event.repliedToId).toBe('666666666666666666')
+  })
+
+  it('normalizes image-capable attachments into the message event', () => {
+    const result = parseGatewayDispatch(
+      messageDispatch(messagePayload({
+        attachments: [
+          {
+            id: '777777777777777777',
+            url: 'https://cdn.discordapp.com/attachments/444444444444444444/777777777777777777/x.png',
+            proxy_url: 'https://media.discordapp.net/attachments/444444444444444444/777777777777777777/x.png',
+            content_type: 'image/png',
+            size: 12345,
+            filename: 'x.png',
+          },
+          { id: '888888888888888888', url: 'not-a-url' },
+        ],
+      })),
+      SELF_USER_ID,
+    )
+    expect(result.accepted).toBe(true)
+    if (!result.accepted) return
+    if (result.event.kind !== 'message') return
+    expect(result.event.attachments).toEqual([
+      {
+        id: '777777777777777777',
+        url: 'https://cdn.discordapp.com/attachments/444444444444444444/777777777777777777/x.png',
+        proxyUrl: 'https://media.discordapp.net/attachments/444444444444444444/777777777777777777/x.png',
+        contentType: 'image/png',
+        declaredSize: 12345,
+        filename: 'x.png',
+      },
+      {
+        id: '888888888888888888',
+        url: 'not-a-url',
+        proxyUrl: undefined,
+        contentType: undefined,
+        declaredSize: 0,
+        filename: undefined,
+      },
+    ])
   })
 
   it('rejects unsupported dispatch event names as a value, not a throw', () => {
