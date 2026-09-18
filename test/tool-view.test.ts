@@ -7,7 +7,37 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { createToolActivitySurface } from '../src/stream/tool-view.js'
+import { createToolActivitySurface, shellCommandTitle } from '../src/stream/tool-view.js'
+
+describe('shellCommandTitle', () => {
+  it('derives the shell command title from bash arguments', () => {
+    expect(shellCommandTitle('bash', JSON.stringify({ command: 'df -h' }))).toBe('df -h')
+  })
+
+  it('keeps only the first line of a multiline command', () => {
+    expect(shellCommandTitle('bash', JSON.stringify({ command: 'git add -A\ngit commit' }))).toBe('git add -A')
+  })
+
+  it('derives for pwsh but no other tool family', () => {
+    expect(shellCommandTitle('pwsh', JSON.stringify({ command: 'Get-ChildItem' }))).toBe('Get-ChildItem')
+    expect(shellCommandTitle('edit', JSON.stringify({ command: 'nope' }))).toBeUndefined()
+    expect(shellCommandTitle('read', JSON.stringify({ file_path: '/etc/passwd' }))).toBeUndefined()
+  })
+
+  it('stays undefined for malformed JSON, missing or blank commands', () => {
+    expect(shellCommandTitle('bash', 'not json')).toBeUndefined()
+    expect(shellCommandTitle('bash', JSON.stringify({}))).toBeUndefined()
+    expect(shellCommandTitle('bash', JSON.stringify({ command: '   ' }))).toBeUndefined()
+    expect(shellCommandTitle('bash', undefined)).toBeUndefined()
+  })
+
+  it('sanitizes and truncates through the disclosure policy', () => {
+    const mention = shellCommandTitle('bash', JSON.stringify({ command: 'echo <@everyone> hi' }))
+    expect(mention).not.toMatch(/<@everyone>/)
+    const long = shellCommandTitle('bash', JSON.stringify({ command: 'x'.repeat(500) }))
+    expect((long ?? '').length).toBeLessThanOrEqual(100)
+  })
+})
 
 describe('tool activity surface', () => {
   it('keeps one row per callId through parallel, out-of-order completion', () => {

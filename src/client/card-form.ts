@@ -7,7 +7,8 @@
  * is not a list of Discord IDs, which blocks the save rather than dropping it.
  */
 
-import type { SettingsScope, SettingsScopeSnapshot, SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { AdapterStatusView } from '../features/adapter-status.js'
 import type { DiscordSettings } from '../settings.js'
 import { createLocalSnapshotStore } from './snapshot-store.js'

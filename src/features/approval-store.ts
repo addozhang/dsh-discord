@@ -167,7 +167,7 @@ export interface ApprovalClick {
 export type ApprovalDecision =
   | {
       allowed: true
-      /** Respond data built solely from the record, for apiProxy.respond. */
+      /** Respond data built solely from the record, for the settle port. */
       respond: { rpcId: string; sessionId: string; approvalId: string }
       requestId: string
     }

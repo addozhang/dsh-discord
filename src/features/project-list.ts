@@ -1,6 +1,6 @@
 /**
  * `/project list` discovery (design.md §3, §13). The feature talks to DSH
- * through one narrow port (satisfied by the apiProxy adapter in production,
+ * through one narrow port (satisfied by the host-face adapter in production,
  * by fakes in tests): every registered Workspace is selectable, labels come
  * from the least-disclosure policy (safe titles, opaque `ws:` references,
  * duplicate disambiguation); per amended design §3 the bind autocomplete

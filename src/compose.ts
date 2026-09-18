@@ -1,7 +1,7 @@
 /**
  * The adapter composition root (review C1). Assembles the runtime the
  * module-level features could not wire themselves into: bot token → Gateway
- * → authorized ingress → business router → Discord REST / DSH apiProxy,
+ * → authorized ingress → business router → Discord REST / DSH host face,
  * plus the settings-card status feed. Everything injected is a port;
  * everything started here is torn down by the returned disposer.
  *
@@ -96,7 +96,7 @@ export interface CompositionDeps {
   status: AdapterStatusTracker
   /**
    * Interaction (commands/components/modals) routing, wired by the Host
-   * composition where the typed apiProxy respond face lives.
+   * composition where the typed settle port lives.
    */
   routeInteraction?: (event: NormalizedInboundEvent, interactionToken?: string) => void | Promise<void>
   /**

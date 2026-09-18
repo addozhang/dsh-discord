@@ -7,7 +7,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context } from '@deepseek-ai/cordis'
 
 import { DiscordCardController } from '../src/client/card-controller.js'
 import { apply as applyClient, name as clientName } from '../src/client/index.js'
@@ -60,7 +60,7 @@ describe('client entry', () => {
       slots: { register: vi.fn(() => disposer), inject: vi.fn((_name: string, factory: () => unknown) => factory()) },
       locale: { register: vi.fn() },
       effect: vi.fn((execute: () => unknown) => { execute() }),
-    } as unknown as ClientContext & {
+    } as unknown as Context & {
       settingsScope: { bind: ReturnType<typeof vi.fn> }
       slots: { register: ReturnType<typeof vi.fn>; inject: ReturnType<typeof vi.fn> }
       effect: ReturnType<typeof vi.fn>

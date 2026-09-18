@@ -2,7 +2,7 @@
  * Session mainline orchestration (Phase 1 wiring): mention → intent claim →
  * thread creation → session creation → at-most-once prompt → turn ownership.
  * This is the exact flow `routeEvent` hands a bound-channel mention to, with
- * fakes standing in for Discord REST and the in-process apiProxy.
+ * fakes standing in for Discord REST and the in-process host face.
  */
 
 import { describe, expect, it, vi } from 'vitest'

@@ -5,7 +5,7 @@
  * store the framework binds as the `useDiscordCard` selector hook.
  */
 
-import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { AdapterStatusView } from '../features/adapter-status.js'
 import type { DiscordSettings } from '../settings.js'
 import { DiscordCardForm, type CardManagement, type DiscordCardFace, type DiscordCardState } from './card-form.js'

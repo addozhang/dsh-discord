@@ -196,13 +196,153 @@ export function createAdapterManagementHandler(deps: ManagementChannelDeps) {
   }
 }
 
-/** Register the management channel; returns the connection service's disposer. */
+/** Narrow Node faces the channel route serves over. */
+interface ChannelRequest {
+  method?: string
+  url?: string
+  headers: Record<string, string | string[] | undefined>
+  on(event: 'data', listener: (chunk: Buffer) => void): void
+  on(event: 'end', listener: () => void): void
+  on(event: 'error', listener: (cause: Error) => void): void
+}
+
+interface ChannelResponse {
+  writeHead(status: number, headers?: Record<string, string>): void
+  end(body?: string): void
+}
+
+/** The connection service's request fence: 401/403 verdicts, undefined = admitted. */
+interface FenceConnection {
+  requestRejection(request: ChannelRequest): number | undefined
+}
+
+/** The webServer registry our own context may register a prefix route on. */
+interface RouteWebServer {
+  register(route: {
+    kind: 'prefix'
+    path: string
+    handler: (request: ChannelRequest, response: ChannelResponse) => Promise<void>
+  }): unknown
+}
+
+/** Narrow composition context: service accessor plus the plugin's effect scope. */
+export interface HostChannelContext {
+  get(name: string): unknown
+  effect(execute: () => unknown, label?: string): unknown
+}
+
+/** One JSON-RPC-style answer the channel protocol carries. */
+type ChannelResult = { ok: true; value: unknown } | { ok: false; error: { code: string; message: string; details?: unknown } }
+
+function readBody(request: ChannelRequest): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    request.on('data', chunk => { chunks.push(chunk) })
+    request.on('end', () => { resolve(Buffer.concat(chunks).toString('utf8')) })
+    request.on('error', reject)
+  })
+}
+
+/** The endpoint segment path under the channel, validated like the host's. */
+function endpointOf(channel: string, url: string | undefined): string | undefined {
+  const pathname = url === undefined ? '' : url.split('?')[0] ?? ''
+  if (!pathname.startsWith(`${channel}/`)) return undefined
+  const endpoint = pathname.slice(channel.length + 1)
+  const valid = endpoint.split('/').every(segment => segment !== '' && segment !== '.' && segment !== '..' && /^[A-Za-z0-9_$.-]+$/.test(segment))
+  return valid ? endpoint : undefined
+}
+
+function respondEnvelope(response: ChannelResponse, rpcId: string, result: ChannelResult): void {
+  response.writeHead(200, { 'content-type': 'application/json' })
+  response.end(JSON.stringify({ type: 'server-response', rpcId, result }))
+}
+
+function badRequest(response: ChannelResponse, rpcId: string, message: string): void {
+  respondEnvelope(response, rpcId, { ok: false, error: { code: 'gateway/bad-request', message, details: { issues: [] } } })
+}
+
+/**
+ * Serve one channel request: the connection service's fence first (the
+ * browser-auth + trusted-host verdict), then the host's channel wire
+ * protocol — POST + JSON `client-request` envelope whose method must match
+ * the endpoint, answered with a `server-response` envelope.
+ */
+async function serveChannel(
+  connection: FenceConnection,
+  handler: ReturnType<typeof createAdapterManagementHandler>,
+  request: ChannelRequest,
+  response: ChannelResponse,
+): Promise<void> {
+  const rejection = connection.requestRejection(request)
+  if (rejection !== undefined) {
+    response.writeHead(rejection)
+    response.end(rejection === 401 ? 'unauthorized' : 'forbidden')
+    return
+  }
+  const endpoint = endpointOf(DISCORD_RPC_CHANNEL, request.url)
+  if (request.method !== 'POST' || endpoint === undefined) {
+    response.writeHead(404)
+    response.end('not found')
+    return
+  }
+  const contentType = request.headers['content-type']
+  const contentTypeText = (Array.isArray(contentType) ? contentType[0] : contentType)?.split(';', 1)[0]?.trim().toLowerCase()
+  if (contentTypeText !== 'application/json') {
+    response.writeHead(415)
+    response.end('content type must be application/json')
+    return
+  }
+  let body: unknown
+  try {
+    body = JSON.parse(await readBody(request))
+  } catch {
+    response.writeHead(400)
+    response.end('body is not JSON')
+    return
+  }
+  const message = body as { type?: unknown; rpcId?: unknown; method?: unknown; payload?: unknown }
+  const rpcId = typeof message.rpcId === 'string' ? message.rpcId : ''
+  if (message.type !== 'client-request' || rpcId === '' || typeof message.method !== 'string'
+    || typeof message.payload !== 'object' || message.payload === null || Array.isArray(message.payload)) {
+    badRequest(response, rpcId, 'invalid client-request message')
+    return
+  }
+  if (message.method !== endpoint) {
+    badRequest(response, rpcId, `method ${JSON.stringify(message.method)} does not match endpoint ${JSON.stringify(endpoint)}`)
+    return
+  }
+  try {
+    const result = await handler(endpoint, message.payload, undefined)
+    respondEnvelope(response, rpcId, result)
+  } catch (cause) {
+    response.writeHead(500)
+    response.end(`handler failure: ${String(cause)}`)
+  }
+}
+
+/**
+ * Register the management channel on the webServer through the plugin's own
+ * context effect. The 0.1.6 host's `connection.rpc.handle` mounts through
+ * the connection service's OWN inject scope — an external plugin's call is
+ * rejected ("cannot get property webServer without inject") and a runtime
+ * ctx.inject wrapper never fires on an already-started plugin, so the
+ * sanctioned shape is: our prefix route, the connection service's fence
+ * method, and the channel envelope replicated verbatim.
+ */
 export function installAdapterStatusRpc(
-  connection: ConnectionRpc,
+  ctx: HostChannelContext,
   tracker: AdapterStatusTracker,
   deps: ManagementChannelDeps = { tracker },
 ): () => void {
-  return connection.rpc.handle(DISCORD_RPC_CHANNEL, createAdapterManagementHandler(deps), {
-    authority: 'loopback',
-  })
+  const connection = ctx.get('connection') as FenceConnection
+  const webServer = ctx.get('webServer') as RouteWebServer
+  const handler = createAdapterManagementHandler(deps)
+  const disposer = ctx.effect(() => webServer.register({
+    kind: 'prefix',
+    path: DISCORD_RPC_CHANNEL,
+    handler: (request, response) => serveChannel(connection, handler, request, response),
+  }), 'dsh-discord management channel')
+  return () => {
+    if (typeof disposer === 'function') (disposer as () => void)()
+  }
 }

@@ -8,14 +8,12 @@ import {
   normalizeDiscordSettings,
   type DiscordSettings,
   } from './settings.js'
-import { settingsNamespace } from '@deepseek-ai/dsh-settings'
 import { installCancellationRoot } from './lifecycle.js'
 import { ALLOWED_MENTIONS_NONE, DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, OUTBOUND_EPHEMERAL_FLAGS, safeTitle } from './policy/disclosure.js'
 import { validateHostCapabilities } from './startup.js'
 import {
   createAdapterStatusTracker,
   installAdapterStatusRpc,
-  type ConnectionRpc,
 } from './features/adapter-status.js'
 import { DISCORD_BOT_TOKEN_REF, describeDiscordCredential, resolveDiscordBotToken, type DiscordCredentialProvider } from './credential.js'
 import { createSharedRestClient, newNonce, type SharedRestClient } from './discord/rest.js'
@@ -23,7 +21,7 @@ import { createRestThreadPort } from './discord/thread-port.js'
 import { createComponentRegistry } from './discord/components.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
-import { createModelPort, createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, type DshApiProxyFace } from './dsh/api-proxy-face.js'
+import { createModelPort, createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, resolveHostFace } from './dsh/host-face.js'
 import { createApprovalStore, type ApprovalRecord } from './features/approval-store.js'
 import { createAskWiring } from './features/ask-wiring.js'
 import { sweepExpiredApprovals } from './features/approval-expiry.js'
@@ -36,7 +34,9 @@ import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
 import { planBindingReconciliation } from './features/reconcile-bindings.js'
 import { guildKeysToForget, sweepExpired } from './state/retention.js'
-import { listSessionIds, listSessionSummaries, createClientRespondPort } from './dsh/api-proxy-face.js'
+import { createHostEventRouter } from './dsh/host-events.js'
+import { listSessionIds, listSessionSummaries } from './dsh/host-face.js'
+import { installAskServicePatches } from './dsh/host-asks.js'
 import { createBindingStore } from './state/bindings.js'
 import { createIntentStore, type InboundIntentRecord, type IntentTable } from './state/intents.js'
 import type { BindingTable } from './state/bindings.js'
@@ -57,7 +57,7 @@ import type { GatewaySocket } from './gateway/gateway.js'
 export const name = 'dsh-discord'
 
 /** Host services required by the complete embedded adapter. */
-export const inject = ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']
+export const inject = ['sessionController', 'workspaceController', 'sessionQuery', 'webServer', 'credentials', 'settings', 'storageDomain', 'connection']
 
 export type Config = DiscordSettings
 
@@ -99,7 +99,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
    */
   const resolveLanguage = (): 'zh' | 'en' => {
     if (current.language !== 'auto') return current.language
-    const locale = (ctx.get('settings') as { get(namespace: unknown): unknown }).get(settingsNamespace('locale')) as { preference?: string } | undefined
+    const locale = (ctx.get('settings') as { get(namespace: unknown): unknown }).get('locale') as { preference?: string } | undefined
     return typeof locale?.preference === 'string' && locale.preference.startsWith('zh') ? 'zh' : 'en'
   }
   const copy: CopyTable = new Proxy({} as CopyTable, {
@@ -126,15 +126,20 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   // Late-bound so the management channel can reach the runtime built inside
   // the composition IIFE below (the card's Connect button).
   const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
-  installAdapterStatusRpc(ctx.get('connection') as ConnectionRpc, statusTracker, {
-    tracker: statusTracker,
-    setToken: async (value: string) => {
-      await (ctx.get('credentials') as DiscordCredentialProvider).set(DISCORD_BOT_TOKEN_REF, value)
-      statusTracker.setCredential({ configured: true })
-    },
-    connect: () => { runtimeRef.current?.connect() },
-    disconnect: () => { runtimeRef.current?.disconnect() },
-  })
+  // Channel registration mounts a prefix route through our OWN context
+  // effect (see installAdapterStatusRpc: the host's connection.rpc.handle
+  // is owner-scoped and unusable from an external plugin).
+  {
+    installAdapterStatusRpc(ctx, statusTracker, {
+      tracker: statusTracker,
+      setToken: async (value: string) => {
+        await (ctx.get('credentials') as DiscordCredentialProvider).set(DISCORD_BOT_TOKEN_REF, value)
+        statusTracker.setCredential({ configured: true })
+      },
+      connect: () => { runtimeRef.current?.connect() },
+      disconnect: () => { runtimeRef.current?.disconnect() },
+    })
+  }
   void describeDiscordCredential(ctx.get('credentials') as DiscordCredentialProvider)
     .then((view) => { statusTracker.setCredential(view) })
     .catch((cause: unknown) => {
@@ -143,10 +148,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     })
 
   const credentials = ctx.get('credentials') as DiscordCredentialProvider
-  // The in-process apiProxy face: domain methods resolve RpcRequest →
-  // RpcResponse and never throw business errors; boundedness and outcome
-  // logging live in src/dsh/api-proxy-face.ts.
-  const apiProxy = ctx.get('apiProxy') as unknown as DshApiProxyFace
+  // The in-process 0.1.6 controller face: plain requests in, plain values
+  // out, business rejections as thrown RemoteErrors; boundedness and outcome
+  // logging live in src/dsh/host-face.ts.
+  const dsh = resolveHostFace(ctx)
   // Default-quiet logging (16.33): flow records ride the Host's debug level
   // only — the adapter prints nothing into the DSH process at the default
   // level. Failure-shaped events (…failed/…threw/…blocked/…unknown) escalate
@@ -158,6 +163,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     }
     emitLog(ctx, /(?:failed|threw|blocked|unknown)/.test(event) ? 'warn' : 'debug', { event, detail: serialized })
   }
+  // The 0.1.6 event bridge (declared early: every session-acquisition site
+  // below tracks into it; the live renderer consumes its fan-in stream).
+  const hostEvents = createHostEventRouter(dsh.session, { log: rpcLog })
   void (async () => {
     // The durable domain gates the whole composition: no adapter starts
     // without its bindings/intents tables, and close() drains queued writes
@@ -165,7 +173,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const domain = await ctx.storageDomain.open(discordDomainSpec)
     ctx.effect(() => () => { void domain.close() }, 'discord durable domain')
 
-    const catalogPort = createWorkspaceCatalogPort(apiProxy, { log: rpcLog })
+    const catalogPort = createWorkspaceCatalogPort(dsh, { log: rpcLog })
     const policy = (): PolicyTable => ({
       allowedGuildIds: [...current.allowedGuildIds],
       memberUserIds: [...current.memberUserIds],
@@ -217,7 +225,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const sharedRegistry = createComponentRegistry()
     const questionCancelPort: DshTurnCancelPort = {
       cancel: async ({ sessionId }) => {
-        const cancelled = await cancelSessionViaProxy(apiProxy, { sessionId }, { log: rpcLog })
+        const cancelled = await cancelSessionViaProxy(dsh, { sessionId }, { log: rpcLog })
         const turn = turnTracker.active(sessionId)
         if (turn !== undefined) turnTracker.complete(turn.requestId)
         return cancelled.outcome === 'accepted'
@@ -316,18 +324,26 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       }
     })()
     const dshSessionPort: DshSessionPort = {
-      createSession: request => createSessionViaProxy(apiProxy, request, { log: rpcLog }),
+      createSession: async request => {
+        const created = await createSessionViaProxy(dsh, request, { log: rpcLog })
+        if (created.outcome === 'completed') hostEvents.track(created.sessionId)
+        return created
+      },
     }
     const dshPromptPort: DshPromptPort = {
-      submit: request => promptSession(
-        apiProxy,
-        {
-          sessionId: request.sessionId,
-          prompt: request.prompt,
-          ...(request.images === undefined ? {} : { images: request.images }),
-        },
-        { log: rpcLog, rpcId: request.requestId },
-      ),
+      submit: async request => {
+        const submitted = await promptSession(
+          dsh,
+          {
+            sessionId: request.sessionId,
+            prompt: request.prompt,
+            ...(request.images === undefined ? {} : { images: request.images }),
+          },
+          { log: rpcLog, rpcId: request.requestId },
+        )
+        if (submitted.outcome === 'accepted') hostEvents.track(request.sessionId)
+        return submitted
+      },
     }
     /**
      * The bounded image collection boundary (16.50): downloads ride the
@@ -419,7 +435,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     // Bind provision resolves the selection against the live catalog; the
     // Discord confirm button carries only opaque registry ids between the
     // command and the write.
-    const resolver = createWorkspaceResolver(apiProxy, { log: rpcLog })
+    const resolver = createWorkspaceResolver(dsh, { log: rpcLog })
 
     // Adapter-owned guild surfaces: the "DeepSeek Harness" category, the
     // general control channel (both provisioned on READY), and — on bind —
@@ -574,7 +590,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           rpcLog('discord_reconcile_blocked', 'workspace-catalog-unavailable')
           return
         }
-        const sessionIds = await listSessionIds(apiProxy, { log: rpcLog })
+        const sessionIds = await listSessionIds(dsh, { log: rpcLog })
         if (sessionIds.outcome !== 'completed') {
           rpcLog('discord_reconcile_blocked', 'session-list-unavailable')
           return
@@ -703,16 +719,46 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     ctx.effect(() => () => { clearInterval(expiryTimer) }, 'discord interaction expiry sweep')
 
 
-    // DSH approval respond face: the client-response echoes the ask's rpcId.
-    const clientRespond = createClientRespondPort(
-      apiProxy as unknown as { respond(message: unknown): Promise<unknown> },
-      { log: rpcLog },
+    const threadForSession = (sessionId: string): string | undefined => {
+      for (const [key, record] of threadTable.entries()) {
+        if (record.sessionId !== sessionId) continue
+        const scope = parseThreadBindingKey(key)
+        if (scope !== undefined) return scope.threadId
+      }
+      return undefined
+    }
+
+    // DSH ask answerers (0.1.6 composed-approval model): the waterfalls
+    // dispatch on the BASE TREE's event bus (the profile composes one event
+    // tree per bundle and a waterfall only enumerates its own registry), so
+    // the listeners register there — resolved off a base service's context.
+    // Ask carrier: wrap the base-tree ask services at the method boundary
+    // (the composed-answerer waterfalls are not reachable from an external
+    // plugin's registrations — see host-asks.ts).
+    const approvalService = ctx.get('approval') as { request(req: unknown): Promise<unknown> } | undefined
+    const questionsService = ctx.get('userQuestions') as { ask(req: unknown): Promise<unknown> } | undefined
+    if (approvalService === undefined) throw new TypeError('dsh-discord cannot reach the approval service')
+    const hostAsksRef: { current: ReturnType<typeof installAskServicePatches> | undefined } = { current: undefined }
+    hostAsksRef.current = installAskServicePatches(
+      approvalService as Parameters<typeof installAskServicePatches>[0],
+      questionsService as Parameters<typeof installAskServicePatches>[1],
+      {
+        threadForSession,
+        askWiring,
+        approvalTimeoutMs: () => current.approvalTimeoutMs,
+        questionTimeoutMs: () => current.questionTimeoutMs,
+        nowMs: () => Date.now(),
+        log: rpcLog,
+      },
     )
+    ctx.effect(() => () => { hostAsksRef.current?.dispose() }, 'dsh-discord host ask answerers')
     const approvalRespondPort: DshApprovalRespondPort = {
-      respond: async ({ rpcId, sessionId, approvalId, outcome }) => {
-        const receipt = await clientRespond.respond(rpcId, { sessionId, approvalId, outcome })
-        rpcLog('discord_approval_respond_receipt', { rpcId, approvalId, outcome, receipt })
-        return receipt
+      respond: ({ approvalId, outcome }) => {
+        const settled = hostAsksRef.current?.settleApproval(approvalId, outcome) ?? false
+        rpcLog('discord_approval_settled', { approvalId, outcome, settled })
+        // The settle promise IS the confirmation: an in-process resolution
+        // has no wire receipt to doubt.
+        return Promise.resolve(settled ? { outcome: 'confirmed' as const } : { outcome: 'rejected' as const, reason: 'not-pending' })
       },
     }
     const queueSnapshots: Map<string, Array<{ id: string; summary: string }>> = new Map()
@@ -729,10 +775,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     }
 
     const questionRespondPort = {
-      respond: async (input: { rpcId: string; sessionId: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }) => {
-        const receipt = await clientRespond.respond(input.rpcId, { sessionId: input.sessionId, answer: input.answer })
-        rpcLog('discord_question_respond_receipt', { rpcId: input.rpcId, receipt })
-        return receipt
+      respond: (input: { rpcId: string; sessionId: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }) => {
+        const settled = hostAsksRef.current?.settleQuestion(input.rpcId, input.answer) ?? false
+        rpcLog('discord_question_settled', { rpcId: input.rpcId, settled })
+        return Promise.resolve(settled ? { outcome: 'confirmed' as const } : { outcome: 'rejected' as const, reason: 'not-pending' })
       },
     }
     const questionRoutingDeps: QuestionRoutingDeps = {
@@ -757,10 +803,14 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       handleQuestionComponent: input => handleSelectInput(questionRoutingDeps, input),
       handleQuestionModal: input => handleModalSubmit(questionRoutingDeps, input),
       dsh: {
-        cancel: sessionId => cancelSessionViaProxy(apiProxy, { sessionId }, { log: rpcLog }),
-        steer: (sessionId, prompt) => steerSession(apiProxy, { sessionId, prompt }, { log: rpcLog }),
-        removeQueueItem: (sessionId, itemId) => removeQueueItemViaProxy(apiProxy, { sessionId, itemId }, { log: rpcLog }),
-        readWorkspaceDetail: reference => readWorkspaceDetail(apiProxy, reference, { log: rpcLog }),
+        cancel: sessionId => cancelSessionViaProxy(dsh, { sessionId }, { log: rpcLog }),
+        steer: async (sessionId, prompt) => {
+          const steered = await steerSession(dsh, { sessionId, prompt }, { log: rpcLog })
+          if (steered.outcome === 'accepted') hostEvents.track(sessionId)
+          return steered
+        },
+        removeQueueItem: (sessionId, itemId) => removeQueueItemViaProxy(dsh, { sessionId, itemId }, { log: rpcLog }),
+        readWorkspaceDetail: reference => readWorkspaceDetail(dsh, reference, { log: rpcLog }),
       },
       catalogPort,
       resolver,
@@ -773,10 +823,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         await channelTable.delete(bindChannelKey(guildId, channelId))
         rpcLog('discord_reconcile_channel_retired', { channelId, reason: 'discord-deleted' })
       },
-      model: createModelPort(apiProxy, { log: rpcLog }),
+      model: createModelPort(dsh, { log: rpcLog }),
       modelSelectOperatorOnly: () => current.modelSelectOperatorOnly,
       resumeCandidates: createResumeCandidatesPort({
-        listSessions: () => listSessionSummaries(apiProxy, { log: rpcLog }),
+        listSessions: () => listSessionSummaries(dsh, { log: rpcLog }),
         boundSessionIds: () => {
           const bound = new Set<string>()
           for (const [, record] of threadTable.entries()) bound.add(record.sessionId)
@@ -804,7 +854,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             return { outcome: 'refused-control-channel' }
           }
         }
-        const summaries = await listSessionSummaries(apiProxy, { log: rpcLog })
+        const summaries = await listSessionSummaries(dsh, { log: rpcLog })
         if (summaries.outcome !== 'completed') return { outcome: 'failed' }
         const summary = summaries.sessions.find(candidate => candidate.sessionId === sessionId)
         if (summary === undefined || summary.blank) return { outcome: 'failed' }
@@ -852,6 +902,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           createdAtMs: Date.now(),
         })
         rpcLog('discord_session_resumed', { sessionId, threadId: thread.body.id, title })
+        hostEvents.track(sessionId)
         return { outcome: 'started', threadId: thread.body.id }
       },
       log: rpcLog,
@@ -957,28 +1008,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     void registerCommands().catch((cause: unknown) => {
       emitLog(ctx, 'warn', { event: 'discord_command_register_failed', cause: String(cause) })
     })
-    // ── Live streaming: DSH events.mux → per-thread Discord rendering ─────
+    // ── Live streaming: host follow/control fan-in → per-thread rendering ──
     // The queue snapshot cache (declared with the interaction router) is the
-    // /queue surface's data source: DSH 0.1.1 has no queue-list RPC, only the
-    // authoritative whole-snapshot mux frame.
-    const threadForSession = (sessionId: string): string | undefined => {
-      for (const [key, record] of threadTable.entries()) {
-        if (record.sessionId !== sessionId) continue
-        const scope = parseThreadBindingKey(key)
-        if (scope !== undefined) return scope.threadId
-      }
-      return undefined
-    }
-    interface EventsFace {
-      mux(request: { rpcId: string; payload: Record<string, never> }, signal: AbortSignal): AsyncIterable<unknown>
-    }
+    // /queue surface's data source: the 0.1.6 `session/control` stream owns
+    // the authoritative whole-snapshot queue frames.
+    // The 0.1.6 event bridge: every session the adapter tracks (create,
+    // adopt, resume, prompt) joins one fan-in stream of live frames.
     const liveRef: { current: ReturnType<typeof startLiveRender> | undefined } = { current: undefined }
     liveRef.current = startLiveRender({
-      frames: (signal) => {
-        const events = (apiProxy as unknown as { events?: EventsFace }).events
-        if (events === undefined) throw new TypeError('apiProxy.events is unavailable on this Host')
-        return events.mux({ rpcId: crypto.randomUUID(), payload: {} }, signal)
-      },
+      frames: signal => hostEvents.stream(signal),
       threadForSession,
       delivery: {
         send: async (request) => {
@@ -1049,8 +1087,6 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       },
       updateIntervalMs: current.streamUpdateIntervalMs,
       typingIntervalMs: current.typingIntervalMs,
-      approvalTimeoutMs: current.approvalTimeoutMs,
-      questionTimeoutMs: current.questionTimeoutMs,
       verbosity: current.defaultVerbosity,
       log: rpcLog,
       interruptedMarker: () => copy.interruptedMarker,
@@ -1060,7 +1096,6 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (turn !== undefined) turnTracker.complete(turn.requestId)
         rpcLog('discord_turn_ended', { sessionId, hadActiveTurn: turn !== undefined })
       },
-      requests: askWiring,
     })
     ctx.effect(() => () => { liveRef.current?.dispose() }, 'dsh-discord live render')
     ctx.effect(() => () => { runtimeRef.current?.dispose() }, 'dsh-discord composed runtime')

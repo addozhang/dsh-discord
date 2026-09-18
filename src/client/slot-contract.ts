@@ -8,6 +8,20 @@
 
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 
+/**
+ * The renderer owns the `slots` service declaration (SlotRegistry over the
+ * ui-slots core); importing it merges `ctx.slots` into this program. The
+ * locale service keeps its narrow structural shape here instead — the card
+ * only registers one dictionary.
+ */
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    locale: { register(namespace: string, dictionary: Record<string, Record<string, string>>): unknown }
+  }
+}
+
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     'dsh-discord': keyof DiscordPluginsLocale

@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { DiscordCardForm } from '../src/client/card-form.js'
-import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 
 type Listener = () => void
 

@@ -5,7 +5,7 @@
  * path returns exactly the projection — nothing more.
  */
 
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
 import {
   createAdapterStatusRpcHandler,
@@ -13,7 +13,6 @@ import {
   DISCORD_RPC_CHANNEL,
   installAdapterStatusRpc,
   STATUS_ENDPOINT,
-  type ConnectionRpc,
 } from '../src/features/adapter-status.js'
 
 function setup() {
@@ -51,16 +50,71 @@ describe('adapter status rpc', () => {
     if (!answer.ok) expect(answer.error.code).toBe('cancelled')
   })
 
-  it('installs the handler on the plugin channel for loopback browsers', () => {
-    const handle = vi.fn(() => () => undefined)
-    const connection: ConnectionRpc = { rpc: { handle } }
+  it('installs a prefix route on the webServer through the plugin effect', () => {
+    const registered: Array<{ kind: string; path: string; handler: unknown }> = []
+    const webServer = { register: (route: { kind: string; path: string; handler: unknown }) => { registered.push(route); return () => undefined } }
+    const connection = { requestRejection: () => undefined }
+    const ctx = {
+      get: (name: string) => ({ webServer, connection })[name],
+      effect: (execute: () => unknown) => execute() as () => void,
+    }
     const tracker = createAdapterStatusTracker()
 
-    const dispose = installAdapterStatusRpc(connection, tracker)
+    const dispose = installAdapterStatusRpc(ctx, tracker)
 
-    expect(handle).toHaveBeenCalledWith(DISCORD_RPC_CHANNEL, expect.any(Function), { authority: 'loopback' })
+    expect(registered).toHaveLength(1)
+    expect(registered[0]).toMatchObject({ kind: 'prefix', path: DISCORD_RPC_CHANNEL })
+    expect(typeof registered[0]?.handler).toBe('function')
     dispose()
-    expect(handle.mock.calls[0]).toBeDefined()
+  })
+
+  it('serves the channel protocol: fence, envelope, and method match', async () => {
+    let routeHandler: ((req: unknown, res: unknown) => Promise<void>) | undefined
+    const webServer = { register: (route: { handler: (req: unknown, res: unknown) => Promise<void> }) => { routeHandler = route.handler; return () => undefined } }
+    let verdict: number | undefined
+    const connection = { requestRejection: () => verdict }
+    const ctx = { get: (name: string) => ({ webServer, connection })[name], effect: (execute: () => unknown) => execute() as () => void }
+    installAdapterStatusRpc(ctx, createAdapterStatusTracker())
+
+    const makeRes = () => {
+      const state: { status?: number; body?: string; headers?: Record<string, string> } = {}
+      return {
+        state,
+        writeHead(status: number, headers?: Record<string, string>) { state.status = status; if (headers !== undefined) state.headers = headers },
+        end(body: string) { state.body = body },
+      }
+    }
+    const makeReq = (body: string, method = 'POST', url = `${DISCORD_RPC_CHANNEL}/${STATUS_ENDPOINT}`) => ({
+      method,
+      url,
+      headers: { 'content-type': 'application/json' },
+      on(event: string, listener: (arg?: unknown) => void) {
+        if (event === 'data') listener(Buffer.from(body))
+        if (event === 'end') listener()
+      },
+    })
+
+    // The fence rejects before anything else runs.
+    verdict = 401
+    let res = makeRes()
+    await routeHandler?.(makeReq('{}'), res)
+    expect(res.state.status).toBe(401)
+
+    // An admitted status call answers the server-response envelope.
+    verdict = undefined
+    res = makeRes()
+    await routeHandler?.(makeReq(JSON.stringify({ type: 'client-request', rpcId: 'r-1', method: STATUS_ENDPOINT, payload: {} })), res)
+    expect(res.state.status).toBe(200)
+    const envelope = JSON.parse(res.state.body ?? '') as { type: string; rpcId: string; result: { ok: boolean } }
+    expect(envelope).toMatchObject({ type: 'server-response', rpcId: 'r-1' })
+    expect(envelope.result.ok).toBe(true)
+
+    // A method/endpoint mismatch is a wire-level bad request.
+    res = makeRes()
+    await routeHandler?.(makeReq(JSON.stringify({ type: 'client-request', rpcId: 'r-2', method: 'other.thing', payload: {} })), res)
+    const mismatch = JSON.parse(res.state.body ?? '') as { result: { ok: boolean; error: { code: string } } }
+    expect(mismatch.result.ok).toBe(false)
+    expect(mismatch.result.error.code).toBe('gateway/bad-request')
   })
 
   it('exposes the channel constant the client must call', () => {

@@ -14,7 +14,7 @@ import { OUTBOUND_EPHEMERAL_FLAGS } from '../policy/disclosure.js'
 import { workspaceAutocompleteChoices, createProjectListView, type ProjectListPort } from './project-list.js'
 import { projectInfo } from './project-info.js'
 import type { WorkspaceResolver } from './project-bind.js'
-import type { CancelOutcome, PromptOutcome, QueueRemoveOutcome, WorkspaceDetailOutcome } from '../dsh/api-proxy-face.js'
+import type { CancelOutcome, PromptOutcome, QueueRemoveOutcome, WorkspaceDetailOutcome } from '../dsh/host-face.js'
 import { planSteer } from './steer-control.js'
 import { planStop } from './stop-control.js'
 import type { TurnTracker } from './turn-ownership.js'
@@ -26,7 +26,7 @@ import type { ChannelBinding } from '../state/records.js'
 import type { NormalizedInteraction } from '../gateway/inbound.js'
 import type { CopyTable } from '../i18n.js'
 
-/** The DSH faces the control commands submit through (apiProxy-backed). */
+/** The DSH faces the control commands submit through (host-face-backed). */
 export interface InteractionDshFace {
   cancel(sessionId: string): Promise<CancelOutcome>
   steer(sessionId: string, prompt: string): Promise<PromptOutcome>

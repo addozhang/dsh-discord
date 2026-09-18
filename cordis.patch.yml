@@ -11,4 +11,4 @@
 - insert:
     - id: dsh-discord
       name: '@addozhang/dsh-discord'
-      inject: [apiProxy, credentials, settings, storageDomain, connection]
+      inject: [sessionController, workspaceController, sessionQuery, webServer, credentials, settings, storageDomain, connection]

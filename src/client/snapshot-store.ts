@@ -6,7 +6,7 @@
  */
 
 import { produce } from 'immer'
-import type { SnapshotStore } from '@deepseek-ai/dsh-client-runtime/client'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 
 /** Create an immutable-snapshot store with synchronous notification. */
 export function createLocalSnapshotStore<T>(initial: T): SnapshotStore<T> {

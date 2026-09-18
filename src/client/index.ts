@@ -4,7 +4,7 @@
  * the settings card into the Plugins section's tab list until unload.
  */
 
-import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { Context } from '@deepseek-ai/cordis'
 import {
   DISCORD_RPC_CHANNEL,
   STATUS_ENDPOINT,
@@ -42,15 +42,13 @@ interface PluginRpcFace {
 }
 
 /** Mount the Discord settings card into the Plugins section. */
-export function apply(ctx: ClientContext): void {
+export function apply(ctx: Context): void {
   const scope = ctx.settingsScope.bind<DiscordSettings>({ namespace: DISCORD_SETTINGS_NAMESPACE })
   const controller = new DiscordCardController(scope)
   // Register the card's copy dictionary, then the card under the settings
   // UI's declared parent slot — a standalone slot name fails the loader's
   // children-table check at runtime.
-  ;(ctx as ClientContext & {
-    locale: { register(namespace: string, dictionary: Record<string, Record<string, string>>): unknown }
-  }).locale.register('dsh-discord', {
+  ctx.locale.register('dsh-discord', {
     en: DISCORD_CARD_LOCALE_EN,
     zh: DISCORD_CARD_LOCALE_ZH,
   })
@@ -65,7 +63,7 @@ export function apply(ctx: ClientContext): void {
   }, DiscordSettingsCard))
   ctx.effect(() => installDiscordNavIcon(), 'discord nav icon shim')
 
-  const call = (ctx as ClientContext & PluginRpcFace).connection?.rpc?.call
+  const call = (ctx as Context & PluginRpcFace).connection?.rpc?.call
   if (typeof call !== 'function') return
   controller.setManagement({
     setToken: (value) => Promise.resolve(call(DISCORD_RPC_CHANNEL, 'credentials.set', { value }, undefined)).then((answer) => {

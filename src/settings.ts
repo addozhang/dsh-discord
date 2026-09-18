@@ -1,8 +1,26 @@
-import { installSettingsSection } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import type { Context } from '@deepseek-ai/cordis'
 
 import { DISCORD_SETTINGS_NAMESPACE } from './settings-namespace.js'
+
+/**
+ * The 0.1.6 settings provider face this module speaks: the standalone
+ * `installSettingsSection` export became the provider's `installSection`
+ * method (same register/setSource/watch semantics, same hooks).
+ */
+interface SettingsSectionProvider {
+  installSection(
+    owner: Context,
+    ns: typeof DISCORD_SETTINGS_NAMESPACE,
+    schema: z<DiscordSettings>,
+    entry: DiscordSettings,
+    hooks: {
+      validate?: (value: DiscordSettings) => void
+      setSource: (current: () => DiscordSettings) => void
+      onChange: () => void
+    },
+  ): void
+}
 
 export { DISCORD_SETTINGS_NAMESPACE } from './settings-namespace.js'
 
@@ -147,7 +165,11 @@ export function installDiscordSettings(
   onChange: (value: DiscordSettings) => void,
 ): void {
   let source = (): DiscordSettings => entry
-  installSettingsSection(ctx, DISCORD_SETTINGS_NAMESPACE, DiscordSettingsSchema, entry, {
+  const provider = ctx.get('settings') as SettingsSectionProvider | undefined
+  if (provider === undefined || typeof provider.installSection !== 'function') {
+    throw new TypeError('settings provider with installSection is unavailable on this Host')
+  }
+  provider.installSection(ctx, DISCORD_SETTINGS_NAMESPACE, DiscordSettingsSchema, entry, {
     validate: value => { validateDiscordSettings(normalizeDiscordSettings(value)); },
     setSource: current => {
       source = () => normalizeDiscordSettings(current())

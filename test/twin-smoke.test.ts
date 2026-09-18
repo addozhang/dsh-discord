@@ -15,7 +15,6 @@ import { createInteractionRouter } from '../src/features/interaction-router.js'
 import { createCopy } from '../src/i18n.js'
 import { renderApprovalControls } from '../src/features/approval-view.js'
 import { createApprovalStore } from '../src/features/approval-store.js'
-import { createClientRespondPort, type RespondReceipt } from '../src/dsh/api-proxy-face.js'
 import { createComponentRegistry } from '../src/discord/components.js'
 import { startLiveRender } from '../src/stream/live.js'
 import { CUSTOM_ANSWER_VALUE, renderQuestionControls } from '../src/features/question-view.js'
@@ -936,8 +935,6 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
       updateIntervalMs: 0,
       activityCoalesceMs: 0,
       typingIntervalMs: 60_000,
-      approvalTimeoutMs: 600_000,
-      questionTimeoutMs: 1_800_000,
       onTurnEnded: () => {},
     })
 
@@ -1039,13 +1036,18 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
   let runtime: DiscordAdapterRuntime
   let threadId = ''
   const runtimeRef: { current: DiscordAdapterRuntime | undefined } = { current: undefined }
-  /** Host-side pending asks: an rpcId leaves the map when answered. */
-  const pendingAsks = new Map<string, { sessionId: string; kind: 'approval' | 'question' }>()
-  const respondCalls: Array<Record<string, unknown>> = []
+  /** Settle-model records: one entry per answer the click pipeline settled. */
+  const settleRecords: Array<{ kind: 'approval' | 'question'; key: string; outcome?: string; answer?: unknown }> = []
+  /** The ask callbacks the composed answerer drives in production (host-asks). */
+  let askSink: {
+    onApprovalRequested(input: { sessionId: string; threadId: string; rpcId: string; approvalId: string; toolName: string; reason?: string | undefined; expiresAtMs: number }): void
+    onQuestionRequested(input: { sessionId: string; threadId: string; rpcId: string; expiresAtMs: number; questions: ReadonlyArray<Record<string, unknown>> }): void
+    onQuestionResolved(input: { sessionId: string; questionRpcId: string; outcome: 'answered' | 'cancelled' }): void
+    onApprovalResolved(input: { sessionId: string; approvalId: string; outcome?: string | undefined }): void
+  }
   /** Type-9 (show-modal) interaction callbacks, for minted modal custom_id capture. */
   const interactionCallbacks: Array<Record<string, unknown>> = []
   const controlMessages = new Map<string, { channelId: string; messageId: string }>()
-  let pushFrames: (frames: unknown[]) => void = () => {}
   let turnTracker: ReturnType<typeof createTurnTracker>
   let approvalsStore: ReturnType<typeof createApprovalStore>
 
@@ -1077,34 +1079,16 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     approvalsStore = createApprovalStore(createKvTableStub())
     const questionsStore = createQuestionStore()
 
-    // ── STRICT fake DSH apiProxy: validates the ClientResponse envelope
-    // exactly like the Host, and resolves each ask exactly once.
-    const strictRespond = (message: unknown): Promise<RespondReceipt> => {
-      const m = message as { type?: unknown; rpcId?: unknown; result?: { ok?: unknown; value?: unknown } }
-      if (m.type !== 'client-response') return Promise.reject(new TypeError('respond: missing type discriminator'))
-      if (typeof m.rpcId !== 'string' || m.rpcId === '') return Promise.reject(new TypeError('respond: missing rpcId'))
-      if (m.result?.ok !== true) return Promise.reject(new TypeError('respond: result must be ok'))
-      const ask = pendingAsks.get(m.rpcId)
-      if (ask === undefined) return Promise.resolve({ accepted: false, reason: 'not-pending' })
-      pendingAsks.delete(m.rpcId)
-      respondCalls.push(message as Record<string, unknown>)
-      return Promise.resolve({ accepted: true })
+    // ── Settle-model ports: the 0.1.6 composed answerer resolves asks
+    // in-process, so the click pipeline's ports record settles (what
+    // production's host-asks settle ports do) instead of wire envelopes.
+    const settleApproval = (approvalId: string, outcome: string): void => {
+      settleRecords.push({ kind: 'approval', key: approvalId, outcome })
     }
-    const clientRespond = createClientRespondPort({ respond: strictRespond }, { log: () => {} })
+    const settleQuestion = (rpcId: string, answer: unknown): void => {
+      settleRecords.push({ kind: 'question', key: rpcId, answer })
+    }
 
-    // Pushable mux: the test drives approval/question frames like the Host.
-    const pushed: unknown[] = []
-    pushFrames = frames => { pushed.push(...frames) }
-    async function* pushableFrames(signal: AbortSignal): AsyncIterable<unknown> {
-      let index = 0
-      while (!signal.aborted) {
-        while (index < pushed.length) {
-          yield pushed[index]
-          index += 1
-        }
-        await new Promise(resolve => { setTimeout(resolve, 5) })
-      }
-    }
 
     const disableControl = async (key: string): Promise<void> => {
       const target = controlMessages.get(key)
@@ -1120,8 +1104,10 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
       registry: sharedRegistry,
       store: questionsStore,
       port: {
-        respond: (input: { rpcId: string; sessionId: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }) =>
-          clientRespond.respond(input.rpcId, { sessionId: input.sessionId, answer: input.answer }),
+        respond: (input: { rpcId: string; sessionId: string; answer: { answers: Array<{ id: string; selected: string[]; custom?: string }> } }) => {
+          settleQuestion(input.rpcId, input.answer)
+          return Promise.resolve({ outcome: 'confirmed' as const })
+        },
       },
       nowMs: () => Date.now(),
       controls: { disable: disableControl },
@@ -1143,8 +1129,10 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
       registry: sharedRegistry,
       approvals: approvalsStore,
       approvalRespondPort: {
-        respond: ({ rpcId, sessionId, approvalId, outcome }) =>
-          clientRespond.respond(rpcId, { sessionId, approvalId, outcome }),
+        respond: ({ approvalId, outcome }) => {
+          settleApproval(approvalId, outcome)
+          return Promise.resolve({ outcome: 'confirmed' as const })
+        },
       },
       turnTracker,
       queueSnapshots: new Map(),
@@ -1233,7 +1221,7 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
 
     // The live renderer with index-style requests wiring over the strict port.
     const live = startLiveRender({
-      frames: pushableFrames,
+      frames: () => (async function* () {})(),
       threadForSession: (sessionId: string) => sessionId === 'sess-1' ? threadId : undefined,
       delivery: {
         send: async (request) => {
@@ -1254,9 +1242,10 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
       updateIntervalMs: 0,
       activityCoalesceMs: 0,
       typingIntervalMs: 60_000,
-      approvalTimeoutMs: 600_000,
-      questionTimeoutMs: 1_800_000,
-      requests: {
+    })
+    // The ask callbacks the composed answerer drives (host-asks in
+    // production): assigned standalone, since asks no longer ride frames.
+    askSink = {
         onApprovalRequested: (input) => {
           void input.threadId
           approvalsStore.open({
@@ -1327,8 +1316,7 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
             outcome: input.outcome,
           }).catch(() => {})
         },
-      },
-    })
+      }
     void live
     await new Promise(resolve => { setTimeout(resolve, 500) })
   }, 20_000)
@@ -1338,18 +1326,11 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     await discord.stop()
   })
 
-  it('carries an approval click into a shape-correct client-response', async () => {
-    pendingAsks.set('ask-approval', { sessionId: 'sess-1', kind: 'approval' })
-    pushFrames([{
-      rpcId: 'ask-approval',
-      payload: {
-        type: 'approval/requested',
-        sessionId: 'sess-1',
-        approvalId: '7c4a447f',
-        toolName: 'bash',
-        reason: 'write outside workspace',
-      },
-    }])
+  it('carries an approval click into a settled composed-answerer outcome', async () => {
+    askSink.onApprovalRequested({
+      sessionId: 'sess-1', threadId, rpcId: 'ask-approval', approvalId: '7c4a447f',
+      toolName: 'bash', reason: 'write outside workspace', expiresAtMs: Date.now() + 600_000,
+    })
 
     const scope = discord.channel(threadId)
     const control = await scope.waitForMessage({
@@ -1362,13 +1343,9 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: control.id, customId: allowId })
     await new Promise(resolve => { setTimeout(resolve, 300) })
 
-    // The strict fake validated the envelope; the payload rides result.value.
-    expect(respondCalls).toHaveLength(1)
-    expect(respondCalls[0]).toMatchObject({
-      type: 'client-response',
-      rpcId: 'ask-approval',
-      result: { ok: true, value: { sessionId: 'sess-1', approvalId: '7c4a447f', outcome: 'allowed-once' } },
-    })
+    // The settle port recorded exactly one answer for the claimed ask.
+    const settled = settleRecords.filter(record => record.key === '7c4a447f')
+    expect(settled).toEqual([{ kind: 'approval', key: '7c4a447f', outcome: 'allowed-once' }])
     // Controls retired on the confirmed answer.
     const edited = await discord.thread(threadId).getMessages()
     const controlAfter = edited.find(message => message.id === control.id)
@@ -1377,23 +1354,18 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
   }, 20_000)
 
   it('carries a question select + submit into a shape-correct answer batch', async () => {
-    pendingAsks.set('ask-question', { sessionId: 'sess-1', kind: 'question' })
-    pushFrames([{
-      rpcId: 'ask-question',
-      payload: {
-        type: 'question/requested',
-        sessionId: 'sess-1',
-        questions: [{
-          id: 'q1',
-          question: 'How to proceed',
-          options: [
-            { label: 'Retry with approval (Recommended)' },
-            { label: 'Create in /private/tmp' },
-            { label: 'Other — tell us in your own words' },
-          ],
-        }],
-      },
-    }])
+    askSink.onQuestionRequested({
+      sessionId: 'sess-1', threadId, rpcId: 'ask-question', expiresAtMs: Date.now() + 600_000,
+      questions: [{
+        id: 'q1',
+        question: 'How to proceed',
+        options: [
+          { label: 'Retry with approval (Recommended)' },
+          { label: 'Create in /private/tmp' },
+          { label: 'Other — tell us in your own words' },
+        ],
+      }],
+    })
 
     const scope = discord.channel(threadId)
     const control = await scope.waitForMessage({
@@ -1417,58 +1389,43 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     })
     await new Promise(resolve => { setTimeout(resolve, 300) })
 
-    const sent = respondCalls.filter(message => message.rpcId === 'ask-question')
+    const sent = settleRecords.filter(record => record.key === 'ask-question')
     expect(sent).toHaveLength(1)
     expect(sent[0]).toMatchObject({
-      type: 'client-response',
-      result: {
-        ok: true,
-        value: { sessionId: 'sess-1', answer: { answers: [{ id: 'q1', selected: ['Retry with approval (Recommended)'] }] } },
-      },
+      kind: 'question',
+      answer: { answers: [{ id: 'q1', selected: ['Retry with approval (Recommended)'] }] },
     })
   }, 20_000)
 
-  it('answers a second respond for a settled ask with not-pending', async () => {
+  it('never settles a claimed ask twice, even from a repeated click', async () => {
     // The Host-semantics regression: an ask answered once is no longer
-    // pending — a duplicate respond must NOT be treated as delivered.
-    pendingAsks.set('ask-dupe', { sessionId: 'sess-1', kind: 'approval' })
-    const first = await (async () => {
-      // Drive the strict responder directly through a fresh render+click.
-      pushFrames([{
-        rpcId: 'ask-dupe',
-        payload: {
-          type: 'approval/requested',
-          sessionId: 'sess-1',
-          approvalId: 'dupe-1',
-          toolName: 'bash',
-        },
-      }])
-      const scope = discord.channel(threadId)
-      const control = await scope.waitForMessage({
-        predicate: message => message.content.includes('Approval required'),
-      })
-      const row = (control.components?.[0] as { components?: Array<{ custom_id?: string }> } | undefined)?.components ?? []
-      return { control, allowId: row[0]?.custom_id ?? '' }
-    })()
-    await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: first.control.id, customId: first.allowId })
+    // pending — a duplicate answer must NOT be treated as delivered.
+    askSink.onApprovalRequested({
+      sessionId: 'sess-1', threadId, rpcId: 'ask-dupe', approvalId: 'dupe-1',
+      toolName: 'dupe-op', expiresAtMs: Date.now() + 600_000,
+    })
+    const scope = discord.channel(threadId)
+    const control = await scope.waitForMessage({
+      predicate: message => message.content.includes('Approval required — Tool'),
+    })
+    const row = (control.components?.[0] as { components?: Array<{ custom_id?: string }> } | undefined)?.components ?? []
+    const allowId = row[0]?.custom_id ?? ''
+    await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: control.id, customId: allowId })
     await new Promise(resolve => { setTimeout(resolve, 300) })
+    expect(settleRecords.filter(record => record.key === 'dupe-1')).toHaveLength(1)
 
-    const before = respondCalls.length
-    const strict = await (async () => {
-      // A second respond for the settled ask: not-pending.
-      const port = createClientRespondPort({ respond: () => Promise.resolve({ accepted: false, reason: 'not-pending' }) })
-      return port.respond('ask-dupe', {})
-    })()
-    expect(strict).toEqual({ outcome: 'rejected', reason: 'not-pending' })
-    expect(respondCalls.length).toBe(before)
+    // A second click on the retired control: the claim already resolved, so
+    // the pipeline answers already-resolved and settles nothing new.
+    await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: control.id, customId: allowId })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+    expect(settleRecords.filter(record => record.key === 'dupe-1')).toHaveLength(1)
   }, 20_000)
 
   it('carries a Reject click into outcome rejected', async () => {
-    pendingAsks.set('ask-reject', { sessionId: 'sess-1', kind: 'approval' })
-    pushFrames([{
-      rpcId: 'ask-reject',
-      payload: { type: 'approval/requested', sessionId: 'sess-1', approvalId: 'rej-1', toolName: 'edit' },
-    }])
+    askSink.onApprovalRequested({
+      sessionId: 'sess-1', threadId, rpcId: 'ask-reject', approvalId: 'rej-1',
+      toolName: 'edit', expiresAtMs: Date.now() + 600_000,
+    })
     const scope = discord.channel(threadId)
     const control = await scope.waitForMessage({
       predicate: message => message.content.includes('Approval required — Edit'),
@@ -1480,24 +1437,15 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: control.id, customId: rejectId })
     await new Promise(resolve => { setTimeout(resolve, 300) })
 
-    const sent = respondCalls.filter(message => message.rpcId === 'ask-reject')
-    expect(sent).toHaveLength(1)
-    expect(sent[0]).toMatchObject({
-      type: 'client-response',
-      result: { ok: true, value: { sessionId: 'sess-1', approvalId: 'rej-1', outcome: 'rejected' } },
-    })
+    const sent = settleRecords.filter(record => record.key === 'rej-1')
+    expect(sent).toEqual([{ kind: 'approval', key: 'rej-1', outcome: 'rejected' }])
   }, 20_000)
 
   it('carries the Other modal answer through modal submit into the batch', async () => {
-    pendingAsks.set('ask-modal', { sessionId: 'sess-1', kind: 'question' })
-    pushFrames([{
-      rpcId: 'ask-modal',
-      payload: {
-        type: 'question/requested',
-        sessionId: 'sess-1',
-        questions: [{ id: 'q1', question: '部署策略怎么选', options: [{ label: 'Option A' }] }],
-      },
-    }])
+    askSink.onQuestionRequested({
+      sessionId: 'sess-1', threadId, rpcId: 'ask-modal', expiresAtMs: Date.now() + 600_000,
+      questions: [{ id: 'q1', question: '部署策略怎么选', options: [{ label: 'Option A' }] }],
+    })
     const scope = discord.channel(threadId)
     const control = await scope.waitForMessage({
       predicate: message => message.content.includes('部署策略怎么选'),
@@ -1529,24 +1477,19 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     })
     await new Promise(resolve => { setTimeout(resolve, 300) })
 
-    const sent = respondCalls.filter(message => message.rpcId === 'ask-modal')
+    const sent = settleRecords.filter(record => record.key === 'ask-modal')
     expect(sent).toHaveLength(1)
     expect(sent[0]).toMatchObject({
-      type: 'client-response',
-      result: { ok: true, value: { sessionId: 'sess-1', answer: { answers: [{ id: 'q1', selected: [], custom: '改为只读挂载' }] } } },
+      kind: 'question',
+      answer: { answers: [{ id: 'q1', selected: [], custom: '改为只读挂载' }] },
     })
   }, 20_000)
 
   it('retires question controls on a remote resolution without submitting', async () => {
-    pendingAsks.set('ask-remote', { sessionId: 'sess-1', kind: 'question' })
-    pushFrames([{
-      rpcId: 'ask-remote',
-      payload: {
-        type: 'question/requested',
-        sessionId: 'sess-1',
-        questions: [{ id: 'q1', question: 'Remote resolution target', options: [{ label: 'A' }, { label: 'B' }] }],
-      },
-    }])
+    askSink.onQuestionRequested({
+      sessionId: 'sess-1', threadId, rpcId: 'ask-remote', expiresAtMs: Date.now() + 600_000,
+      questions: [{ id: 'q1', question: 'Remote resolution target', options: [{ label: 'A' }, { label: 'B' }] }],
+    })
     const scope = discord.channel(threadId)
     const control = await scope.waitForMessage({
       predicate: message => message.content.includes('Remote resolution target'),
@@ -1557,10 +1500,7 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     const submitCustomId = rows.at(-1)?.components[0]?.custom_id
     if (typeof submitCustomId !== 'string') throw new TypeError('submit control missing custom_id')
 
-    pushFrames([{
-      rpcId: 'ask-remote',
-      payload: { type: 'question/resolved', sessionId: 'sess-1', questionRpcId: 'ask-remote', outcome: 'answered' },
-    }])
+    askSink.onQuestionResolved({ sessionId: 'sess-1', questionRpcId: 'ask-remote', outcome: 'answered' })
     await new Promise(resolve => { setTimeout(resolve, 300) })
 
     // Controls retired; later clicks settle as already-resolved, never a respond.
@@ -1568,15 +1508,15 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     const controlAfter = edited.find(message => message.id === control.id)
     expect(controlAfter?.components ?? []).toHaveLength(0)
 
-    const before = respondCalls.length
+    const before = settleRecords.length
     await discord.simulateSelectMenu({
       channelId: threadId, userId: USER, messageId: control.id, customId: selectCustomId,
       values: ['A'],
     })
     await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: control.id, customId: submitCustomId })
     await new Promise(resolve => { setTimeout(resolve, 300) })
-    expect(respondCalls.filter(message => message.rpcId === 'ask-remote')).toHaveLength(0)
-    expect(respondCalls.length).toBe(before)
+    expect(settleRecords.filter(record => record.key === 'ask-remote')).toHaveLength(0)
+    expect(settleRecords.length).toBe(before)
   }, 20_000)
 })
 

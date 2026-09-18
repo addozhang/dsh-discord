@@ -77,8 +77,6 @@ async function drive(frames: LiveFrame[], options: {
     updateIntervalMs: options.updateIntervalMs ?? 0,
     activityCoalesceMs: 0,
     typingIntervalMs: 60_000,
-    approvalTimeoutMs: 600_000,
-    questionTimeoutMs: 1_800_000,
     ...(options.onQueueSnapshot === undefined ? {} : { onQueueSnapshot: options.onQueueSnapshot }),
     ...(options.onTurnEnded === undefined ? {} : { onTurnEnded: options.onTurnEnded }),
     ...(options.threadName === undefined ? {} : { threadName: options.threadName }),
@@ -403,8 +401,6 @@ describe('live render: delivery failure posture', () => {
       updateIntervalMs: 0,
       activityCoalesceMs: 0,
       typingIntervalMs: 60_000,
-      approvalTimeoutMs: 1,
-      questionTimeoutMs: 1,
     })
     const push = (frame: LiveFrame): void => { queue.push(frame); notify?.() }
 

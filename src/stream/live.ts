@@ -16,6 +16,7 @@ import { createToolActivitySurface, type ToolActivitySurface } from './tool-view
 import { createAnswerFinalizer, type AnswerFinalizer } from './finalizer.js'
 import { buildOutboundMessage } from './outbound.js'
 import { toolCategoryIcon } from './icons.js'
+import { shellCommandTitle } from './tool-view.js'
 import { discordChannelNameKey, safeTitle } from '../policy/disclosure.js'
 import type { DiscordVerbosity } from '../settings.js'
 
@@ -61,10 +62,6 @@ export interface LiveRenderDeps {
   threadName?: (channelId: string) => Promise<string | undefined>
   updateIntervalMs: number
   typingIntervalMs: number
-  /** Approval ask deadline (approvalTimeoutMs setting). */
-  approvalTimeoutMs: number
-  /** Question ask deadline (questionTimeoutMs setting). */
-  questionTimeoutMs: number
   /** Coalescing budget for tool-activity edits (default 1s). */
   activityCoalesceMs?: number
   verbosity?: DiscordVerbosity
@@ -75,31 +72,6 @@ export interface LiveRenderDeps {
   interruptedMarker?: () => string
   /** Turn ownership release on turn/end. */
   onTurnEnded?: (sessionId: string) => void
-  /**
-   * Answerable server-request frames (interaction-routing spec): approvals
-   * and questions arrive as mux frames with an envelope rpcId the response
-   * must echo. The composition owns rendering, ownership, and expiry.
-   */
-  requests?: {
-    onApprovalRequested(input: {
-      sessionId: string
-      threadId: string
-      rpcId: string
-      approvalId: string
-      toolName: string
-      reason?: string | undefined
-      expiresAtMs: number
-    }): void
-    onApprovalResolved(input: { sessionId: string; approvalId: string; outcome?: string | undefined }): void
-    onQuestionRequested(input: {
-      sessionId: string
-      threadId: string
-      rpcId: string
-      questions: Array<Record<string, unknown>>
-      expiresAtMs: number
-    }): void
-    onQuestionResolved(input: { sessionId: string; questionRpcId: string; outcome: 'answered' | 'cancelled' }): void
-  }
 }
 
 /** Coalescing budget for activity-message edits under parallel tools. */
@@ -436,7 +408,8 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       }
       case 'tool/call': {
         if (typeof data['callId'] !== 'string' || typeof data['name'] !== 'string') return
-        const title = presentationTitle(frameView)
+        const rawArguments = typeof data['arguments'] === 'string' ? data['arguments'] : undefined
+        const title = presentationTitle(frameView) ?? shellCommandTitle(data['name'], rawArguments)
         runtime.toolNames.set(data['callId'], data['name'])
         if (title !== undefined) runtime.toolTitles.set(data['callId'], title)
         runtime.tools.record({
@@ -444,7 +417,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
           toolName: data['name'],
           state: 'running',
           title,
-          rawArguments: typeof data['arguments'] === 'string' ? data['arguments'] : undefined,
+          rawArguments,
         })
         runtime.activityScheduler?.schedule(renderActivityContent(runtime))
         return
@@ -502,7 +475,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     return { id, summary: text === '' ? '（非文本消息）' : text }
   }
 
-  function handleFrame(raw: unknown, envelopeRpcId: string | undefined): void {
+  function handleFrame(raw: unknown): void {
     const frame = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>
     const type = frame['type']
     const sessionId = typeof frame['sessionId'] === 'string' ? frame['sessionId'] : undefined
@@ -557,50 +530,8 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       })
       return
     }
-    if (type === 'approval/requested') {
-      const threadId = deps.threadForSession(sessionId)
-      if (threadId === undefined || deps.requests === undefined) return
-      deps.requests.onApprovalRequested({
-        sessionId,
-        threadId,
-        rpcId: envelopeRpcId ?? '',
-        approvalId: typeof frame['approvalId'] === 'string' ? frame['approvalId'] : '',
-        toolName: typeof frame['toolName'] === 'string' ? frame['toolName'] : 'tool',
-        reason: typeof frame['reason'] === 'string' ? frame['reason'] : undefined,
-        expiresAtMs: Date.now() + deps.approvalTimeoutMs,
-      })
-      return
-    }
-    if (type === 'approval/resolved') {
-      deps.requests?.onApprovalResolved({
-        sessionId,
-        approvalId: typeof frame['approvalId'] === 'string' ? frame['approvalId'] : '',
-        outcome: typeof frame['outcome'] === 'string' ? frame['outcome'] : undefined,
-      })
-      return
-    }
-    if (type === 'question/requested') {
-      const threadId = deps.threadForSession(sessionId)
-      if (threadId === undefined || deps.requests === undefined) return
-      const questions = Array.isArray(frame['questions']) ? frame['questions'] as Array<Record<string, unknown>> : []
-      deps.requests.onQuestionRequested({
-        sessionId,
-        threadId,
-        rpcId: envelopeRpcId ?? '',
-        questions,
-        expiresAtMs: Date.now() + deps.questionTimeoutMs,
-      })
-      return
-    }
-    if (type === 'question/resolved') {
-      const outcome = frame['outcome'] === 'cancelled' ? 'cancelled' as const : 'answered' as const
-      deps.requests?.onQuestionResolved({
-        sessionId,
-        questionRpcId: typeof frame['questionRpcId'] === 'string' ? frame['questionRpcId'] : '',
-        outcome,
-      })
-      return
-    }
+    // Answerable asks no longer ride the frame stream: the 0.1.6 host routes
+    // them through the composed-answerer waterfalls (src/dsh/host-asks.ts).
     if (type !== 'session/event') return
     const threadId = deps.threadForSession(sessionId)
     if (threadId === undefined) {
@@ -626,18 +557,12 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         for await (const frame of deps.frames(controller.signal)) {
           if (isDisposed()) return
           try {
-            const envelopeRpcId = (typeof frame === 'object' && frame !== null && 'rpcId' in frame)
-              ? (frame as { rpcId?: unknown }).rpcId
-              : undefined
-            const payload = (typeof frame === 'object' && frame !== null && 'payload' in frame)
-              ? (frame as { payload?: unknown }).payload
-              : frame
             if (TRACE) {
-              const t = (typeof payload === 'object' && payload !== null ? (payload as { type?: unknown }).type : undefined)
-              const sid = (typeof payload === 'object' && payload !== null ? (payload as { sessionId?: unknown }).sessionId : undefined)
+              const t = (typeof frame === 'object' && frame !== null ? (frame as { type?: unknown }).type : undefined)
+              const sid = (typeof frame === 'object' && frame !== null ? (frame as { sessionId?: unknown }).sessionId : undefined)
               trace('frame', String(t), String(sid))
             }
-            handleFrame(payload, typeof envelopeRpcId === 'string' ? envelopeRpcId : undefined)
+            handleFrame(frame)
           } catch (cause) {
             deps.log?.('discord_live_frame_threw', { cause: String(cause) })
           }

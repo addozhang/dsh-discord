@@ -7,7 +7,7 @@
  * 25 choices, the caller slices.
  */
 
-import type { SessionResumeRow } from '../dsh/api-proxy-face.js'
+import type { SessionResumeRow } from '../dsh/host-face.js'
 
 export type { SessionResumeRow }
 import type { CopyTable } from '../i18n.js'

@@ -8,7 +8,10 @@
 
 /** The exact Host service roster the adapter requires (design decision 1). */
 export const REQUIRED_HOST_SERVICES = [
-  'apiProxy',
+  'sessionController',
+  'workspaceController',
+  'sessionQuery',
+  'webServer',
   'credentials',
   'settings',
   'storageDomain',
@@ -18,20 +21,24 @@ export const REQUIRED_HOST_SERVICES = [
 export type HostServiceName = (typeof REQUIRED_HOST_SERVICES)[number]
 
 /**
- * Minimum contract members per service, confirmed against the installed DSH
- * `0.1.1-rc.2` types. A service lacking any member means a version drift the
- * exact peer pin should have prevented; refuse rather than probe at runtime.
+ * Minimum contract members per service, confirmed against the 0.1.6
+ * controller faces (dsh-api-session-controller / dsh-api-workspace-controller
+ * / dsh-session-query). A service lacking any member means a version drift
+ * the startup probe should have refused; refuse rather than probe at runtime.
  */
 const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
-  apiProxy: ['sessions', 'workspace', 'events', 'host'],
+  sessionController: ['prompt', 'create', 'list', 'cancel', 'updateQueue', 'selectModel', 'modelCatalog', 'follow', 'control'],
+  workspaceController: ['follow'],
+  sessionQuery: ['observeSession'],
+  webServer: [],
   credentials: ['resolve', 'describe', 'set', 'unset'],
-  settings: ['register'],
+  settings: ['installSection'],
   storageDomain: ['open'],
   connection: ['rpc'],
 }
 
 /** Actionable remediation hint appended to every activation failure. */
-const REMEDIATION = 'install @addozhang/dsh-discord into a dsh web profile providing the pinned DSH 0.1.1-rc.2 contracts'
+const REMEDIATION = 'install @addozhang/dsh-discord into a dsh web profile providing the 0.1.6 host controller services'
 
 function missingMembers(service: unknown, required: readonly string[]): string[] {
   if (service === undefined || service === null) return [...required]

@@ -15,7 +15,7 @@ import type { AccessDecision } from '../policy/authorization.js'
 import type {
   ModelSelectionShape,
   SessionModelsShape,
-} from '../dsh/api-proxy-face.js'
+} from '../dsh/host-face.js'
 
 export interface DshModelPort {
   models(sessionId: string): Promise<
