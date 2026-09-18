@@ -20,7 +20,7 @@ No extra process: the adapter is a DSH plugin that mounts straight onto your `ds
 
 - **Mention-driven sessions** — an authorized `@bot <task>` in a bound channel anchors a thread (your message becomes the first post), creates the DSH session, and submits the prompt at most once. Follow-ups inside the thread queue without a mention. Attached images ride along: they are downloaded from the Discord CDN within strict size/host bounds and submitted as image parts for multimodal models.
 - **Stream rendering** — typing indicator, one head message edited in place, per-tool activity rows, fenced long-answer splitting, one-time finalize; the activity message is deleted when the turn ends.
-- **Approvals & questions** — DSH ask frames become buttons, select menus, and a free-text modal. Ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and settled controls grey out in place.
+- **Approvals & questions** — DSH asks become buttons, select menus, and a free-text modal. Ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and settled controls grey out in place.
 - **Session control** — `/steer`, `/stop`, and `/queue list|remove` with turn-ownership checks; `/project bind|list|info` and `/session resume` for guild↔workspace binding and history; `/guild forget` for operator cleanup.
 - **Model selection** — `/model show` reads the session's live model directory; `/model select` walks an interactive provider → model → reasoning cascade, or applies a typed `provider/model` directly. Open to any authorized member by default; restrictable to Host operators.
 - **Settings card, bilingual out of the box** — token onboarding and connect/disconnect (stored in the Host credential service, never in settings or logs), guild allowlist, auto-archive, and language. Every Discord-visible string ships in Chinese and English; the bot follows the DSH language preference or a pinned choice.
@@ -28,7 +28,7 @@ No extra process: the adapter is a DSH plugin that mounts straight onto your `ds
 
 ## Requirements
 
-- The [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) `0.1.1-rc.2` or newer, running a web profile
+- The [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) `0.1.6-alpha.1` or a compatible newer release, running a web profile. Adapter `0.5.x` uses the 0.1.6 controller services and is not compatible with the former `apiProxy` host surface.
 - Node.js `^22.19.0 || >=24`
 - A Discord application with a bot user and the **MESSAGE CONTENT** privileged intent enabled (Developer Portal → your application → Bot → Privileged Gateway Intents)
 
@@ -119,7 +119,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 - The adapter start chain is generation-counted, so Connect/Disconnect races with the initial boot yield exactly one gateway.
 - A credential probe falls back to `resolve()` because the Host's `describe()` misses env-sourced values — a connected adapter never reads as unconfigured.
 - Adapter logging is default-quiet: flow records ride the Host's debug level and failure-shaped events escalate to warn — nothing prints into the DSH process at the default level.
-- Wire-level live-path tracing: set `DSH_DISCORD_TRACE=1` before booting to emit mux frames, drop points, and delivery outcomes to stderr (default silent). It exists because the rc.2 Host wires no plugin log exporter and exposes no log-level switch — `logger.debug` output is unobservable — and should be dropped once the Host grows one.
+- Wire-level live-path tracing: set `DSH_DISCORD_TRACE=1` before booting to emit mux frames, drop points, and delivery outcomes to stderr (default silent). It exists because the Host wires no plugin log exporter and exposes no log-level switch at this surface — `logger.debug` output is unobservable — and should be dropped once the Host grows one.
 
 ## Known Limitations and Deferred Work
 

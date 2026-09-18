@@ -20,7 +20,7 @@
 
 - **@提及驱动会话** — 在已绑定的频道中，被授权的 `@机器人 <任务>` 会锚定一个线程（你的消息成为首帖）、创建 DSH 会话，并且至多提交一次。线程内的后续消息无需 @ 即可排队。消息附带的图片会一并送达：在严格的大小与主机白名单约束下从 Discord CDN 下载，并作为 image parts 提交给多模态模型。
 - **流式渲染** — typing 指示、单条头消息原地编辑、逐工具活动行、代码围栏感知的长文分段、一次性收尾；Turn 结束时活动消息会被删除。
-- **审批与提问** — DSH ask 帧渲染为按钮、下拉菜单与自由文本弹窗。所有权强制校验（提问者——或后续 Turn 的线程属主——才能点击），超时清扫 fail-closed，结算后的控件原地置灰。
+- **审批与提问** — DSH 的 ask 渲染为按钮、下拉菜单与自由文本弹窗。所有权强制校验（提问者——或后续 Turn 的线程属主——才能点击），超时清扫 fail-closed，结算后的控件原地置灰。
 - **会话控制** — `/steer`、`/stop`、`/queue list|remove` 带运行所有权校验；`/project bind|list|info` 与 `/session resume` 管理 Guild↔工作区绑定与历史会话；`/guild forget` 供操作员清理。
 - **模型切换** — `/model show` 读取会话的实时模型目录；`/model select` 走交互式 provider → 模型 → 推理强度级联，也可直接填写 `provider/model` 应用。默认对所有授权成员开放，可收紧为仅 Host 操作员。
 - **设置卡片，开箱双语** — Token 引导与连接/断开（存入 Host 凭据服务，绝不写入设置或日志）、服务器白名单、自动归档与语言。所有 Discord 可见文案提供中英双语；Bot 默认跟随 DSH 语言偏好，也可从卡片固定。
@@ -28,7 +28,7 @@
 
 ## 环境要求
 
-- [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) `0.1.1-rc.2` 或更新（web profile）
+- [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) `0.1.6-alpha.1` 或兼容的更新版本（web profile）。适配器 `0.5.x` 使用 0.1.6 的控制器服务，与旧版 `apiProxy` 宿主面不兼容。
 - Node.js `^22.19.0 || >=24`
 - 一个 Discord 应用（含 Bot 用户），并在开发者门户启用 **MESSAGE CONTENT** 特权 intent（Developer Portal → 你的应用 → Bot → Privileged Gateway Intents）
 
@@ -120,7 +120,7 @@ dsh-discord:
 - 适配器启动链带代际计数，Connect/Disconnect 与初始启动竞争时只会产生一个 Gateway。
 - 凭据探测会回退到 `resolve()`：Host 的 `describe()` 不识别环境变量来源的值——已连接的适配器不会被误报为未配置。
 - 适配器日志默认静默：流程记录走 Host 的 debug 级别，失败形态的事件升到 warn——默认级别下不会向 DSH 进程打印任何内容。
-- 链路级 trace：启动前设置 `DSH_DISCORD_TRACE=1` 可将 mux 帧、丢弃点与投递结果输出到 stderr（默认静默）。存在原因：rc.2 Host 未为插件日志接线任何 exporter，也没有日志级别开关——`logger.debug` 输出不可见；Host 提供等价机制后应移除。
+- 链路级 trace：启动前设置 `DSH_DISCORD_TRACE=1` 可将 mux 帧、丢弃点与投递结果输出到 stderr（默认静默）。存在原因：Host 在该面上未为插件日志接线任何 exporter，也没有日志级别开关——`logger.debug` 输出不可见；Host 提供等价机制后应移除。
 
 ## 已知限制与推迟项
 
