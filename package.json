@@ -1,6 +1,6 @@
 {
   "name": "@addozhang/dsh-discord",
-  "version": "0.5.0-alpha.1",
+  "version": "0.5.0-alpha.2",
   "description": "Discord-first adapter for DeepSeek Harness",
   "license": "MIT",
   "type": "module",
