@@ -57,9 +57,14 @@ jobs:
       - name: Publish
         # Prerelease versions MUST carry an explicit dist-tag (npm refuses
         # an untagged prerelease, which would otherwise claim `latest`).
-        run: >
-          npm publish --access public
-          ${{ contains(github.ref_name, '-') && format('--tag {0}', split(github.ref_name, '-')[-1]) || '' }}
+        run: |
+          TAG=""
+          case "$GITHUB_REF_NAME" in
+            *-alpha.*) TAG=alpha ;;
+            *-beta.*)  TAG=beta ;;
+            *-rc.*)    TAG=next ;;
+          esac
+          npm publish --access public ${TAG:+--tag "$TAG"}
 
       - name: Create GitHub release
         run: |
