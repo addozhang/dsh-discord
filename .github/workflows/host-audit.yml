@@ -1,0 +1,81 @@
+name: Host surface audit
+
+# Smoke-check the plugin's host touchpoints against the latest dsh alpha.
+# Fails when any service, method, export, or envelope shape the adapter
+# depends on is missing or changed — turning "what broke?" from a multi-day
+# archaeology session into a CI notification.
+#
+# The audit script installs the target dsh release into a temp dir and greps
+# 39 touchpoints (see AGENTS.md "dsh 官方版本升级 playbook" for the full
+# inventory). Exit 1 opens an issue naming what to fix.
+
+on:
+  schedule:
+    - cron: '0 2 * * 1,4' # Mon & Thu 02:00 UTC — catches mid-week and weekend alphas
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'dsh version to audit (defaults to alpha channel)'
+        required: false
+        default: 'alpha'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Run host surface audit
+        id: audit
+        run: |
+          VERSION="${{ github.event.inputs.version || 'alpha' }}"
+          echo "Auditing @deepseek-ai/dsh@$VERSION"
+          # The script exits 1 on any MISSING or CHANGED — capture but don't fail yet
+          set +e
+          bash scripts/host-surface-audit.sh "$VERSION" > /tmp/audit-report.txt 2>&1
+          AUDIT_EXIT=$?
+          set -e
+          cat /tmp/audit-report.txt
+          echo "exit_code=$AUDIT_EXIT" >> "$GITHUB_OUTPUT"
+          if [[ $AUDIT_EXIT -ne 0 ]]; then
+            echo "status=FAILED" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=OK" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open issue on drift
+        if: steps.audit.outputs.status == 'FAILED'
+        run: |
+          TITLE="Host surface drift detected against @deepseek-ai/dsh@${{ github.event.inputs.version || 'alpha' }}"
+          # Check if an open issue already exists (avoid duplicates per week)
+          EXISTING=$(gh issue list --state open --search "$TITLE" --json number --limit 1 | jq 'length')
+          if [[ "$EXISTING" != "0" ]]; then
+            echo "Issue already open — updating with latest report"
+            ISSUE_NUM=$(gh issue list --state open --search "$TITLE" --json number --limit 1 | jq '.[0].number')
+            gh issue comment "$ISSUE_NUM" --body "Audit report from $(date -u +%Y-%m-%dT%H:%M:%SZ):
+          $(cat /tmp/audit-report.txt)"
+          else
+            gh issue create \
+              --title "$TITLE" \
+              --body "The host surface audit found missing or changed touchpoints. Full report:
+
+          \`\`\`
+          $(cat /tmp/audit-report.txt)
+          \`\`\`
+
+          **Next steps** (see AGENTS.md \"dsh 官方版本升级 playbook\"):
+          - MISSING items need code changes before this host version can load the plugin
+          - CHANGED items need real-machine verification
+          - Run \`scripts/host-surface-audit.sh <version>\` locally to reproduce" \
+              --label "host-drift"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}

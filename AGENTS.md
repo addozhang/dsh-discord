@@ -158,6 +158,42 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   段是用户设置；凭据在 `~/.dsh/.credentials.yaml`（勿打印）
 - 卸载/排障后清理一次性 profile；`/tmp` 的 tarball 是部署中间产物
 
+## dsh 官方版本升级 playbook
+
+### 检测（每次 dsh 发版后 30 秒）
+
+```sh
+npm view @deepseek-ai/dsh dist-tags --json       # 看 alpha/next/latest 哪个动了
+scripts/host-surface-audit.sh                     # 审计 alpha（默认）
+scripts/host-surface-audit.sh --latest            # 审计 stable
+```
+
+脚本输出三色报告（✓ OK / ⚠ CHANGED / ✗ MISSING）；exit 0 = 不用动，exit 1 = 需要跟进。
+
+### 分级响应
+
+| dsh 通道 | 动作 | 发布 |
+|---|---|---|
+| alpha | 跑审计脚本 + 本地装 profile 冒烟 | 不发布；破坏点记 AGENTS.md |
+| rc/next | 审计 + 全功能真机验证（CDP 驱动 Discord） | 发对应 `-rc.N`（CI 自动 `--tag next`） |
+| latest（stable） | 全量验证 | 发正式版，依赖去 alpha 钉 stable |
+
+### 已固化的规则（0.1.6 迁移踩出来的）
+
+- **宿主接触面只允许出现在 3 个文件**：`host-face.ts`（RPC）、`host-events.ts`（事件）、
+  `host-asks.ts`（审批/提问）——新增接触点必须同步 startup.ts 契约探针
+- **方法签名不许凭类型推导**：signal 位置/必填性/返回形状逐个真机核实后记入上方事实表
+- **任何 `ctx.on` / `ctx.inject` 的运行时行为先探针后编码**（runtime inject 对已启动
+  插件是静默 no-op；作用域 waterfall 对外部插件不可达）
+- **不在 alpha 通道上发 `latest`**（CI 已固化 dist-tag 映射：alpha→alpha、beta→beta、
+  rc→next）
+
+### 接触面清单（审计脚本覆盖的全部）
+
+8 inject 服务 + 9 sessionController 方法 + 6 workspaceController 方法 +
+2 ask 服务入口 + 3 settings 导出（+3 已删符号确认未复活）+ 4 client 类型包
+（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = **39 项检查**
+
 ## OpenSpec 工作流
 
 - 行为变更 = `tasks.md` 加编号条目（16.x，含决策人与理由）+ `design.md`
