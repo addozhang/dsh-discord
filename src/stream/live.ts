@@ -70,6 +70,17 @@ export interface LiveRenderDeps {
   onQueueSnapshot?: (sessionId: string, items: Array<{ id: string; summary: string }>) => void
   /** Localized interruption suffix, resolved live (language can change). */
   interruptedMarker?: () => string
+  /**
+   * Localized progress-phase copy, resolved live (language can change).
+   * Unset: the status line is omitted and only tool rows render (the
+   * pre-progress behavior).
+   */
+  progressCopy?: () => {
+    thinking: string
+    thinkingStep: (step: number) => string
+    writing: string
+    approvalWait: string
+  }
   /** Turn ownership release on turn/end. */
   onTurnEnded?: (sessionId: string) => void
 }
@@ -90,6 +101,17 @@ function trace(...parts: unknown[]): void {
   if (TRACE) console.error('[dsh-discord:trace]', ...parts)
 }
 
+/**
+ * The turn progress phase rendered as the status line's leading entry
+ * (turn-progress-discord-sync): one editable line tracking what the agent
+ * is doing right now, so a 30s+ turn is distinguishable from a hung bot.
+ */
+type ProgressPhase =
+  | { kind: 'thinking'; step: number }
+  | { kind: 'tool'; label: string; title: string | undefined }
+  | { kind: 'writing' }
+  | { kind: 'approval' }
+
 interface ThreadRuntime {
   render: ThreadRenderModel
   tools: ToolActivitySurface
@@ -100,6 +122,17 @@ interface ThreadRuntime {
   finalizer: AnswerFinalizer | undefined
   headMessageId: string | undefined
   activityMessageId: string | undefined
+  /**
+   * The activity/status send currently in flight, resolving to the message
+   * id it created. turn/end awaits it before deleting: a send that lands
+   * after the cleanup read `activityMessageId` would otherwise orphan the
+   * status message in the thread (the activity-side analog of 16.39).
+   */
+  activityFlush: Promise<string | undefined> | undefined
+  /** Current turn progress phase; undefined outside an active turn. */
+  progressPhase: ProgressPhase | undefined
+  /** Phase suspended by an approval ask; restored when the ask settles. */
+  phaseBeforeApproval: ProgressPhase | undefined
   /**
    * The head flush currently in flight, resolving to the landed head's
    * message id (or undefined when it did not land). The authoritative
@@ -158,6 +191,17 @@ function resultCallId(data: Record<string, unknown>): string | undefined {
 }
 
 /**
+ * The failure flag of a tool/result event. The rc.2 wire carried a top-level
+ * `error`; the 0.1.6 journal marks failure on the result block (`isError`).
+ */
+function resultFailed(data: Record<string, unknown>): boolean {
+  if (data['error'] !== undefined) return true
+  const message = data['message'] as { content?: Array<{ isError?: unknown }> } | undefined
+  const block = Array.isArray(message?.content) ? message.content[0] : undefined
+  return block?.isError === true
+}
+
+/**
  * The Host presentation view's title for one tool event: a terminal call's
  * title IS the command; generic/diff cards title the call. Host-curated
  * disclosure — never raw arguments.
@@ -170,7 +214,11 @@ function presentationTitle(frameView: unknown): string | undefined {
   return typeof title === 'string' && title !== '' ? title : undefined
 }
 
-export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
+export function startLiveRender(deps: LiveRenderDeps): {
+  dispose(): void
+  /** Approval-wait steering for the ask patches (turn-progress spec). */
+  setApprovalWait(threadId: string, waiting: boolean): void
+} {
   const verbosity = deps.verbosity ?? 'essential-tools'
   const runtimes = new Map<string, ThreadRuntime>()
   const state: { disposed: boolean } = { disposed: false }
@@ -192,6 +240,9 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       finalizer: undefined,
       headMessageId: undefined,
       activityMessageId: undefined,
+      activityFlush: undefined,
+      progressPhase: undefined,
+      phaseBeforeApproval: undefined,
       headFlush: undefined,
       stepSeq: 0,
       headAttempted: false,
@@ -241,6 +292,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     runtime.turnId = turnId
     runtime.headMessageId = undefined
     runtime.activityMessageId = undefined
+    runtime.activityFlush = undefined
     runtime.headFlush = undefined
     runtime.headAttempted = false
     runtime.activityAttempted = false
@@ -263,6 +315,10 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       onFlushError: (cause) => { deps.log?.('discord_live_activity_flush_failed', { threadId, cause: String(cause) }) },
     })
     runtime.finalizer = undefined
+    // The status line opens the turn in the thinking phase (spec
+    // turn-progress: the message exists from turn/start, before any tool).
+    runtime.progressPhase = { kind: 'thinking', step: 1 }
+    runtime.phaseBeforeApproval = undefined
     // A fresh lifecycle per turn: start() no-ops on a stopped one, so a
     // second turn in the same thread would otherwise never type again.
     runtime.typing.dispose()
@@ -272,35 +328,62 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       onFailure: (cause) => { deps.log?.('discord_live_typing_threw', { threadId, cause: String(cause) }) },
     })
     runtime.typing.start()
+    runtime.activityScheduler.schedule(renderActivityContent(runtime))
   }
 
-  /** The activity message body: one icon + presentation title per call row. */
+  /** The status line's phase entry (undefined when copy is not provided). */
+  function progressPhaseLine(runtime: ThreadRuntime): string | undefined {
+    const copy = deps.progressCopy?.()
+    if (copy === undefined || runtime.progressPhase === undefined) return undefined
+    const phase = runtime.progressPhase
+    switch (phase.kind) {
+      case 'thinking': return phase.step > 1 ? copy.thinkingStep(phase.step) : copy.thinking
+      case 'tool': return `💻 ${truncateText(phase.title ?? phase.label, ACTIVITY_TITLE_MAX)}`
+      case 'writing': return copy.writing
+      case 'approval': return copy.approvalWait
+    }
+  }
+
+  /** The activity message body: phase line, then one icon + title per call row. */
   function renderActivityContent(runtime: ThreadRuntime): string {
     const rows = runtime.tools.render()
-    return rows.map(row => {
+    const rowLines = rows.map(row => {
       const title = truncateText(row.title ?? row.label, ACTIVITY_TITLE_MAX)
-      return `> ${toolCategoryIcon(row.label)} ${title}`
-    }).join('\n')
+      const mark = row.state === 'succeeded' ? '✓ ' : row.state === 'failed' ? '✗ ' : ''
+      return `> ${mark}${toolCategoryIcon(row.label)} ${title}`
+    })
+    const phaseLine = progressPhaseLine(runtime)
+    return phaseLine === undefined ? rowLines.join('\n') : [phaseLine, ...rowLines].join('\n')
   }
 
   /** Render the tool rows into one bounded activity message (create once, edit after). */
   function renderActivity(threadId: string, runtime: ThreadRuntime): () => Promise<void> {
     return async () => {
-      if (runtime.tools.render().length === 0) return
-      // Tool titles are Host-presented free text (terminal commands): they
-      // go through the same outbound builder as every other message path.
-      const payload = buildOutboundMessage({ kind: 'tool', content: renderActivityContent(runtime) })
-      if (runtime.activityMessageId === undefined) {
-        if (runtime.activityAttempted) return
-        const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
-        if (sent.outcome === 'completed') runtime.activityMessageId = sent.messageId
-        else if (sent.outcome === 'unknown') {
-          runtime.activityAttempted = true
-          deps.log?.('discord_live_activity_send_unknown', { threadId })
+      if (runtime.tools.render().length === 0 && progressPhaseLine(runtime) === undefined) return
+      // The flush promise records the message id it created so turn/end's
+      // cleanup can delete a send that is still in flight (orphan guard).
+      const flush = (async (): Promise<string | undefined> => {
+        // Tool titles are Host-presented free text (terminal commands): they
+        // go through the same outbound builder as every other message path.
+        const payload = buildOutboundMessage({ kind: 'tool', content: renderActivityContent(runtime) })
+        if (runtime.activityMessageId === undefined) {
+          if (runtime.activityAttempted) return undefined
+          const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+          if (sent.outcome === 'completed') {
+            runtime.activityMessageId = sent.messageId
+            return sent.messageId
+          }
+          if (sent.outcome === 'unknown') {
+            runtime.activityAttempted = true
+            deps.log?.('discord_live_activity_send_unknown', { threadId })
+          }
+          return undefined
         }
-        return
-      }
-      await deps.delivery.edit({ channelId: threadId, messageId: runtime.activityMessageId, content: payload.content })
+        await deps.delivery.edit({ channelId: threadId, messageId: runtime.activityMessageId, content: payload.content })
+        return undefined
+      })()
+      runtime.activityFlush = flush
+      await flush
     }
   }
 
@@ -312,6 +395,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
     frameView: unknown,
   ): void {
     const data = event.data
+    if (TRACE) trace('handleSessionEvent', event.type, 'keys:', Object.keys(data).join(','))
     const turnId = typeof data['turn'] === 'number' ? String(data['turn']) : undefined
     const stepId = typeof data['step'] === 'number' ? String(data['step']) : undefined
     switch (event.type) {
@@ -328,6 +412,11 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         runtime.headFlush = undefined
         runtime.headAttempted = false
         runtime.stepSeq += 1
+        // A step boundary is a thinking boundary: the model is reasoning
+        // about the previous step's results before the next tool call.
+        // The journal's own step number is the display truth (stepSeq is a
+        // generation fence that also bumps at the turn boundary).
+        runtime.progressPhase = { kind: 'thinking', step: typeof data['step'] === 'number' ? data['step'] : runtime.stepSeq }
         // The previous step's finalize disposed the scheduler; a fresh one
         // carries the new step's chunk coalescing.
         runtime.scheduler?.dispose()
@@ -336,6 +425,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
           onFlush: flushAnswer(threadId, runtime),
           onFlushError: (cause) => { deps.log?.('discord_live_flush_failed', { threadId, cause: String(cause) }) },
         })
+        runtime.activityScheduler?.schedule(renderActivityContent(runtime))
         return
       }
       case 'assistant/chunk': {
@@ -361,6 +451,9 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         trace('assistant/message: extracted text length', text.length, 'interrupted:', interrupted)
         runtime.render.setAuthoritative({ turnId, stepId, text })
         if (interrupted) runtime.render.interrupt({ turnId, stepId })
+        // The step's answer is committed: the agent is writing its reply.
+        runtime.progressPhase = { kind: 'writing' }
+        runtime.activityScheduler?.schedule(renderActivityContent(runtime))
         runtime.scheduler?.dispose()
         runtime.scheduler = undefined
         if (text === '') return
@@ -412,6 +505,8 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         const title = presentationTitle(frameView) ?? shellCommandTitle(data['name'], rawArguments)
         runtime.toolNames.set(data['callId'], data['name'])
         if (title !== undefined) runtime.toolTitles.set(data['callId'], title)
+        // The status line tracks the most recent call as the running phase.
+        runtime.progressPhase = { kind: 'tool', label: data['name'], title }
         runtime.tools.record({
           callId: data['callId'],
           toolName: data['name'],
@@ -425,7 +520,7 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
       case 'tool/result': {
         const callId = resultCallId(data)
         if (callId === undefined) return
-        const failed = data['error'] !== undefined
+        const failed = resultFailed(data)
         runtime.tools.record({
           callId,
           toolName: runtime.toolNames.get(callId) ?? 'tool',
@@ -441,16 +536,26 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         runtime.scheduler = undefined
         runtime.activityScheduler?.dispose()
         runtime.activityScheduler = undefined
+        runtime.progressPhase = undefined
+        runtime.phaseBeforeApproval = undefined
         // The activity message is the live "what's happening" surface only:
         // at turn end it is deleted — the durable record is the Session log
-        // and the assistant's answer.
-        const activityMessageId = runtime.activityMessageId
+        // and the assistant's answer. A send still in flight when the
+        // cleanup ran would orphan the message, so the delete waits for the
+        // flush to settle first (stepSeq fences a turn that began meanwhile:
+        // its message owns the slot and must survive).
+        const epochAtEnd = runtime.stepSeq
+        const settledId = runtime.activityMessageId
         runtime.activityMessageId = undefined
-        if (activityMessageId !== undefined) {
-          void deps.delivery.delete({ channelId: threadId, messageId: activityMessageId }).catch((cause: unknown) => {
+        const pendingActivityFlush = Promise.resolve(runtime.activityFlush).catch(() => undefined)
+        void pendingActivityFlush.then(flushedId => {
+          const id = runtime.activityMessageId ?? settledId ?? flushedId
+          if (id === undefined || runtime.stepSeq !== epochAtEnd) return
+          runtime.activityMessageId = undefined
+          void deps.delivery.delete({ channelId: threadId, messageId: id }).catch((cause: unknown) => {
             deps.log?.('discord_live_activity_delete_threw', { threadId, cause: String(cause) })
           })
-        }
+        })
         deps.onTurnEnded?.(sessionId)
         return
       }
@@ -591,6 +696,26 @@ export function startLiveRender(deps: LiveRenderDeps): { dispose(): void } {
         runtime.typing.dispose()
       }
       runtimes.clear()
+    },
+    /**
+     * Approval-wait steering for the ask patches (turn-progress spec): a
+     * claimed ask suspends the status line on the wait phase; settling
+     * restores the suspended phase so progress tracking resumes.
+     */
+    setApprovalWait(threadId: string, waiting: boolean): void {
+      if (state.disposed) return
+      const runtime = runtimes.get(threadId)
+      if (runtime === undefined) return
+      if (waiting) {
+        if (runtime.progressPhase?.kind === 'approval') return
+        runtime.phaseBeforeApproval = runtime.progressPhase
+        runtime.progressPhase = { kind: 'approval' }
+      } else {
+        if (runtime.progressPhase?.kind !== 'approval') return
+        runtime.progressPhase = runtime.phaseBeforeApproval
+        runtime.phaseBeforeApproval = undefined
+      }
+      runtime.activityScheduler?.schedule(renderActivityContent(runtime))
     },
   }
 }

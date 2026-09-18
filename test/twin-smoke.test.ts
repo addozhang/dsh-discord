@@ -935,6 +935,12 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
       updateIntervalMs: 0,
       activityCoalesceMs: 0,
       typingIntervalMs: 60_000,
+      progressCopy: () => ({
+        thinking: '⏳ 思考中…',
+        thinkingStep: (step: number) => `⏳ 思考中…（步骤 ${String(step)}）`,
+        writing: '✍️ 撰写回复…',
+        approvalWait: '⏳ 等待审批…',
+      }),
       onTurnEnded: () => {},
     })
 
@@ -1021,6 +1027,47 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
     // Turn end deleted the tool activity message: no activity rows remain.
     await new Promise(resolve => { setTimeout(resolve, 300) })
     const leftovers = (await discord.thread(tid).getMessages()).filter(message => message.content.startsWith('> 💻'))
+    expect(leftovers).toHaveLength(0)
+  }, 30_000)
+
+  it('shows the progress status line during the turn and cleans it up on finalize (turn-progress)', async () => {
+    const sessionId = 'sess-stream'
+    const threadBinding = [...threadRows.entries()][0]
+    const tid = threadBinding?.[0] ? (parseThreadBindingKey(threadBinding[0])?.threadId ?? '') : ''
+    expect(typeof tid).toBe('string')
+
+    // A second turn on the same bound thread: thinking phase opens the
+    // status message, the running tool takes over the phase line.
+    pushed.push(
+      sessionEventFrame(sessionId, 'turn/start', { turn: 2 }),
+      sessionEventFrame(sessionId, 'step/start', { turn: 2, step: 1 }),
+      sessionEventFrame(sessionId, 'tool/call', { turn: 2, step: 1, callId: 'c-prog', name: 'bash', arguments: '{"command":"git status --short"}' }),
+    )
+    const status = await discord.thread(tid).waitForMessage({
+      predicate: message => message.content.includes('💻') && message.content.includes('git status --short'),
+    })
+    // The status message is phase-line first, rows below.
+    expect(status.content.startsWith('💻')).toBe(true)
+
+    // The result marks the row, the turn ends, and the status message is
+    // removed — only the durable answer may remain.
+    pushed.push(
+      sessionEventFrame(sessionId, 'tool/result', {
+        turn: 2,
+        step: 1,
+        message: { role: 'user', content: [{ type: 'tool-result', toolCallId: 'c-prog', isError: false }] },
+      }),
+      sessionEventFrame(sessionId, 'assistant/message', {
+        turn: 2,
+        step: 1,
+        message: { role: 'assistant', content: [{ type: 'text', text: '工作区是干净的。' }] },
+      }),
+      sessionEventFrame(sessionId, 'turn/end', { turn: 2, reason: { kind: 'completed' } }),
+    )
+    await discord.thread(tid).waitForMessage({ predicate: message => message.content.includes('工作区是干净的') })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+    const leftovers = (await discord.thread(tid).getMessages())
+      .filter(message => message.content.includes('⏳') || message.content.includes('💻') || message.content.includes('✍️'))
     expect(leftovers).toHaveLength(0)
   }, 30_000)
 })

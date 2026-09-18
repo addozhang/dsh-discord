@@ -739,6 +739,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const questionsService = ctx.get('userQuestions') as { ask(req: unknown): Promise<unknown> } | undefined
     if (approvalService === undefined) throw new TypeError('dsh-discord cannot reach the approval service')
     const hostAsksRef: { current: ReturnType<typeof installAskServicePatches> | undefined } = { current: undefined }
+    // Ask-claim steering for the turn progress line (turn-progress spec):
+    // declared before the patches so the closure is stable; the live
+    // renderer attaches later in startup (asks cannot fire before then).
+    const liveProgressRef: { current: { setApprovalWait(threadId: string, waiting: boolean): void } | undefined } = { current: undefined }
     hostAsksRef.current = installAskServicePatches(
       approvalService as Parameters<typeof installAskServicePatches>[0],
       questionsService as Parameters<typeof installAskServicePatches>[1],
@@ -749,6 +753,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         questionTimeoutMs: () => current.questionTimeoutMs,
         nowMs: () => Date.now(),
         log: rpcLog,
+        onWaitState: (threadId, waiting) => { liveProgressRef.current?.setApprovalWait(threadId, waiting) },
       },
     )
     ctx.effect(() => () => { hostAsksRef.current?.dispose() }, 'dsh-discord host ask answerers')
@@ -1090,6 +1095,12 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       verbosity: current.defaultVerbosity,
       log: rpcLog,
       interruptedMarker: () => copy.interruptedMarker,
+      progressCopy: () => ({
+        thinking: copy.progressThinking,
+        thinkingStep: copy.progressThinkingStep,
+        writing: copy.progressWriting,
+        approvalWait: copy.progressApprovalWait,
+      }),
       onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
       onTurnEnded: (sessionId) => {
         const turn = turnTracker.active(sessionId)
@@ -1097,6 +1108,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         rpcLog('discord_turn_ended', { sessionId, hadActiveTurn: turn !== undefined })
       },
     })
+    // The ask patches steer the same renderer's progress line (3.2 wiring).
+    liveProgressRef.current = liveRef.current
     ctx.effect(() => () => { liveRef.current?.dispose() }, 'dsh-discord live render')
     ctx.effect(() => () => { runtimeRef.current?.dispose() }, 'dsh-discord composed runtime')
 

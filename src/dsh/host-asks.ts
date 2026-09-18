@@ -72,6 +72,12 @@ export interface HostAskDeps {
   questionTimeoutMs(): number
   nowMs(): number
   log(event: string, detail?: unknown): void
+  /**
+   * Claim/settle steering for the live progress line (turn-progress spec):
+   * called with `true` when a thread-bound ask is claimed, `false` when it
+   * settles (answered, cancelled, or expired).
+   */
+  onWaitState?(threadId: string, waiting: boolean): void
 }
 
 /** One claimed ask: a settle promise raced against the ask's abort signal. */
@@ -162,6 +168,7 @@ export function installAskServicePatches(
     }
     const approvalId = crypto.randomUUID()
     deps.log('discord_approval_claimed', { approvalId, sessionId, threadId, toolName: req.toolName })
+    deps.onWaitState?.(threadId, true)
     deps.askWiring.onApprovalRequested({
       sessionId,
       threadId,
@@ -176,7 +183,10 @@ export function installAskServicePatches(
     const pending = new PendingAsk(pendingApprovals, approvalId, req.signal, () => 'cancelled' as const)
     pendingApprovals.set(approvalId, pending)
     if (req.signal?.aborted === true) pending.dispose()
-    void pending.promise.then(() => { void deps.askWiring.disableControl(approvalId) })
+    void pending.promise.then(() => {
+      deps.onWaitState?.(threadId, false)
+      void deps.askWiring.disableControl(approvalId)
+    })
     return pending.promise
   }
 
@@ -193,6 +203,7 @@ export function installAskServicePatches(
       if (rows.length === 0) return originalAsk(req)
       const rpcId = crypto.randomUUID()
       deps.log('discord_question_claimed', { rpcId, sessionId, threadId, questions: rows.length })
+      deps.onWaitState?.(threadId, true)
       deps.askWiring.onQuestionRequested({
         sessionId,
         threadId,
@@ -204,7 +215,10 @@ export function installAskServicePatches(
       const pending = new PendingAsk(pendingQuestions, rpcId, req.signal, () => cancelledAnswer)
       pendingQuestions.set(rpcId, pending)
       if (req.signal?.aborted === true) pending.dispose()
-      void pending.promise.then(() => { void deps.askWiring.disableControl(rpcId) })
+      void pending.promise.then(() => {
+        deps.onWaitState?.(threadId, false)
+        void deps.askWiring.disableControl(rpcId)
+      })
       return pending.promise
     }
   }

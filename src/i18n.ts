@@ -104,6 +104,10 @@ const zh = {
 
   // ── stream renderer ──────────────────────────────────────────────────
   interruptedMarker: '*（已被中断）*',
+  progressThinking: '⏳ 思考中…',
+  progressThinkingStep: (step: number) => `⏳ 思考中…（步骤 ${String(step)}）`,
+  progressWriting: '✍️ 撰写回复…',
+  progressApprovalWait: '⏳ 等待审批…',
 
   // ── /model show / select ─────────────────────────────────────────────
   modelNeedsThread: '⚠️ /model 需要在已绑定 Session 的任务线程中使用（先在项目频道 @ 机器人）。',
@@ -239,6 +243,11 @@ const en: CopyTable = {
   unboundNoticeMember: '💡 This channel is not bound to a workspace; ask a workspace administrator to run `/project bind`.',
 
   interruptedMarker: '*(interrupted)*',
+
+  progressThinking: '⏳ Thinking…',
+  progressThinkingStep: (step) => `⏳ Thinking… (step ${String(step)})`,
+  progressWriting: '✍️ Writing the answer…',
+  progressApprovalWait: '⏳ Waiting for approval…',
 
   // ── /model show / select ─────────────────────────────────────────────
   modelNeedsThread: '⚠️ /model needs a thread bound to a Session (mention the bot in a project channel first).',

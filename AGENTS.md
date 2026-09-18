@@ -88,14 +88,32 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   `modelCatalog()` 无 signal；`follow(request, signal)` 双参。规则：**signal
   恒为最后一个参数，且各方法要不要/要不要不了——必须逐个实测**
 - 事件流 = `sessionController.follow({address}, signal)` 按会话 journal 帧，
-  **records 是双层信封**：`{type:'event'|'snapshot', records:[{type:'event',
-  event:{type,seq,time,data}}]}`——真正的事件在 `event` 键下（2026-09-18 真机
-  dump 抓到的形状；face 层已防御性兼容扁平形状）。**snapshot 开窗必须翻译**：
-  turn 常在 prompt 准入与 follow 订阅之间完成，快照是那些记录的唯一载体；
-  按会话 seq 水位去重保证重订阅幂等（`replayHistory` 追赶路径从未接线，
-  事实上不存在）+
+  **必须带 `assistantStream: true`**（2026-09-18 alpha.2 真机 A/B 实证）：不带时
+  宿主只推开窗快照、live tail 永不推送（turn 执行期记录全部缺席）；带上后
+  live 帧才开始流动。**两种载体形状**（都真机核实）：
+  - 快照开窗 `{type:'snapshot', records:[{type:'event', event:{type,seq,time,data}}]}`
+    ——双层信封，真正的事件在 `event` 键下（face 层已防御性兼容扁平形状）
+  - live 记录 `{type:'event', event:{type,seq,time,data}}`——**单记录直挂 `event`
+    键、无 `records` 数组**，翻译器两条路径都要认（host-events.ts 的 batch 归一）
+  **snapshot 开窗必须翻译**：turn 常在 prompt 准入与 follow 订阅之间完成，快照
+  是那些记录的唯一载体；按会话 seq 水位去重保证重订阅幂等（`replayHistory`
+  追赶路径从未接线，事实上不存在）+
   `sessionController.control(signal)` 宿主级队列/投影帧；
   `src/dsh/host-events.ts` 扇入为旧 LiveFrame 词汇，渲染层零改动
+- **assistant-stream 帧词汇**（`assistantStream: true` 时随 durable 流并推）：
+  `{type:'assistant-stream', frame:{type:'start'|'chunk'|'end', attemptId,
+  revision, index, …}}`；chunk 子型：`block-start`(blockType) / `block-end` /
+  `text-delta`(index,text) / `tool-call-delta`(index,id,name,argumentsDelta) /
+  `finish`(reason) / `usage`。工具调用在 durable `tool/call` 之前就开始流式下发
+- **tool/result 失败标志** = `message.content[0].isError === true`（无顶层
+  `error` 键；rc.2 的顶层形状已不存在）——live.ts `resultFailed` 两条都认
+- **已知未修：快照重放重复投递答案**（2026-09-18 发现，先于 turn-progress 变更
+  存在）：每次进程重启后首个 prompt 触发 track → follow 快照重放全部 journal，
+  重放的 `assistant/message` 在 `headMessageId === undefined`（新 runtime）下走
+  finalize send ——旧 turn 的答案作为新消息重复进线程（真机实测 whoami 答案 ×4，
+  每次重启 +1）。修复需要"历史 turn 的 finalize 抑制"决策（如 turn/end 先于
+  订阅水位的 turn 不渲染），未做。注意：assistantStream 修复后 live tail 已活，
+  快照只剩冷启动兜底角色，此 bug 的触发面 = 每次重启后的首个 prompt
 - 审批/提问：waterfall 对**外部插件不可达**（2026-09-18 真机穷尽验证）：profile
   按 bundle 组装多棵事件树，ask waterfall 只枚举基座树自己的注册表——外部插件
   的 `ctx.on`、`{global:true}`、根 events 服务、甚至挂在 approval 服务 ctx 上的

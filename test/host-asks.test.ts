@@ -151,3 +151,27 @@ describe('installAskServicePatches', () => {
     expect(patch.settleApproval('whatever', 'rejected')).toBe(false)
   })
 })
+
+describe('ask patches: approval-wait steering for the progress line', () => {
+  it('reports claim as waiting and settle as released', async () => {
+    const waits: Array<{ threadId: string; waiting: boolean }> = []
+    const fake = fakeDeps()
+    const deps = { ...fake.deps, onWaitState: (threadId: string, waiting: boolean) => { waits.push({ threadId, waiting }) } }
+    const approval = fakeApprovalService()
+    const questions = fakeQuestionService()
+    const patch = installAskServicePatches(approval.service, questions.service, deps)
+
+    const outcome = approval.service.request({ agent: { id: 'sess-1' }, toolName: 'bash' })
+    await new Promise(resolve => { setTimeout(resolve, 5) })
+    expect(waits).toEqual([{ threadId: 'thread-1', waiting: true }])
+
+    patch.settleApproval(fake.approvalAsks[0] !== undefined ? String(fake.approvalAsks[0]['approvalId']) : '', 'allowed-once')
+    await outcome
+    await new Promise(resolve => { setTimeout(resolve, 5) })
+    expect(waits).toEqual([
+      { threadId: 'thread-1', waiting: true },
+      { threadId: 'thread-1', waiting: false },
+    ])
+    patch.dispose()
+  })
+})

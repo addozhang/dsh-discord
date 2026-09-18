@@ -56,6 +56,8 @@ async function drive(frames: LiveFrame[], options: {
   sendOutcomes?: Array<'completed' | 'unknown' | 'failed'>
   /** Test-controlled delivery for interleaving races (16.39). */
   delivery?: LiveDeliveryPort
+  /** Progress-phase copy provider (production always supplies one). */
+  progressCopy?: () => { thinking: string; thinkingStep: (step: number) => string; writing: string; approvalWait: string }
 }): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }>> {
   const { delivery, calls } = options.delivery !== undefined
     ? { delivery: options.delivery, calls: [] }
@@ -80,6 +82,7 @@ async function drive(frames: LiveFrame[], options: {
     ...(options.onQueueSnapshot === undefined ? {} : { onQueueSnapshot: options.onQueueSnapshot }),
     ...(options.onTurnEnded === undefined ? {} : { onTurnEnded: options.onTurnEnded }),
     ...(options.threadName === undefined ? {} : { threadName: options.threadName }),
+    ...(options.progressCopy === undefined ? {} : { progressCopy: options.progressCopy }),
   })
   await gate
   await new Promise(resolve => { setTimeout(resolve, 10) })
@@ -478,4 +481,158 @@ describe('live render: delivery failure posture', () => {
     expect(edits[0]?.messageId).toBe('dm-head')
     expect(edits[0]?.content).toBe('Hello world')
   }, 20_000)
+})
+
+describe('live render: turn progress status line (turn-progress-discord-sync)', () => {
+  const progressCopy = () => ({
+    thinking: '⏳ 思考中…',
+    thinkingStep: (step: number) => `⏳ 思考中…（步骤 ${String(step)}）`,
+    writing: '✍️ 撰写回复…',
+    approvalWait: '⏳ 等待审批…',
+  })
+
+  it('creates the status message at turn/start, tracks phases, deletes at turn/end', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }),
+      sessionEvent('sess-1', 'tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'bash', arguments: '{"command":"find /private/tmp -name x"}' }),
+      sessionEvent('sess-1', 'tool/result', { turn: 1, step: 1, message: { role: 'user', content: [{ type: 'tool-result', toolCallId: 'call-1', isError: false }] } }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 2 }),
+      sessionEvent('sess-1', 'assistant/message', { turn: 1, step: 2, message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } }),
+      sessionEvent('sess-1', 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ], { threadForSession: () => 'thread-1', progressCopy })
+
+    const statusCalls = calls.filter(call => (call.kind === 'send' || call.kind === 'edit') && (call.content?.includes('⏳') || call.content?.includes('💻') || call.content?.includes('✍️')))
+    // The status message exists from turn/start with the thinking phase.
+    expect(statusCalls.length).toBeGreaterThanOrEqual(1)
+    const first = statusCalls[0]?.content ?? ''
+    expect(first).toContain('⏳ 思考中…')
+    // tool/call switches the phase line to the running tool + title.
+    const duringTool = statusCalls.find(call => call.content?.includes('💻'))
+    expect(duringTool?.content).toContain('find /private/tmp -name x')
+    // A succeeded tool row carries the ✓ mark (0.1.6 isError semantics).
+    expect(statusCalls.some(call => call.content?.includes('✓'))).toBe(true)
+    // A later step shows the step count; the writing phase appears next.
+    expect(statusCalls.some(call => call.content?.includes('步骤 2'))).toBe(true)
+    expect(statusCalls.some(call => call.content?.includes('✍️ 撰写回复…'))).toBe(true)
+    // Turn end deletes the status message exactly once.
+    const deletions = calls.filter(call => call.kind === 'delete')
+    expect(deletions).toHaveLength(1)
+  })
+
+  it('marks a failed tool row with ✗ (message.content[0].isError)', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }),
+      sessionEvent('sess-1', 'tool/call', { turn: 1, step: 1, callId: 'call-bad', name: 'bash', arguments: '{"command":"exit 3"}' }),
+      sessionEvent('sess-1', 'tool/result', { turn: 1, step: 1, message: { role: 'user', content: [{ type: 'tool-result', toolCallId: 'call-bad', isError: true }] } }),
+      sessionEvent('sess-1', 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ], { threadForSession: () => 'thread-1', progressCopy })
+
+    const statusCalls = calls.filter(call => (call.kind === 'send' || call.kind === 'edit') && call.content !== undefined && call.content !== '')
+    expect(statusCalls.some(call => call.content?.includes('✗'))).toBe(true)
+    expect(statusCalls.some(call => call.content?.includes('✓'))).toBe(false)
+  })
+
+  it('switches to approval-wait on the ask claim and restores progress on settle', async () => {
+    const { delivery, calls } = createDelivery()
+    const frames: LiveFrame[] = [
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }),
+      sessionEvent('sess-1', 'tool/call', { turn: 1, step: 1, callId: 'call-1', name: 'bash', arguments: '{"command":"rm -rf /tmp/x"}' }),
+    ]
+    const released = new Promise<void>(resolve => { setTimeout(resolve, 40) })
+    async function* source(): AsyncIterable<LiveFrame> {
+      for (const frame of frames) {
+        yield frame
+        await new Promise(resolve => { setTimeout(resolve, 5) })
+      }
+      await released
+    }
+    const live = startLiveRender({
+      frames: source,
+      threadForSession: () => 'thread-1',
+      delivery,
+      updateIntervalMs: 0,
+      activityCoalesceMs: 0,
+      typingIntervalMs: 60_000,
+      progressCopy,
+    })
+    await new Promise(resolve => { setTimeout(resolve, 30) })
+    live.setApprovalWait('thread-1', true)
+    await new Promise(resolve => { setTimeout(resolve, 30) })
+    live.setApprovalWait('thread-1', false)
+    await new Promise(resolve => { setTimeout(resolve, 30) })
+    live.dispose()
+
+    const statusCalls = calls.filter(call => (call.kind === 'send' || call.kind === 'edit') && (call.content?.includes('⏳') || call.content?.includes('💻')))
+    expect(statusCalls.some(call => call.content?.includes('⏳ 等待审批…'))).toBe(true)
+    // After settling, the phase returns to the running tool.
+    const afterSettle = statusCalls.filter(call => call.content?.includes('💻')).at(-1)?.content ?? ''
+    expect(afterSettle).toContain('rm -rf /tmp/x')
+    expect(afterSettle).not.toContain('等待审批')
+  })
+})
+
+describe('live render: status message vs turn/end race (turn-progress)', () => {
+  const progressCopy = () => ({
+    thinking: '⏳ 思考中…',
+    thinkingStep: (step: number) => `⏳ 思考中…（步骤 ${String(step)}）`,
+    writing: '✍️ 撰写回复…',
+    approvalWait: '⏳ 等待审批…',
+  })
+
+  it('deletes the status message when its in-flight send lands after turn/end', async () => {
+    const calls: Array<{ kind: string; messageId?: string; content?: string }> = []
+    const sendDeferreds: Array<(id: string) => void> = []
+    const delivery: LiveDeliveryPort = {
+      send: (request) => {
+        calls.push({ kind: 'send', content: request.content })
+        return new Promise(resolve => {
+          sendDeferreds.push((id: string) => { resolve({ outcome: 'completed', messageId: id }) })
+        })
+      },
+      edit: (request) => {
+        calls.push({ kind: 'edit', messageId: request.messageId, content: request.content })
+        return Promise.resolve({ outcome: 'completed' })
+      },
+      delete: (request) => {
+        calls.push({ kind: 'delete', messageId: request.messageId })
+        return Promise.resolve({ outcome: 'completed' })
+      },
+      typing: (channelId) => { calls.push({ kind: 'typing', content: channelId }); return Promise.resolve() },      renameThread: () => Promise.resolve({ outcome: 'completed' }),
+    }
+
+    async function* source(): AsyncIterable<LiveFrame> {
+      yield sessionEvent('sess-1', 'turn/start', { turn: 1 })
+      // Let the coalescer (interval 0) fire the status send, which now
+      // hangs on the deferred.
+      await new Promise(resolve => { setTimeout(resolve, 15) })
+      yield sessionEvent('sess-1', 'turn/end', { turn: 1, reason: { kind: 'completed' } })
+      await new Promise(resolve => { setTimeout(resolve, 15) })
+    }
+    const live = startLiveRender({
+      frames: source,
+      threadForSession: () => 'thread-1',
+      delivery,
+      updateIntervalMs: 0,
+      activityCoalesceMs: 0,
+      typingIntervalMs: 60_000,
+      progressCopy,
+    })
+    await new Promise(resolve => { setTimeout(resolve, 25) })
+    expect(sendDeferreds.length).toBeGreaterThanOrEqual(1)
+    // turn/end has run its cleanup while the send is still in flight.
+    // No delete may have happened yet.
+    expect(calls.filter(call => call.kind === 'delete')).toHaveLength(0)
+
+    // The send lands late: the cleanup's await must now delete it.
+    sendDeferreds[0]?.('dm-status')
+    await new Promise(resolve => { setTimeout(resolve, 25) })
+    live.dispose()
+
+    const deletions = calls.filter(call => call.kind === 'delete')
+    expect(deletions).toHaveLength(1)
+    expect(deletions[0]?.messageId).toBe('dm-status')
+  })
 })

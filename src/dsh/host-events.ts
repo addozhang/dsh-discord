@@ -127,20 +127,40 @@ export function createHostEventRouter(
     const per = new AbortController()
     tracked.set(sessionId, per)
     void (async () => {
+      if (process.env['DSH_DISCORD_TRACE'] === '1') console.error(`[dsh-discord:trace] follow-start session=${sessionId.slice(0, 8)} attempt=${String(attempt)}`)
       try {
         consumer?.push({ type: 'session/subscribed', sessionId })
-        for await (const raw of services.follow({ address: { kind: 'session', sessionId } }, per.signal)) {
+        // The follow request MUST ask for assistant streaming: without the
+        // flag the host (alpha.2) delivers only the opening snapshot and
+        // never pushes later journal records — the live tail stays dead
+        // (diagnosis.md §D, run 2 vs run 3).
+        for await (const raw of services.follow({ address: { kind: 'session', sessionId }, assistantStream: true }, per.signal)) {
+          if (process.env['DSH_DISCORD_TRACE'] === '1') {
+            const dumped = JSON.stringify(raw)
+            console.error(`[dsh-discord:trace] raw-follow-frame type=${String(isRecord(raw) ? raw['type'] : typeof raw)} frame=${dumped.length > 300 ? `${dumped.slice(0, 300)}…` : dumped}`)
+          }
           if (!isRecord(raw)) continue
           const frame = raw
           // Both the opening snapshot and live journal entries carry the
           // same {type, data, seq} record envelope the rc.2 mux delivered;
           // the seq watermark keeps replayed windows idempotent.
           if (frame['type'] === 'event' || frame['type'] === 'snapshot') {
+            // Two carriers, both real-machine verified (alpha.2): snapshot
+            // windows batch their records under `records`, while live records
+            // arrive as single-record frames — the record rides the `event`
+            // key of the frame itself, no array. Snapshots without a records
+            // array stay drops (malformed), live frames become their own
+            // one-element batch.
             const records = (raw as { records?: unknown }).records
-            if (!Array.isArray(records)) continue
+            const batch = Array.isArray(records)
+              ? records
+              : frame['type'] === 'event'
+                ? [raw]
+                : undefined
+            if (batch === undefined) continue
             const through = watermark.get(sessionId) ?? 0
             let delivered = through
-            for (const record of records) {
+            for (const record of batch) {
               // Journal records arrive double-wrapped: {type:'event',
               // event:{type, seq, time, data}} — the wire event rides the
               // `event` key. Accept the flat shape defensively too.
@@ -154,6 +174,12 @@ export function createHostEventRouter(
                 if (inner.seq <= through) continue
                 if (inner.seq > delivered) delivered = inner.seq
               }
+              if (process.env['DSH_DISCORD_TRACE'] === '1') {
+                // Full data dump (truncated): diagnosis needs the field
+                // shapes, not just the key names — keys hide nesting.
+                const dumped = JSON.stringify(inner.data)
+                console.error(`[dsh-discord:trace] record type=${inner.type} seq=${String(inner.seq)} data=${dumped.length > 800 ? `${dumped.slice(0, 800)}…` : dumped}`)
+              }
               consumer?.push({
                 type: 'session/event',
                 sessionId,
@@ -164,14 +190,23 @@ export function createHostEventRouter(
           } else if (frame['type'] === 'assistant-stream') {
             // Live assistant deltas ride the dedicated stream frames; the
             // renderer's durable events already carry the message texts.
+            if (process.env['DSH_DISCORD_TRACE'] === '1') {
+              const dumped = JSON.stringify(frame)
+              console.error(`[dsh-discord:trace] assistant-stream frame=${dumped.length > 300 ? `${dumped.slice(0, 300)}…` : dumped}`)
+            }
             continue
+          } else if (process.env['DSH_DISCORD_TRACE'] === '1') {
+            const dumped = JSON.stringify(frame)
+            console.error(`[dsh-discord:trace] follow-frame UNHANDLED type=${String(frame['type'])} frame=${dumped.length > 400 ? `${dumped.slice(0, 400)}…` : dumped}`)
           }
         }
       } catch (cause) {
         if (!per.signal.aborted) {
+          if (process.env['DSH_DISCORD_TRACE'] === '1') console.error(`[dsh-discord:trace] follow-threw session=${sessionId.slice(0, 8)} cause=${String(cause).slice(0, 300)}`)
           log?.('discord_host_follow_threw', { sessionId, cause: String(cause) })
         }
       } finally {
+        if (process.env['DSH_DISCORD_TRACE'] === '1') console.error(`[dsh-discord:trace] follow-end session=${sessionId.slice(0, 8)} aborted=${String(per.signal.aborted)} tracked=${String(tracked.get(sessionId) === per)}`)
         if (tracked.get(sessionId) === per) tracked.delete(sessionId)
         // A follow stream may END normally once its snapshot is delivered
         // (a cold session has no live agent to follow): without a
@@ -196,6 +231,10 @@ export function createHostEventRouter(
         for await (const raw of services.control(signal)) {
           if (!isRecord(raw)) continue
           const frame = raw
+          if (process.env['DSH_DISCORD_TRACE'] === '1') {
+            const dumped = JSON.stringify(frame)
+            console.error(`[dsh-discord:trace] control type=${String(frame['type'])} frame=${dumped.length > 400 ? `${dumped.slice(0, 400)}…` : dumped}`)
+          }
           if (frame['type'] === 'queue' && typeof frame['sessionId'] === 'string') {
             const rawItems = Array.isArray(frame['items']) ? frame['items'] as unknown[] : []
             const items = rawItems
@@ -227,6 +266,7 @@ export function createHostEventRouter(
       startLoop(sessionId)
     },
     stream(signal) {
+      if (process.env['DSH_DISCORD_TRACE'] === '1') console.error(`[dsh-discord:trace] router-stream-open tracked=${String(tracked.size)} rearm=${String(tracked.size)}`)
       rootSignal = signal
       const queue = createFrameQueue()
       consumer = queue
