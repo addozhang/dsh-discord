@@ -114,7 +114,7 @@ dsh-discord:
 
 ## 设计说明
 
-- 适配器为 function/namespace 插件（`inject: ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']`），将 Discord Gateway、命令面、流式渲染器与设置卡片挂载到 DSH web profile。
+- 适配器为 function/namespace 插件（`inject: ['sessionController', 'workspaceController', 'sessionQuery', 'webServer', 'credentials', 'settings', 'storageDomain', 'connection']`），将 Discord Gateway、命令面、流式渲染器与设置卡片挂载到 DSH web profile。
 - 设置卡片是首次使用的引导面：Token 输入通过插件管理通道写入凭据服务的 `DSH_DISCORD_BOT_TOKEN` 引用，然后触发启动链。断开连接保留凭据；留空重连直接使用已存 Token。
 - 发布工作流通过 npm trusted publishing (OIDC) 认证——任何地方都不保存发布凭证。
 - 适配器启动链带代际计数，Connect/Disconnect 与初始启动竞争时只会产生一个 Gateway。

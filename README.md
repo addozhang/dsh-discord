@@ -113,7 +113,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 
 ## Design notes
 
-- The adapter is a function/namespace plugin (`inject: ['apiProxy', 'credentials', 'settings', 'storageDomain', 'connection']`) that mounts the Discord Gateway, command surface, stream renderer, and the settings card onto the DSH web profile.
+- The adapter is a function/namespace plugin (`inject: ['sessionController', 'workspaceController', 'sessionQuery', 'webServer', 'credentials', 'settings', 'storageDomain', 'connection']`) that mounts the Discord Gateway, command surface, stream renderer, and the settings card onto the DSH web profile.
 - The settings card is the first-run onboarding surface: the token entry writes the credential service's `DSH_DISCORD_BOT_TOKEN` ref over the plugin management channel, then triggers the start chain. Disconnect keeps the credential; an empty reconnect uses it.
 - The publish workflow authenticates to npm via trusted publishing (OIDC) — no publish token is stored anywhere.
 - The adapter start chain is generation-counted, so Connect/Disconnect races with the initial boot yield exactly one gateway.

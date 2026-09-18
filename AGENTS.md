@@ -61,36 +61,78 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   不再收养，被删除的绑定频道按用户意图 retire 映射
 - **控制频道（类目下 general）**不承载会话，也不参与 /session resume
 
-## rc.2 Host RPC 面的事实（2026-08 核对；图片项 2026-09-01 真机核实）
+## 0.1.6 Host 面的事实（2026-09-18 真机核实，dsh 0.1.6-alpha.1）
 
-- `sessions.list` 行含 `updatedAt`（倒序）/`running`/`blank`/`cwd`/
-  `origin`（"subagent"）/`projections.values.title`（缺省 = 尚无标题）；
-  **无** `session.inspect`、history RPC、archived 字段（行不标记归档）
-- `session.prompt` 载荷 zod schema（`dsh-host-apiproxy` 内
-  `promptContentPartSchema`）：`content` 是 parts 数组——
-  `{type:'text',text}` 与 `{type:'image',mediaType,data,name?}`；
-  media type 仅 `image/png|jpeg|webp|gif`；另有独立的 `session.attachment`
-  上传 RPC（浏览器路径），base64 直发 parts 同样合法
-- **图片 modality 门在 Host 侧**：prompt 带图时 Host 用 pi-ai **静态目录**
-  的 `input` 字段判定（`resolveModelInfo → inputModalities`；缺省
-  `DEFAULT_INPUT = ["text"]`），不声明 `input: [text, image]` 的模型会在
-  准入层被拒（`attachment-error`/`MODEL_DOES_NOT_SUPPORT_IMAGES`），与其
-  真实视觉能力无关。适配器**不要**自建 modality 门。让某模型收图 =
-  在 `~/.dsh/settings.yaml` 该模型条目加 `input: [text, image]`
-- `model-unavailable` = 会话当前 provider 无服务适配器（老会话指向已下线
-  provider 时任何消息都被拒），与消息内容无关
-- `workspace.list` 值含每行 `path`（realpath 规范化，如 /tmp→/private/tmp）
-  与 registry 级 `archivedSessionIds`——**归档信息只在这里**；归档会话可被
-  恢复/adopt 但永远不运行 turn（表现：线程里发消息无任何响应）
-- `workspace.archiveSession` 不影响 `sessions.list` 可见性（归档后仍在列表）
-- Discord autocomplete 的 choice 对象**没有 description 字段**（仅
-  name/localizations/value）——候选可见信息必须进 label，且 name ≤100 字符，
-  超限整个回答被拒
+- 宿主接入面 = 三个 cordis 服务（`dsh-host-apiproxy`/`ctx.apiProxy` 已删除）：
+  `sessionController`（prompt/create/list/cancel/updateQueue/selectModel/
+  modelCatalog/follow/control）、`workspaceController`（create/rename/
+  archiveSession/unarchiveSession/insertBefore/**follow**——无 baseline 一元方法，
+  基线是 follow 流首帧 `{type:'baseline', value:{items, archivedSessionIds}}`，
+  本仓库 face 的 `readWorkspaceBaseline` 取首帧即断订）、`sessionQuery`
+  （`observeSession` → `projections.values.modelSelection` = `{lastUsed, next}`
+  视图，/model 的 current 来源）
+- 控制器是**直调**面：plain request 进、plain value 出、业务拒绝是**抛**
+  `RemoteError`（`{code, message}`）；`session/` 前缀在 face 层翻译回旧词汇
+  （`session/agent-busy`→`agent-busy`），Discord 文案零变化
+- `session.prompt` 的 `requestId` **必填**（客户端铸造，宿主按其幂等去重）——
+  正好落在本仓库既有 rpcId 纪律上；content parts 仍是 text/image（新增
+  file+receiptId 路径未用）
+- `session.models` 没了：全局无参 `modelCatalog()`（`{default,
+  routableProviders, groups, failures}`）+ 按会话 modelSelection projection
+  组装；`routable:boolean` 由 `routableProviders.includes(current.provider)`
+  推导
+- **服务方法签名逐个核对过（2026-09-18 真机）**：`prompt(request, signal)`
+  signal **必填**（裸 `throwIfAborted`，缺参直接 TypeError→我们的 unknown 路径）；
+  `list(signal)` 与 `control(signal)` 只收 signal（传 `{}` 会把对象当 signal 炸）；
+  `create/attachment/updateQueue/cancel/selectModel(request)` 与
+  `modelCatalog()` 无 signal；`follow(request, signal)` 双参。规则：**signal
+  恒为最后一个参数，且各方法要不要/要不要不了——必须逐个实测**
+- 事件流 = `sessionController.follow({address}, signal)` 按会话 journal 帧，
+  **records 是双层信封**：`{type:'event'|'snapshot', records:[{type:'event',
+  event:{type,seq,time,data}}]}`——真正的事件在 `event` 键下（2026-09-18 真机
+  dump 抓到的形状；face 层已防御性兼容扁平形状）。**snapshot 开窗必须翻译**：
+  turn 常在 prompt 准入与 follow 订阅之间完成，快照是那些记录的唯一载体；
+  按会话 seq 水位去重保证重订阅幂等（`replayHistory` 追赶路径从未接线，
+  事实上不存在）+
+  `sessionController.control(signal)` 宿主级队列/投影帧；
+  `src/dsh/host-events.ts` 扇入为旧 LiveFrame 词汇，渲染层零改动
+- 审批/提问：waterfall 对**外部插件不可达**（2026-09-18 真机穷尽验证）：profile
+  按 bundle 组装多棵事件树，ask waterfall 只枚举基座树自己的注册表——外部插件
+  的 `ctx.on`、`{global:true}`、根 events 服务、甚至挂在 approval 服务 ctx 上的
+  桥接插件**全都收不到**（只有基座树内的 api-remotes 等收得到）。**受支持做法 =
+  服务边界补丁**：包一层 `ApprovalService.request` / `UserQuestionService.ask`
+  （`installAskServicePatches`）：线程绑定的会话走 Discord 按钮流（askWiring 渲染
+  → 点击 → settle port → 返回 outcome），其余原样透传（web UI 面板不受影响）。
+  真机已验证全链路：claimed → 按钮 → 浏览器点击 → allowed-once → 工具执行落地。
+  `client-response` 信封与 respond RPC 已死；注意补丁路径不写 approval/asked
+  审计事件对（journal 少这对审计，工具侧语义完整）
+- 图片 modality 门语义不变（`inputModalities`/`MODEL_DOES_NOT_SUPPORT_IMAGES`
+  /`DEFAULT_INPUT=["text"]`），错误码改为
+  `RemoteError('session/attachment-invalid')`；settings.yaml 加
+  `input: [text, image]` 的解锁方式依旧有效
+- `session.selectModel` 宿主现在会尝试持久化默认（失败仅 warn）——
+  "不得声称持久化成功"的文案限制可放松
+- `session.list` 行仍无 archived 标记（归档集只在 workspace 基线）；
+  `session.list` 响应仍是 `{items}`，行不再有 `agentPreset`
+- **`ctx.connection.rpc.handle` 对外部插件不可用**（0.1.6 真机三连踩）：
+  它把路由挂到 connection 服务**自己的 ctx** 上，外部调用抛
+  "cannot get property webServer without inject"；包一层 runtime
+  `ctx.inject` 也不行——**已启动插件的 runtime inject 回调永不执行**
+  （静默 no-op，通道 405）。受支持做法 = 自己注册：
+  `ctx.effect(() => ctx.get('webServer').register({kind:'prefix', path,
+  handler}))` + 复用 `connection.requestRejection(req)` 围栏 + 手工复刻
+  channel 信封协议（见 `installAdapterStatusRpc`；endpoint 段模式
+  `/^[A-Za-z0-9_$.-]+$/`，方法必须等于 endpoint）
+- **启动 profile 必须带 `--profile` 标志**：`cd <profile dir> && dsh web`
+  启动的是**默认 profile** 而非 cwd 的——2026-09-18 排查 405 时被此误导
+  两个回合（web-test 目录里跑的一直是 web）
+- **tool view 策划已从 wire 上消失**：durable 事件无 view 字段，assistant-stream
+  帧只载 LLM 文本增量；Discord 渲染器本地推导（shell 家族取 arguments.command
+  首行经 safeTitle 消毒——`shellCommandTitle`；其余工具退到 allowlist 标签）
+- Discord autocomplete choice 无 description 字段等 Discord wire 事实不变
 - Gateway 断连在 stderr 可见：`[dsh-discord] gateway close: N`（1006=链路
   异常断开，4000=会话失效强制 re-identify）；重连 + READY reconcile 自愈，
   断连窗口内 autocomplete 报 "Loading options failed" 属预期
-- `session.selectModel` 只证明 Session 切换；Host 默认的持久化结果不回传，
-  文案不得声称持久化成功
 - 控制频道拒绝、候选 workspace 作用域等行为的判据见
   `session-resume.ts` 与 `index.ts` 的 resumeSession
 
