@@ -108,6 +108,10 @@ const zh = {
   progressThinkingStep: (step: number) => `⏳ 思考中…（步骤 ${String(step)}）`,
   progressWriting: '✍️ 撰写回复…',
   progressApprovalWait: '⏳ 等待审批…',
+  progressTurnSummary: (total: number, failed: number, breakdown: string) =>
+    failed > 0
+      ? `⚙️ 本轮 ${String(total)} 次工具调用 · ${String(failed)} 失败 ✗（${breakdown}）`
+      : `⚙️ 本轮 ${String(total)} 次工具调用 ✓（${breakdown}）`,
 
   // ── /model show / select ─────────────────────────────────────────────
   modelNeedsThread: '⚠️ /model 需要在已绑定 Session 的任务线程中使用（先在项目频道 @ 机器人）。',
@@ -248,6 +252,10 @@ const en: CopyTable = {
   progressThinkingStep: (step) => `⏳ Thinking… (step ${String(step)})`,
   progressWriting: '✍️ Writing the answer…',
   progressApprovalWait: '⏳ Waiting for approval…',
+  progressTurnSummary: (total, failed, breakdown) =>
+    failed > 0
+      ? `⚙️ ${String(total)} tool calls this turn · ${String(failed)} failed ✗ (${breakdown})`
+      : `⚙️ ${String(total)} tool calls this turn ✓ (${breakdown})`,
 
   // ── /model show / select ─────────────────────────────────────────────
   modelNeedsThread: '⚠️ /model needs a thread bound to a Session (mention the bot in a project channel first).',

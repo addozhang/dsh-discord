@@ -12,7 +12,7 @@
 import { createThreadRenderModel, type ThreadRenderModel } from './render-model.js'
 import { createUpdateScheduler, type UpdateScheduler } from './update-scheduler.js'
 import { createTypingLifecycle, type TypingLifecycle } from './typing.js'
-import { createToolActivitySurface, type ToolActivitySurface } from './tool-view.js'
+import { createToolActivitySurface, type ToolActivitySurface, type ToolRow } from './tool-view.js'
 import { createAnswerFinalizer, type AnswerFinalizer } from './finalizer.js'
 import { buildOutboundMessage } from './outbound.js'
 import { toolCategoryIcon } from './icons.js'
@@ -80,6 +80,7 @@ export interface LiveRenderDeps {
     thinkingStep: (step: number) => string
     writing: string
     approvalWait: string
+    turnSummary: (total: number, failed: number, breakdown: string) => string
   }
   /** Turn ownership release on turn/end. */
   onTurnEnded?: (sessionId: string) => void
@@ -344,6 +345,21 @@ export function startLiveRender(deps: LiveRenderDeps): {
     }
   }
 
+  /**
+   * The turn's collapsed one-line summary (decision 5): the durable trace a
+   * finished turn leaves behind. Undefined when the turn ran no tools —
+   * those keep the pure Q&A thread and the message is deleted instead.
+   */
+  function renderTurnSummary(rows: ToolRow[]): string | undefined {
+    const copy = deps.progressCopy?.()
+    if (copy === undefined || rows.length === 0) return undefined
+    const counts = new Map<string, number>()
+    for (const row of rows) counts.set(row.label, (counts.get(row.label) ?? 0) + 1)
+    const breakdown = truncateText([...counts.entries()].map(([label, n]) => `${label} ×${String(n)}`).join(' · '), 200)
+    const failed = rows.filter(row => row.state === 'failed').length
+    return copy.turnSummary(rows.length, failed, breakdown)
+  }
+
   /** The activity message body: phase line, then one icon + title per call row. */
   function renderActivityContent(runtime: ThreadRuntime): string {
     const rows = runtime.tools.render()
@@ -538,20 +554,29 @@ export function startLiveRender(deps: LiveRenderDeps): {
         runtime.activityScheduler = undefined
         runtime.progressPhase = undefined
         runtime.phaseBeforeApproval = undefined
-        // The activity message is the live "what's happening" surface only:
-        // at turn end it is deleted — the durable record is the Session log
-        // and the assistant's answer. A send still in flight when the
-        // cleanup ran would orphan the message, so the delete waits for the
-        // flush to settle first (stepSeq fences a turn that began meanwhile:
-        // its message owns the slot and must survive).
+        // The activity message collapses at turn end (decision 5): a turn
+        // that ran tools is EDITED into its one-line summary — the durable
+        // process trace — while a zero-tool turn keeps the pure Q&A thread
+        // and is deleted. A send still in flight when the cleanup ran would
+        // orphan the message, so the collapse waits for the flush to settle
+        // first (stepSeq fences a turn that began meanwhile: its message
+        // owns the slot and must survive).
         const epochAtEnd = runtime.stepSeq
         const settledId = runtime.activityMessageId
         runtime.activityMessageId = undefined
+        const summary = renderTurnSummary(runtime.tools.render())
         const pendingActivityFlush = Promise.resolve(runtime.activityFlush).catch(() => undefined)
         void pendingActivityFlush.then(flushedId => {
           const id = runtime.activityMessageId ?? settledId ?? flushedId
           if (id === undefined || runtime.stepSeq !== epochAtEnd) return
           runtime.activityMessageId = undefined
+          if (summary !== undefined) {
+            const payload = buildOutboundMessage({ kind: 'tool', content: summary })
+            void deps.delivery.edit({ channelId: threadId, messageId: id, content: payload.content }).catch((cause: unknown) => {
+              deps.log?.('discord_live_activity_summary_edit_threw', { threadId, cause: String(cause) })
+            })
+            return
+          }
           void deps.delivery.delete({ channelId: threadId, messageId: id }).catch((cause: unknown) => {
             deps.log?.('discord_live_activity_delete_threw', { threadId, cause: String(cause) })
           })

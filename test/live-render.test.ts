@@ -57,7 +57,7 @@ async function drive(frames: LiveFrame[], options: {
   /** Test-controlled delivery for interleaving races (16.39). */
   delivery?: LiveDeliveryPort
   /** Progress-phase copy provider (production always supplies one). */
-  progressCopy?: () => { thinking: string; thinkingStep: (step: number) => string; writing: string; approvalWait: string }
+  progressCopy?: () => { thinking: string; thinkingStep: (step: number) => string; writing: string; approvalWait: string; turnSummary: (total: number, failed: number, breakdown: string) => string }
 }): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }>> {
   const { delivery, calls } = options.delivery !== undefined
     ? { delivery: options.delivery, calls: [] }
@@ -489,6 +489,7 @@ describe('live render: turn progress status line (turn-progress-discord-sync)', 
     thinkingStep: (step: number) => `⏳ 思考中…（步骤 ${String(step)}）`,
     writing: '✍️ 撰写回复…',
     approvalWait: '⏳ 等待审批…',
+    turnSummary: (total: number, failed: number, breakdown: string) => failed > 0 ? `⚙️ 本轮 ${String(total)} 次工具调用 · ${String(failed)} 失败 ✗（${breakdown}）` : `⚙️ 本轮 ${String(total)} 次工具调用 ✓（${breakdown}）`,
   })
 
   it('creates the status message at turn/start, tracks phases, deletes at turn/end', async () => {
@@ -515,9 +516,30 @@ describe('live render: turn progress status line (turn-progress-discord-sync)', 
     // A later step shows the step count; the writing phase appears next.
     expect(statusCalls.some(call => call.content?.includes('步骤 2'))).toBe(true)
     expect(statusCalls.some(call => call.content?.includes('✍️ 撰写回复…'))).toBe(true)
-    // Turn end deletes the status message exactly once.
+    // Turn end edits the status message into the one-line turn summary —
+    // no delete for a turn that ran tools (decision 5).
+    const deletions = calls.filter(call => call.kind === 'delete')
+    expect(deletions).toHaveLength(0)
+    const summaryEdit = calls.filter(call => call.kind === 'edit' && (call.content?.includes('⚙️') ?? false)).at(-1)?.content ?? ''
+    expect(summaryEdit).toContain('⚙️ 本轮 1 次工具调用')
+    expect(summaryEdit).toContain('Shell ×1')
+    expect(summaryEdit).toContain('✓')
+    expect(summaryEdit).not.toContain('失败')
+  })
+
+  it('removes the status message at turn/end when the turn ran no tools', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }),
+      sessionEvent('sess-1', 'assistant/message', { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '直接回答' }] } }),
+      sessionEvent('sess-1', 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ], { threadForSession: () => 'thread-1', progressCopy })
+
+    // Zero-tool turns keep the pure Q&A thread: the status message is deleted.
     const deletions = calls.filter(call => call.kind === 'delete')
     expect(deletions).toHaveLength(1)
+    const summaryEdits = calls.filter(call => call.kind === 'edit' && (call.content?.includes('⚙️') ?? false))
+    expect(summaryEdits).toHaveLength(0)
   })
 
   it('marks a failed tool row with ✗ (message.content[0].isError)', async () => {
@@ -532,6 +554,10 @@ describe('live render: turn progress status line (turn-progress-discord-sync)', 
     const statusCalls = calls.filter(call => (call.kind === 'send' || call.kind === 'edit') && call.content !== undefined && call.content !== '')
     expect(statusCalls.some(call => call.content?.includes('✗'))).toBe(true)
     expect(statusCalls.some(call => call.content?.includes('✓'))).toBe(false)
+    // The turn summary carries the failure tally (decision 5).
+    const summaryEdit = calls.filter(call => call.kind === 'edit' && (call.content?.includes('⚙️') ?? false)).at(-1)?.content ?? ''
+    expect(summaryEdit).toContain('1 失败')
+    expect(summaryEdit).toContain('✗')
   })
 
   it('switches to approval-wait on the ask claim and restores progress on settle', async () => {
@@ -580,6 +606,7 @@ describe('live render: status message vs turn/end race (turn-progress)', () => {
     thinkingStep: (step: number) => `⏳ 思考中…（步骤 ${String(step)}）`,
     writing: '✍️ 撰写回复…',
     approvalWait: '⏳ 等待审批…',
+    turnSummary: (total: number, failed: number, breakdown: string) => failed > 0 ? `⚙️ 本轮 ${String(total)} 次工具调用 · ${String(failed)} 失败 ✗（${breakdown}）` : `⚙️ 本轮 ${String(total)} 次工具调用 ✓（${breakdown}）`,
   })
 
   it('deletes the status message when its in-flight send lands after turn/end', async () => {

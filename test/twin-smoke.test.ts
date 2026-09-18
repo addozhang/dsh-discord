@@ -940,6 +940,7 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
         thinkingStep: (step: number) => `⏳ 思考中…（步骤 ${String(step)}）`,
         writing: '✍️ 撰写回复…',
         approvalWait: '⏳ 等待审批…',
+        turnSummary: (total: number, failed: number, breakdown: string) => failed > 0 ? `⚙️ 本轮 ${String(total)} 次工具调用 · ${String(failed)} 失败 ✗（${breakdown}）` : `⚙️ 本轮 ${String(total)} 次工具调用 ✓（${breakdown}）`,
       }),
       onTurnEnded: () => {},
     })
@@ -1066,9 +1067,15 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
     )
     await discord.thread(tid).waitForMessage({ predicate: message => message.content.includes('工作区是干净的') })
     await new Promise(resolve => { setTimeout(resolve, 300) })
-    const leftovers = (await discord.thread(tid).getMessages())
-      .filter(message => message.content.includes('⏳') || message.content.includes('💻') || message.content.includes('✍️'))
-    expect(leftovers).toHaveLength(0)
+    // The status message collapsed into the one-line turn summary and stays
+    // (decision 5); no live phase markers (⏳/💻/✍️) remain.
+    const messages = await discord.thread(tid).getMessages()
+    const summaries = messages.filter(message => message.content.includes('⚙️'))
+    expect(summaries.length).toBeGreaterThanOrEqual(1)
+    expect(summaries.at(-1)?.content).toContain('本轮 1 次工具调用')
+    expect(summaries.at(-1)?.content).toContain('Shell ×1')
+    const liveMarkers = messages.filter(message => /⏳|💻|✍️/.test(message.content))
+    expect(liveMarkers).toHaveLength(0)
   }, 30_000)
 })
 

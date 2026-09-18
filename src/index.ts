@@ -1100,6 +1100,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         thinkingStep: copy.progressThinkingStep,
         writing: copy.progressWriting,
         approvalWait: copy.progressApprovalWait,
+        turnSummary: copy.progressTurnSummary,
       }),
       onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
       onTurnEnded: (sessionId) => {
