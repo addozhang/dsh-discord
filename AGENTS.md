@@ -179,6 +179,9 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
 
 - `dsh plugin add` 对同名 tarball 可能是空操作（pnpm "added 0"）——
   重装必须先 `rm` 再 `add`，并 diff 校验安装副本
+- `dsh plugin add pkg@dist-tag` 可能解析到过期缓存版本（2026-09-19 实踩：
+  刚发布 rc.3 后 `@next` 装成了 alpha.1）——发版后一律用**精确版本号**安装，
+  装完核对 node_modules 里的 version 字段
 - compose 后 `lib/` 与源码可能不同步：`pnpm pack` 前必须 `pnpm build`
 - `exactOptionalPropertyTypes` 开启：可选属性不能显式赋 `undefined`
 - eslint：async 函数无 await（桩函数用 `() => Promise.resolve(...)`）、
