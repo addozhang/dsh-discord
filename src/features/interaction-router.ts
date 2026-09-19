@@ -182,9 +182,41 @@ function renderPermissionApply(copy: CopyTable, result: PermissionApplyResult): 
   }
 }
 
+/** One posted permission risk-confirmation prompt, so a settle can gray it out. */
+interface PermissionPromptRecord {
+  /** The ephemeral followup message carrying the confirm/cancel buttons. */
+  messageId: string
+  /** The SLASH interaction's webhook token — the only editor of that followup. */
+  interactionToken: string
+  /** Posted content, replayed verbatim on retire (language stays as posted). */
+  content: string
+  confirmCustomId: string
+  cancelCustomId: string
+  confirmLabel: string
+  cancelLabel: string
+  createdAtMs: number
+}
+
+/** Buttons live while the registry entry does; entries sweep past one extra TTL. */
+const PERMISSION_PROMPT_SWEEP_MS = 20 * 60 * 1000
+
 export function createInteractionRouter(deps: InteractionRouterDeps): {
   route(event: NormalizedInteraction, interactionToken?: string): Promise<void>
 } {
+  /**
+   * Posted /permission confirmation prompts by custom_id. In-memory only —
+   * a restart forgets both halves together (the registry is memory too),
+   * so a resolved-but-unretired prompt is impossible to click anyway.
+   */
+  const permissionPrompts = new Map<string, PermissionPromptRecord>()
+
+  /** Drop prompt records past their sweep window (never-clicked prompts). */
+  function sweepPermissionPrompts(nowMs: number): void {
+    for (const [customId, record] of permissionPrompts) {
+      if (nowMs - record.createdAtMs > PERMISSION_PROMPT_SWEEP_MS) permissionPrompts.delete(customId)
+    }
+  }
+
   /** Authorize one interaction against the live policy table. */
   function authorize(event: RouterEvent) {
     return evaluateAuthorization(deps.policy(), {
@@ -288,8 +320,9 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     if (ack.outcome !== 'completed') { deps.log('discord_ack_failed', ack.outcome); return }
     // Deferred-ack followups must never fail silently: the REST client
     // resolves (never rejects) 4xx outcomes, so a void'ed call would drop
-    // the failure without a trace.
-    const followUp = async (content: string, components?: Array<unknown>): Promise<void> => {
+    // the failure without a trace. Returns the created message id so
+    // callers can retire controls on the posted message later.
+    const followUp = async (content: string, components?: Array<unknown>): Promise<string | undefined> => {
       const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, {
         content,
         flags: OUTBOUND_EPHEMERAL_FLAGS,
@@ -297,7 +330,10 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       })
       if (posted.outcome !== 'completed') {
         deps.log('discord_followup_failed', posted.outcome === 'rejected' ? `HTTP ${String(posted.status)}` : posted.reason)
+        return undefined
       }
+      const messageId = (posted as { body?: { id?: unknown } }).body?.['id']
+      return typeof messageId === 'string' ? messageId : undefined
     }
     const buttonRow = (confirmId: string, cancelId: string): Array<unknown> => [{
       type: 1,
@@ -702,18 +738,37 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           if (requiresConfirmation(typedPreset)) {
             // The dangerous preset(s) go through an explicit risk
             // confirmation — the web UI shows the same gate (16.61).
-            const expiresAtMs = Date.now() + 15 * 60 * 1000
+            const nowMs = Date.now()
+            const expiresAtMs = nowMs + 15 * 60 * 1000
             const base = { kind: 'permission-confirm', sessionId, preset: typedPreset, guildId: event.guildId, actorId: event.actorId, expiresAtMs }
             const confirmId = deps.registry.register({ ...base, action: 'confirm' })
             const cancelId = deps.registry.register({ ...base, action: 'cancel' })
             const label = permissionPresetLabel(typedPreset, deps.copy)
-            await followUp(`${deps.copy.permissionConfirmHeader(label)}\n${deps.copy.permissionConfirmBody}`, [{
+            const content = `${deps.copy.permissionConfirmHeader(label)}\n${deps.copy.permissionConfirmBody}`
+            const promptMessageId = await followUp(content, [{
               type: 1,
               components: [
                 { type: 2, style: 3, label: deps.copy.permissionConfirmButton, custom_id: confirmId },
                 { type: 2, style: 4, label: deps.copy.permissionConfirmCancelButton, custom_id: cancelId },
               ],
             }])
+            // Remember the posted prompt so a settle can gray the buttons
+            // out — an unsettled-looking live control invites second clicks.
+            sweepPermissionPrompts(nowMs)
+            if (promptMessageId !== undefined) {
+              const record: PermissionPromptRecord = {
+                messageId: promptMessageId,
+                interactionToken,
+                content,
+                confirmCustomId: confirmId,
+                cancelCustomId: cancelId,
+                confirmLabel: deps.copy.permissionConfirmButton,
+                cancelLabel: deps.copy.permissionConfirmCancelButton,
+                createdAtMs: nowMs,
+              }
+              permissionPrompts.set(confirmId, record)
+              permissionPrompts.set(cancelId, record)
+            }
             return
           }
           const result = await applyPermissionPreset(deps.permission, {
@@ -900,13 +955,43 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, { content, flags: OUTBOUND_EPHEMERAL_FLAGS })
       if (posted.outcome !== 'completed') deps.log('discord_followup_failed', posted.outcome)
     }
+    /**
+     * Retire the posted prompt: both buttons gray out so the settled
+     * control never looks live again. The prompt was posted by the SLASH
+     * interaction's webhook, so only that token can edit it; a late click
+     * past the webhook token's lifetime fails the edit loudly but the
+     * outcome followup still reaches the clicker (the registry TTL already
+     * bounds double-clicks well inside the window).
+     */
+    const retirePrompt = async (): Promise<void> => {
+      const record = permissionPrompts.get(customId)
+      permissionPrompts.delete(record?.confirmCustomId ?? customId)
+      permissionPrompts.delete(record?.cancelCustomId ?? customId)
+      if (record === undefined) return
+      const patched = await rest.request('PATCH', `/webhooks/${deps.applicationId()}/${record.interactionToken}/messages/${record.messageId}`, {
+        content: record.content,
+        flags: OUTBOUND_EPHEMERAL_FLAGS,
+        components: [{
+          type: 1,
+          components: [
+            { type: 2, style: 3, label: record.confirmLabel, custom_id: record.confirmCustomId, disabled: true },
+            { type: 2, style: 4, label: record.cancelLabel, custom_id: record.cancelCustomId, disabled: true },
+          ],
+        }],
+      })
+      if (patched.outcome !== 'completed') {
+        deps.warn('discord_permission_prompt_retire_failed', patched.outcome === 'rejected' ? `HTTP ${String(patched.status)}` : patched.reason)
+      }
+    }
     if (context['action'] !== 'confirm') {
+      await retirePrompt()
       await respond(deps.copy.permissionCancelled)
       return
     }
     // Re-run the full authorization + catalog validation at click time; the
     // settings flag may have flipped since the prompt was posted.
     const decision = authorize(event)
+    await retirePrompt()
     const result = await applyPermissionPreset(deps.permission, {
       decision,
       sessionId,

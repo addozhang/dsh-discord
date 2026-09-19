@@ -607,6 +607,41 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
       predicate: message => message.content.includes('权限模式已切换：完全权限'),
     })
     expect(done.content).toContain('已确认，正在切换')
+
+    // Settling the confirmation retires the control: BOTH buttons on the
+    // prompt message gray out so a second click never looks live (16.61).
+    await new Promise(resolve => { setTimeout(resolve, 400) })
+    const settled = (await discord.channel(threadId).getMessages()).find(message => message.id === prompt.id)
+    const settledRow = (settled?.components?.[0] as { components?: Array<{ label?: string; disabled?: boolean }> } | undefined)?.components ?? []
+    expect(settledRow.map(button => button.disabled)).toEqual([true, true])
+  }, 20_000)
+
+  it('/permission set danger-full-access cancel keeps the mode and disables the prompt', async () => {
+    const interaction = await discord.simulateSlashCommand({
+      channelId: threadId, userId: USER, name: 'permission',
+      options: [{ name: 'set', type: 1, options: [{ name: 'preset', type: 3, value: 'danger-full-access' }] }],
+    })
+    await discord.channel(threadId).waitForInteractionAck({ interactionId: interaction.id })
+    const prompt = await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('确认启用「完全权限」'),
+    })
+    const row = (prompt.components?.[0] as { components?: Array<{ custom_id?: string; label?: string }> } | undefined)?.components ?? []
+    const cancelId = row.find(button => button.label === '取消')?.custom_id
+    expect(typeof cancelId).toBe('string')
+    const switchesBefore = (await discord.channel(threadId).getMessages())
+      .filter(message => message.content.includes('权限模式 → ')).length
+
+    await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: prompt.id, customId: cancelId ?? '' })
+    await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('已取消，权限模式未变更'),
+    })
+    await new Promise(resolve => { setTimeout(resolve, 400) })
+    const settled = (await discord.channel(threadId).getMessages()).find(message => message.id === prompt.id)
+    const settledRow = (settled?.components?.[0] as { components?: Array<{ disabled?: boolean }> } | undefined)?.components ?? []
+    expect(settledRow.map(button => button.disabled)).toEqual([true, true])
+    const switchesAfter = (await discord.channel(threadId).getMessages())
+      .filter(message => message.content.includes('权限模式 → ')).length
+    expect(switchesAfter).toBe(switchesBefore)
   }, 20_000)
 
   it('answers a click on an unknown control with the ack plus an ephemeral rerun hint', async () => {
@@ -1902,6 +1937,8 @@ describe('twin smoke: isolation matrix (15.11)', () => {
   }, 20_000)
 })
 
+  const enThreadSessions = new Map<string, string>()
+  const enOperators: string[] = []
 describe('twin smoke: English copy path (16.25)', () => {
   const GUILD_EN = '333333333333333336'
   const CHANNEL_EN = '444444444444444448'
@@ -1938,7 +1975,7 @@ describe('twin smoke: English copy path (16.25)', () => {
         administratorRoleIds: [],
         deniedUserIds: [],
         deniedRoleIds: [],
-        hostOperatorUserIds: [],
+        hostOperatorUserIds: enOperators,
       }),
       applicationId: () => BOT,
       registry: sharedRegistry,
@@ -1973,7 +2010,7 @@ describe('twin smoke: English copy path (16.25)', () => {
       resolver: { resolve: () => Promise.resolve({ outcome: 'stale' as const }) },
       channelBinding: () => undefined,
       findBoundChannelFor: () => undefined,
-      sessionForThread: () => undefined,
+      sessionForThread: (_guildId, threadId) => enThreadSessions.get(threadId),
       ensureWorkspaceChannel: () => Promise.resolve(undefined),
       rest: () => Promise.resolve(rest),
       resumeCandidates: () => Promise.resolve({ outcome: 'ok' as const, options: [] }),
@@ -2051,6 +2088,48 @@ describe('twin smoke: English copy path (16.25)', () => {
     runtimeRef.current?.dispose()
     await discord.stop()
   })
+
+  it('/permission confirm flow renders the English risk copy and disables on settle', async () => {
+    // A bound task thread for the session-scoped command (en copy 16.61).
+    const source = await discord.channel(CHANNEL_EN).user(GUEST).sendMessage({ content: 'en permission test' })
+    const made = await rest.request<{ id?: string } | undefined>(
+      'POST', `/channels/${CHANNEL_EN}/messages/${source.id}/threads`,
+      { name: 'en permission test', type: 11, auto_archive_duration: 1440 },
+    )
+    expect(made.outcome).toBe('completed')
+    const enThread = made.outcome === 'completed' && typeof made.body?.id === 'string' ? made.body.id : ''
+    expect(enThread).not.toBe('')
+    enThreadSessions.set(enThread, 'sess-en-perm')
+    // The default operator gate stays exercised: raise GUEST for this test,
+    // then restore the plain-member posture the later cases rely on.
+    enOperators.push(GUEST)
+
+    const interaction = await discord.simulateSlashCommand({
+      channelId: enThread, userId: GUEST, name: 'permission',
+      options: [{ name: 'set', type: 1, options: [{ name: 'preset', type: 3, value: 'danger-full-access' }] }],
+    })
+    await discord.channel(enThread).waitForInteractionAck({ interactionId: interaction.id })
+    const prompt = await discord.channel(enThread).waitForMessage({
+      predicate: message => message.content.includes('Enable "Full access"?'),
+    })
+    expect(prompt.content).toContain('sensitive operations')
+    const row = (prompt.components?.[0] as { components?: Array<{ custom_id?: string; label?: string }> } | undefined)?.components ?? []
+    expect(row.map(button => button.label)).toEqual(['I understand the risk, enable', 'Cancel'])
+    const confirmId = row[0]?.custom_id
+    expect(typeof confirmId).toBe('string')
+
+    await discord.simulateButtonClick({ channelId: enThread, userId: GUEST, messageId: prompt.id, customId: confirmId ?? '' })
+    await discord.channel(enThread).waitForMessage({
+      predicate: message => message.content.includes('Permission mode switched: Full access'),
+    })
+    await new Promise(resolve => { setTimeout(resolve, 400) })
+    const settled = (await discord.channel(enThread).getMessages()).find(message => message.id === prompt.id)
+    const settledRow = (settled?.components?.[0] as { components?: Array<{ disabled?: boolean }> } | undefined)?.components ?? []
+    expect(settledRow.map(button => button.disabled)).toEqual([true, true])
+    enOperators.length = 0
+    // (The durable-event system line is covered by live-render unit tests
+    // and the real-machine run; this harness has no DSH mux.)
+  }, 20_000)
 
   it('denies bind to a plain member with the English admin-only copy', async () => {
     const interaction = await discord.simulateSlashCommand({
