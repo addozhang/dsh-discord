@@ -108,7 +108,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 | `/queue list`, `/queue remove` | session thread | inspect and trim the pending queue |
 | `/steer`, `/stop` | session thread | steer or cancel the running turn (owner only) |
 | `/model show` / `select` | session thread | show the live model directory; `select` without arguments walks the interactive provider → model → reasoning cascade (any authorized member by default) |
-| `/session resume` | project channel | pick one of this workspace's past sessions (autocomplete: title and age, newest first) and resume it into a new thread of this channel; blank, already-bound, subagent, and archived sessions are never offered |
+| `/session resume` | project channel | pick one of this workspace's past sessions (autocomplete: title and age, newest first) and resume it into a new thread of this channel; blank, already-bound, subagent, and archived sessions are never offered. The thread renders the session's history — answers and tool summaries plus the user's inputs as quoted echo lines (plugin/system injections are never echoed). After an adapter restart, threads catch up only what they missed: a persisted render watermark suppresses already-delivered history, and bound sessions re-subscribe on reconnect so turns prompted from the web UI still land in their thread |
 | `/guild forget` | any channel | operator-only removal of adapter records |
 
 ## Design notes
@@ -132,7 +132,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 
 ```sh
 pnpm install --ignore-scripts
-pnpm test          # 683 tests incl. gateway/REST twin E2E
+pnpm test          # 729 tests incl. gateway/REST twin E2E
 pnpm typecheck
 pnpm lint
 pnpm build         # lib + client bundle
