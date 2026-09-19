@@ -46,11 +46,42 @@ function sessionEvent(sessionId: string, type: string, data: Record<string, unkn
   return { type: 'session/event', sessionId, event: { type, data } }
 }
 
+/** One journal-carried user/message record (replay-fence-and-user-input). */
+function userMessage(
+  text: string,
+  options: { carrier?: 'snapshot' | 'live'; seq?: number; kind?: string; rpcId?: string } = {},
+): LiveFrame {
+  return {
+    type: 'session/event',
+    sessionId: 'sess-1',
+    event: {
+      type: 'user/message',
+      data: {
+        content: [{ type: 'text', text }],
+        source: {
+          kind: options.kind ?? 'user',
+          ...(options.rpcId === undefined ? {} : { rpcId: options.rpcId }),
+        },
+        role: 'user',
+        id: 'um-1',
+      },
+    },
+    ...(options.seq === undefined ? {} : { seq: options.seq }),
+    ...(options.carrier === undefined ? {} : { carrier: options.carrier }),
+  }
+}
+
+const USER_ECHO_COPY = {
+  label: '💬 用户输入',
+  nonText: '（非文本消息）',
+  truncated: '（已截断）',
+}
+
 /** Push frames through the live renderer and wait for the pipeline to drain. */
 async function drive(frames: LiveFrame[], options: {
   threadForSession: (sessionId: string) => string | undefined
   onQueueSnapshot?: (sessionId: string, items: Array<{ id: string; summary: string }>) => void
-  onTurnEnded?: (sessionId: string) => void
+  onTurnEnded?: (sessionId: string, info?: { threadId: string; renderedSeq: number }) => void
   updateIntervalMs?: number
   threadName?: (channelId: string) => Promise<string | undefined>
   sendOutcomes?: Array<'completed' | 'unknown' | 'failed'>
@@ -58,6 +89,8 @@ async function drive(frames: LiveFrame[], options: {
   delivery?: LiveDeliveryPort
   /** Progress-phase copy provider (production always supplies one). */
   progressCopy?: () => { thinking: string; thinkingStep: (step: number) => string; writing: string; approvalWait: string; turnSummary: (total: number, failed: number, breakdown: string) => string }
+  /** User-echo copy provider (production always supplies one). */
+  userEchoCopy?: () => { label: string; nonText: string; truncated: string }
 }): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }>> {
   const { delivery, calls } = options.delivery !== undefined
     ? { delivery: options.delivery, calls: [] }
@@ -83,6 +116,7 @@ async function drive(frames: LiveFrame[], options: {
     ...(options.onTurnEnded === undefined ? {} : { onTurnEnded: options.onTurnEnded }),
     ...(options.threadName === undefined ? {} : { threadName: options.threadName }),
     ...(options.progressCopy === undefined ? {} : { progressCopy: options.progressCopy }),
+    ...(options.userEchoCopy === undefined ? {} : { userEchoCopy: options.userEchoCopy }),
   })
   await gate
   await new Promise(resolve => { setTimeout(resolve, 10) })
@@ -661,5 +695,105 @@ describe('live render: status message vs turn/end race (turn-progress)', () => {
     const deletions = calls.filter(call => call.kind === 'delete')
     expect(deletions).toHaveLength(1)
     expect(deletions[0]?.messageId).toBe('dm-status')
+  })
+})
+
+describe('live render: user-input echo (replay-fence-and-user-input)', () => {
+  const echo = () => USER_ECHO_COPY
+
+  it('echoes snapshot-carried web-originated input during catch-up', async () => {
+    const calls = await drive([
+      userMessage('总结一下这个分支', { carrier: 'snapshot', seq: 8 }),
+    ], { threadForSession: () => 'thread-1', userEchoCopy: echo })
+
+    const sends = calls.filter(call => call.kind === 'send' && call.channelId === 'thread-1')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.content).toBe('💬 用户输入\n> 总结一下这个分支')
+  })
+
+  it('echoes live-carried web-originated input (prompt from another surface)', async () => {
+    const calls = await drive([
+      userMessage('run the deploy', { carrier: 'live', seq: 20 }),
+    ], { threadForSession: () => 'thread-1', userEchoCopy: echo })
+
+    const sends = calls.filter(call => call.kind === 'send' && call.channelId === 'thread-1')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.content).toContain('> run the deploy')
+  })
+
+  it('echoes Discord-originated input only during initial catch-up (resume into a fresh thread)', async () => {
+    const calls = await drive([
+      userMessage('whoami', { carrier: 'snapshot', seq: 8, rpcId: 'discord:1550487639453466656' }),
+    ], { threadForSession: () => 'thread-1', userEchoCopy: echo })
+
+    const sends = calls.filter(call => call.kind === 'send' && call.channelId === 'thread-1')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.content).toContain('> whoami')
+  })
+
+  it('skips Discord-originated input on live carrier (already the user\'s own message)', async () => {
+    const calls = await drive([
+      userMessage('whoami', { carrier: 'live', seq: 20, rpcId: 'discord:1550487639453466656' }),
+    ], { threadForSession: () => 'thread-1', userEchoCopy: echo })
+
+    expect(calls.filter(call => call.kind === 'send')).toHaveLength(0)
+  })
+
+  it('skips Discord-originated snapshot input after the runtime caught up (reconnect gap)', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      userMessage('whoami', { carrier: 'live', seq: 20, rpcId: 'discord:1550487639453466656' }),
+      userMessage('whoami again', { carrier: 'snapshot', seq: 21, rpcId: 'discord:1550487639453466999' }),
+    ], { threadForSession: () => 'thread-1', userEchoCopy: echo })
+
+    const sends = calls.filter(call => call.kind === 'send' && call.channelId === 'thread-1')
+    expect(sends).toHaveLength(0)
+  })
+
+  it('never echoes plugin/system injections', async () => {
+    const calls = await drive([
+      userMessage('Current runtime context…', { carrier: 'snapshot', seq: 9, kind: 'plugin' }),
+      userMessage('<system-reminder>…', { carrier: 'live', seq: 22, kind: 'system' }),
+    ], { threadForSession: () => 'thread-1', userEchoCopy: echo })
+
+    expect(calls.filter(call => call.kind === 'send')).toHaveLength(0)
+  })
+
+  it('renders the non-text placeholder and truncates over-long input with a marker', async () => {
+    const calls = await drive([
+      { type: 'session/event', sessionId: 'sess-1', event: { type: 'user/message', data: { content: [{ type: 'image', mediaType: 'image/png' }], source: { kind: 'user' } } }, carrier: 'snapshot', seq: 8 } as LiveFrame,
+      userMessage('长'.repeat(600), { carrier: 'snapshot', seq: 9 }),
+    ], { threadForSession: () => 'thread-1', userEchoCopy: echo })
+
+    const sends = calls.filter(call => call.kind === 'send' && call.channelId === 'thread-1')
+    expect(sends).toHaveLength(2)
+    expect(sends[0]?.content).toBe('💬 用户输入\n> （非文本消息）')
+    expect(sends[1]?.content).toContain('（已截断）')
+    expect(sends[1]?.content?.length ?? 0).toBeLessThan(600)
+  })
+
+  it('degrades to no echo when copy is not supplied', async () => {
+    const calls = await drive([
+      userMessage('总结一下这个分支', { carrier: 'snapshot', seq: 8 }),
+    ], { threadForSession: () => 'thread-1' })
+
+    expect(calls.filter(call => call.kind === 'send')).toHaveLength(0)
+  })
+
+  it('reports the consumed watermark at turn end (records the switch dropped included)', async () => {
+    const endings: Array<{ sessionId: string; info?: { threadId: string; renderedSeq: number } }> = []
+    await drive([
+      userMessage('whoami', { carrier: 'snapshot', seq: 8 }),
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }),
+      { type: 'session/event', sessionId: 'sess-1', event: { type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'you' }] } } }, carrier: 'snapshot', seq: 10 } as LiveFrame,
+      sessionEvent('sess-1', 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+    ], {
+      threadForSession: () => 'thread-1',
+      userEchoCopy: echo,
+      onTurnEnded: (sessionId, info) => { endings.push({ sessionId, ...(info === undefined ? {} : { info }) }) },
+    })
+
+    expect(endings).toEqual([{ sessionId: 'sess-1', info: { threadId: 'thread-1', renderedSeq: 10 } }])
   })
 })

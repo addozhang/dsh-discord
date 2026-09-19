@@ -13,14 +13,14 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { createHostEventRouter, type HostSessionFollowFace } from '../src/dsh/host-events.js'
+import { createHostEventRouter, type HostSessionFollowFace, type TrackSeedOptions } from '../src/dsh/host-events.js'
 
 interface Harness {
   followRequests: Array<Record<string, unknown>>
   /** Push wire frames into the open follow stream. */
   deliver(frames: unknown[]): void
-  /** Open the consumer stream, track `sess-1`, collect for `ms`, abort. */
-  collect(ms: number): Promise<unknown[]>
+  /** Open the consumer stream, track `sess-1` (optionally seeded), collect for `ms`, abort. */
+  collect(ms: number, seed?: TrackSeedOptions): Promise<unknown[]>
 }
 
 function createHarness(): Harness {
@@ -62,7 +62,7 @@ function createHarness(): Harness {
       pending = [...pending, ...frames]
       wake?.()
     },
-    async collect(ms: number): Promise<unknown[]> {
+    async collect(ms: number, seed?: TrackSeedOptions): Promise<unknown[]> {
       const collected: unknown[] = []
       const controller = new AbortController()
       void (async () => {
@@ -73,7 +73,7 @@ function createHarness(): Harness {
       // Mirror compose's order: the consumer stream opens first, then the
       // session-acquisition sites track.
       await new Promise(resolve => { setTimeout(resolve, 5) })
-      router.track('sess-1')
+      router.track('sess-1', seed)
       await new Promise(resolve => { setTimeout(resolve, ms) })
       controller.abort()
       await new Promise(resolve => { setTimeout(resolve, 10) })
@@ -95,6 +95,8 @@ describe('host event router: 0.1.6 carrier translation', () => {
       type: 'session/event',
       sessionId: 'sess-1',
       event: { type: 'tool/call', data: { turn: 2, step: 1, callId: 'c1', name: 'bash', arguments: '{"command":"ls"}' } },
+      carrier: 'live',
+      seq: 7,
     }])
   })
 
@@ -109,6 +111,8 @@ describe('host event router: 0.1.6 carrier translation', () => {
       type: 'session/event',
       sessionId: 'sess-1',
       event: { type: 'turn/start', data: { turn: 1 } },
+      carrier: 'snapshot',
+      seq: 1,
     })
   })
 
@@ -123,6 +127,8 @@ describe('host event router: 0.1.6 carrier translation', () => {
       type: 'session/event',
       sessionId: 'sess-1',
       event: { type: 'step/start', data: { turn: 1, step: 1 } },
+      carrier: 'snapshot',
+      seq: 2,
     })
   })
 
@@ -160,5 +166,59 @@ describe('host event router: 0.1.6 carrier translation', () => {
     ])
     const frames = await collecting
     expect(frames[0]).toEqual({ type: 'session/subscribed', sessionId: 'sess-1' })
+  })
+})
+
+describe('host event router: replay fence (replay-fence-and-user-input)', () => {
+  it('drops snapshot records at or below a seeded floor', async () => {
+    const h = createHarness()
+    const collecting = h.collect(40, { floor: 5 })
+    h.deliver([
+      { type: 'snapshot', records: [
+        { type: 'event', event: { type: 'turn/start', seq: 4, time: 1, data: { turn: 1 } } },
+        { type: 'event', event: { type: 'turn/end', seq: 5, time: 1, data: { turn: 1 } } },
+      ] },
+    ])
+    const frames = await collecting
+    expect(frames.filter(f => (f as { type?: string }).type === 'session/event')).toEqual([])
+  })
+
+  it('delivers snapshot records above the floor', async () => {
+    const h = createHarness()
+    const collecting = h.collect(40, { floor: 5 })
+    h.deliver([
+      { type: 'snapshot', records: [
+        { type: 'event', event: { type: 'turn/start', seq: 6, time: 1, data: { turn: 2 } } },
+      ] },
+    ])
+    const frames = await collecting
+    const events = frames.filter(f => (f as { type?: string }).type === 'session/event')
+    expect(events).toEqual([{
+      type: 'session/event',
+      sessionId: 'sess-1',
+      event: { type: 'turn/start', data: { turn: 2 } },
+      carrier: 'snapshot',
+      seq: 6,
+    }])
+  })
+
+  it('swallows the first opening snapshot whole for legacy bindings, then delivers live', async () => {
+    const h = createHarness()
+    const collecting = h.collect(50, { suppressOpeningSnapshot: true })
+    h.deliver([
+      // The legacy thread already rendered this history: nothing may deliver.
+      { type: 'snapshot', records: [
+        { type: 'event', event: { type: 'turn/start', seq: 10, time: 1, data: { turn: 1 } } },
+        { type: 'event', event: { type: 'turn/end', seq: 11, time: 1, data: { turn: 1 } } },
+      ] },
+    ])
+    await new Promise(resolve => { setTimeout(resolve, 10) })
+    h.deliver([
+      // Later live records (post-watermark) deliver normally — the swallow
+      // must not become a permanent floor.
+      { type: 'event', event: { type: 'turn/start', seq: 12, time: 1, data: { turn: 2 } } },
+    ])
+    const frames = (await collecting).filter(f => (f as { type?: string }).type === 'session/event') as Array<{ seq?: number }>
+    expect(frames.map(f => f.seq)).toEqual([12])
   })
 })

@@ -14,7 +14,7 @@ import { suppressMentionSyntax } from '../policy/suppress.js'
 /** Discord message flags the adapter always sets (silent delivery). */
 export const OUTBOUND_MESSAGE_FLAGS = DISCORD_SUPPRESS_NOTIFICATIONS_FLAG
 
-export type OutboundContentKind = 'assistant' | 'tool' | 'title' | 'error'
+export type OutboundContentKind = 'assistant' | 'tool' | 'title' | 'error' | 'user'
 
 export interface OutboundMessage {
   content: string
@@ -26,6 +26,8 @@ export interface OutboundMessage {
 /**
  * Build one outbound payload. Titles are additionally length-capped (they
  * render into headers and badges); all content is mention-neutralized.
+ * `user` rides the tool path: suppression only, no table wrapping — echoed
+ * input is quoted verbatim, never reflowed.
  */
 export function buildOutboundMessage(input: { kind: OutboundContentKind; content: string }): OutboundMessage {
   const content = input.kind === 'title'

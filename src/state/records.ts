@@ -35,6 +35,13 @@ export const ThreadBindingRecord = z.strictObject({
   revision: z.number().int().min(1),
   createdBy: z.string().min(1),
   createdAtMs: z.number().int().min(0),
+  /**
+   * Highest journal seq this thread has consumed (the durable render
+   * watermark, replay-fence-and-user-input D1). Absent on records written
+   * before the feature or before the thread rendered anything; advanced at
+   * turn boundaries through the revision fence.
+   */
+  renderedSeq: z.number().int().min(0).optional(),
 })
 
 export type ThreadBinding = z.infer<typeof ThreadBindingRecord>

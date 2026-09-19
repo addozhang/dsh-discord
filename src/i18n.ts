@@ -112,6 +112,9 @@ const zh = {
     failed > 0
       ? `⚙️ 本轮 ${String(total)} 次工具调用 · ${String(failed)} 失败 ✗（${breakdown}）`
       : `⚙️ 本轮 ${String(total)} 次工具调用 ✓（${breakdown}）`,
+  userInputLabel: '💬 用户输入',
+  userInputNonText: '（非文本消息）',
+  userInputTruncated: '（已截断）',
 
   // ── /model show / select ─────────────────────────────────────────────
   modelNeedsThread: '⚠️ /model 需要在已绑定 Session 的任务线程中使用（先在项目频道 @ 机器人）。',
@@ -256,6 +259,9 @@ const en: CopyTable = {
     failed > 0
       ? `⚙️ ${String(total)} tool calls this turn · ${String(failed)} failed ✗ (${breakdown})`
       : `⚙️ ${String(total)} tool calls this turn ✓ (${breakdown})`,
+  userInputLabel: '💬 User input',
+  userInputNonText: '(non-text message)',
+  userInputTruncated: '(truncated)',
 
   // ── /model show / select ─────────────────────────────────────────────
   modelNeedsThread: '⚠️ /model needs a thread bound to a Session (mention the bot in a project channel first).',

@@ -107,6 +107,23 @@ describe('binding record schemas', () => {
     expect(ThreadBindingRecord.safeParse({ ...valid, revision: -1 }).success).toBe(false)
     expect(ThreadBindingRecord.safeParse({ ...valid, extra: 1 }).success).toBe(false)
   })
+
+  it('round-trips the optional render watermark (replay-fence-and-user-input)', () => {
+    const legacy = {
+      sessionId: 'sess-1',
+      workspaceId: 'ws-1',
+      revision: 3,
+      createdBy: '555555555555555555',
+      createdAtMs: 2_000,
+    }
+    // Legacy records (written before the field existed) keep parsing.
+    expect(ThreadBindingRecord.safeParse(legacy).success).toBe(true)
+    const persisted = ThreadBindingRecord.parse({ ...legacy, renderedSeq: 42 })
+    expect(persisted.renderedSeq).toBe(42)
+    // The watermark is a non-negative integer; negatives fail closed.
+    expect(ThreadBindingRecord.safeParse({ ...legacy, renderedSeq: -1 }).success).toBe(false)
+    expect(ThreadBindingRecord.safeParse({ ...legacy, renderedSeq: '42' }).success).toBe(false)
+  })
 })
 
 describe('domain spec', () => {

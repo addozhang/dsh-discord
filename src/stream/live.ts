@@ -22,7 +22,16 @@ import type { DiscordVerbosity } from '../settings.js'
 
 /** The mux frames the live path consumes (narrow, defensive shape). */
 export type LiveFrame =
-  | { type: 'session/event'; sessionId: string; event: { type: string; data: Record<string, unknown> }; view?: unknown }
+  | {
+      type: 'session/event'
+      sessionId: string
+      event: { type: string; data: Record<string, unknown> }
+      /** Journal seq of the carried record (absent on seq-less records). */
+      seq?: number
+      /** Which follow carrier delivered the record (replay-fence D4). */
+      carrier?: 'snapshot' | 'live'
+      view?: unknown
+    }
   | { type: 'session/subscribed'; sessionId: string }
   | { type: 'session/queue'; sessionId: string; items: Array<{ id: string; summary: string }> }
   | { type: string }
@@ -82,14 +91,25 @@ export interface LiveRenderDeps {
     approvalWait: string
     turnSummary: (total: number, failed: number, breakdown: string) => string
   }
-  /** Turn ownership release on turn/end. */
-  onTurnEnded?: (sessionId: string) => void
+  /**
+   * Localized user-echo copy, resolved live (language can change).
+   * Unset: user/message records never echo (the pre-feature behavior).
+   */
+  userEchoCopy?: () => { label: string; nonText: string; truncated: string }
+  /** Turn ownership release on turn/end; `info` carries the consumed watermark. */
+  onTurnEnded?: (sessionId: string, info?: { threadId: string; renderedSeq: number }) => void
 }
 
 /** Coalescing budget for activity-message edits under parallel tools. */
 const DEFAULT_ACTIVITY_COALESCE_MS = 1_000
 /** Row budget: a presentation title is truncated before it reaches Discord. */
 const ACTIVITY_TITLE_MAX = 80
+/**
+ * Echo budget for one user/message (replay-fence D6): history catch-up
+ * mirrors, it does not replay wholesale — beyond this the text truncates
+ * with a marker and the Session log remains the source of truth.
+ */
+const USER_ECHO_MAX = 500
 
 /**
  * Wire-level live-path tracing (`DSH_DISCORD_TRACE=1` → stderr). Default
@@ -159,6 +179,19 @@ interface ThreadRuntime {
   toolTitles: Map<string, string>
   /** Last title this thread was renamed to (dedupes repeat projections). */
   lastTitle: string | undefined
+  /**
+   * Highest journal seq this thread has CONSUMED (delivered frames, switch
+   * hit or not — a dropped record is still consumed): the runtime-side view
+   * of the render watermark, persisted at turn boundaries (replay-fence D5).
+   */
+  lastSeq: number
+  /**
+   * Whether any live-carrier frame has been consumed yet. The initial
+   * catch-up window (before this flips) is the only place Discord-originated
+   * user input echoes — a fresh resume thread lacks those messages, a live
+   * or re-connected thread already shows them as the user's own (D6).
+   */
+  caughtUp: boolean
 }
 
 const ANSWER_MARKER = (interrupted: boolean, marker: string): string => interrupted ? `\n\n${marker}` : ''
@@ -181,6 +214,16 @@ function assistantText(message: unknown): string {
       typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text')
     .map(block => block.text)
     .join('')
+}
+
+/** Extract one user message's text (text parts only, newline-joined). */
+function userTextParts(content: unknown): string {
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((block): block is { type: 'text'; text: string } =>
+      typeof block === 'object' && block !== null && (block as { type?: unknown }).type === 'text')
+    .map(block => block.text)
+    .join('\n')
 }
 
 /** The callId of a tool/result event (block-carried, defensive). */
@@ -252,6 +295,8 @@ export function startLiveRender(deps: LiveRenderDeps): {
       toolNames: new Map<string, string>(),
       toolTitles: new Map<string, string>(),
       lastTitle: undefined,
+      lastSeq: 0,
+      caughtUp: false,
     }
     runtimes.set(threadId, runtime)
     return runtime
@@ -403,18 +448,68 @@ export function startLiveRender(deps: LiveRenderDeps): {
     }
   }
 
+  /**
+   * User-input echo (replay-fence D6): mirror one human `user/message` into
+   * the thread as one quoted bot message. Filter matrix:
+   * - `source.kind !== 'user'` (plugin/system injections): never renders,
+   *   and none of its content is disclosed.
+   * - Discord-originated input (`source.rpcId` = `discord:<messageId>`):
+   *   already the user's own message in the thread — echoes only during a
+   *   fresh runtime's initial catch-up (resume into a new thread); live
+   *   frames and post-catch-up snapshots skip it.
+   */
+  function echoUserInput(
+    threadId: string,
+    runtime: ThreadRuntime,
+    data: Record<string, unknown>,
+    event: { carrier?: 'snapshot' | 'live' },
+  ): void {
+    const copy = deps.userEchoCopy?.()
+    if (copy === undefined) return
+    const source = data['source']
+    if (typeof source !== 'object' || source === null) return
+    const { kind, rpcId } = source as { kind?: unknown; rpcId?: unknown }
+    if (kind !== 'user') return
+    const fromDiscord = typeof rpcId === 'string' && rpcId.startsWith('discord:')
+    if (fromDiscord && (event.carrier === 'live' || runtime.caughtUp)) return
+    const text = userTextParts(data['content'])
+    const body = text === ''
+      ? copy.nonText
+      : text.length <= USER_ECHO_MAX
+        ? text
+        : `${truncateText(text, USER_ECHO_MAX)} ${copy.truncated}`
+    const quoted = body.split('\n').map(line => `> ${line}`).join('\n')
+    const payload = buildOutboundMessage({ kind: 'user', content: `${copy.label}\n${quoted}` })
+    void deps.delivery.send({ channelId: threadId, content: payload.content }).then(sent => {
+      if (sent.outcome !== 'completed') {
+        deps.log?.('discord_live_user_echo_failed', { threadId, outcome: sent.outcome })
+      }
+    }).catch((cause: unknown) => {
+      deps.log?.('discord_live_user_echo_threw', { threadId, cause: String(cause) })
+    })
+  }
+
   function handleSessionEvent(
     sessionId: string,
     threadId: string,
     runtime: ThreadRuntime,
-    event: { type: string; data: Record<string, unknown> },
+    event: { type: string; data: Record<string, unknown>; seq?: number; carrier?: 'snapshot' | 'live' },
     frameView: unknown,
   ): void {
     const data = event.data
     if (TRACE) trace('handleSessionEvent', event.type, 'keys:', Object.keys(data).join(','))
+    // Watermark bookkeeping BEFORE any branch (replay-fence D5): a record
+    // that falls through the switch is still consumed — the persisted
+    // watermark must never claim less than what was delivered.
+    if (typeof event.seq === 'number' && event.seq > runtime.lastSeq) runtime.lastSeq = event.seq
+    if (event.carrier === 'live') runtime.caughtUp = true
     const turnId = typeof data['turn'] === 'number' ? String(data['turn']) : undefined
     const stepId = typeof data['step'] === 'number' ? String(data['step']) : undefined
     switch (event.type) {
+      case 'user/message': {
+        echoUserInput(threadId, runtime, data, event)
+        return
+      }
       case 'turn/start': {
         if (typeof turnId !== 'string') return
         beginTurn(threadId, runtime, turnId)
@@ -581,7 +676,10 @@ export function startLiveRender(deps: LiveRenderDeps): {
             deps.log?.('discord_live_activity_delete_threw', { threadId, cause: String(cause) })
           })
         })
-        deps.onTurnEnded?.(sessionId)
+        // Watermark persist rides the same boundary (replay-fence D5): the
+        // consumed high-water seq at turn end becomes the durable floor the
+        // next process's catch-up seeds from.
+        deps.onTurnEnded?.(sessionId, { threadId, renderedSeq: runtime.lastSeq })
         return
       }
       default:
@@ -673,7 +771,14 @@ export function startLiveRender(deps: LiveRenderDeps): {
       trace('drop: session/event without event wrapper', JSON.stringify(frame).slice(0, 200))
       return
     }
-    handleSessionEvent(sessionId, threadId, runtimeFor(threadId), { type: eventWrapper.type, data: eventWrapper.data ?? {} }, frame['view'])
+    const frameSeq = frame['seq']
+    const frameCarrier = frame['carrier']
+    handleSessionEvent(sessionId, threadId, runtimeFor(threadId), {
+      type: eventWrapper.type,
+      data: eventWrapper.data ?? {},
+      ...(typeof frameSeq === 'number' ? { seq: frameSeq } : {}),
+      ...(frameCarrier === 'snapshot' || frameCarrier === 'live' ? { carrier: frameCarrier } : {}),
+    }, frame['view'])
   }
 
   async function runLoop(): Promise<void> {

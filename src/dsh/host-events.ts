@@ -27,6 +27,19 @@ export interface HostSessionFollowFace {
   control(signal: AbortSignal): AsyncIterable<unknown>
 }
 
+/**
+ * Durable catch-up seeding for one tracked session (replay-fence D2):
+ * `floor` raises the in-memory watermark so snapshot records the thread
+ * already rendered are dropped before they reach the renderer;
+ * `suppressOpeningSnapshot` swallows the FIRST opening snapshot whole
+ * (watermark advances, nothing delivers) — the one-time migration for
+ * bindings that predate the persisted watermark.
+ */
+export interface TrackSeedOptions {
+  floor?: number
+  suppressOpeningSnapshot?: boolean
+}
+
 export interface HostEventRouterOptions {
   log?: (event: string, detail?: unknown) => void
 }
@@ -92,6 +105,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+/**
+ * Extract one journal record's seq through both envelope shapes (double
+ * `{type:'event', event:{seq}}` and flat `{seq}`); undefined when absent.
+ */
+function journalSeq(record: unknown): number | undefined {
+  if (!isRecord(record)) return undefined
+  const inner = isRecord(record['event']) ? record['event'] : record
+  const seq = inner['seq']
+  return typeof seq === 'number' ? seq : undefined
+}
+
 /** Defensive text extraction from a queued message's JSON content parts. */
 function queueItemSummary(content: unknown): string {
   if (!Array.isArray(content)) return ''
@@ -113,13 +137,15 @@ export function createHostEventRouter(
   services: HostSessionFollowFace,
   options: HostEventRouterOptions = {},
 ): {
-  track(sessionId: string): void
+  track(sessionId: string, seed?: TrackSeedOptions): void
   stream(signal: AbortSignal): AsyncIterable<unknown>
 } {
   const log = options.log
   const tracked = new Map<string, AbortController>()
   /** Last delivered durable seq per session: the replay-dedupe watermark. */
   const watermark = new Map<string, number>()
+  /** Sessions whose NEXT opening snapshot is swallowed whole (legacy bindings). */
+  const suppressOnce = new Set<string>()
   let consumer: FrameQueue | undefined
   let rootSignal: AbortSignal | undefined
 
@@ -158,6 +184,23 @@ export function createHostEventRouter(
                 ? [raw]
                 : undefined
             if (batch === undefined) continue
+            // Legacy-binding migration (D2): swallow the first opening
+            // snapshot whole — the thread already rendered that history in
+            // a pre-feature process; re-delivering it would replay the very
+            // duplication this fence exists to stop. The watermark still
+            // advances, so later live frames deliver untouched.
+            if (frame['type'] === 'snapshot' && suppressOnce.delete(sessionId)) {
+              let maxSeq = watermark.get(sessionId) ?? 0
+              for (const record of batch) {
+                const seq = journalSeq(record)
+                if (seq !== undefined && seq > maxSeq) maxSeq = seq
+              }
+              if (maxSeq > 0) watermark.set(sessionId, maxSeq)
+              if (process.env['DSH_DISCORD_TRACE'] === '1') {
+                console.error(`[dsh-discord:trace] snapshot-suppressed session=${sessionId.slice(0, 8)} watermark=${String(maxSeq)}`)
+              }
+              continue
+            }
             const through = watermark.get(sessionId) ?? 0
             let delivered = through
             for (const record of batch) {
@@ -184,6 +227,11 @@ export function createHostEventRouter(
                 type: 'session/event',
                 sessionId,
                 event: { type: inner.type, data: (typeof inner.data === 'object' && inner.data !== null ? inner.data : {}) as Record<string, unknown> },
+                // Carrier + seq (replay-fence D4): the renderer's watermark
+                // tracking and catch-up/live distinction ride these; pure
+                // additions every existing consumer can ignore.
+                carrier: frame['type'] === 'snapshot' ? 'snapshot' : 'live',
+                ...(typeof inner.seq === 'number' ? { seq: inner.seq } : {}),
               })
             }
             if (delivered > through) watermark.set(sessionId, delivered)
@@ -260,9 +308,17 @@ export function createHostEventRouter(
   }
 
   return {
-    track(sessionId) {
+    track(sessionId, seed) {
       if (sessionId === '' || tracked.has(sessionId)) return
       if (rootSignal?.aborted) return
+      if (seed !== undefined) {
+        // Seed BEFORE the loop opens: the opening snapshot races the very
+        // first watermark read.
+        if (seed.floor !== undefined && seed.floor > (watermark.get(sessionId) ?? 0)) {
+          watermark.set(sessionId, seed.floor)
+        }
+        if (seed.suppressOpeningSnapshot === true) suppressOnce.add(sessionId)
+      }
       startLoop(sessionId)
     },
     stream(signal) {

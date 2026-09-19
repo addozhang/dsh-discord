@@ -34,7 +34,7 @@ import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
 import { planBindingReconciliation } from './features/reconcile-bindings.js'
 import { guildKeysToForget, sweepExpired } from './state/retention.js'
-import { createHostEventRouter } from './dsh/host-events.js'
+import { createHostEventRouter, type TrackSeedOptions } from './dsh/host-events.js'
 import { listSessionIds, listSessionSummaries } from './dsh/host-face.js'
 import { installAskServicePatches } from './dsh/host-asks.js'
 import { createBindingStore } from './state/bindings.js'
@@ -209,6 +209,62 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     const threadBindingStore = createBindingStore<ThreadBinding>(threadTable)
     const intents = createIntentStore(intentTable)
     const turnTracker = createTurnTracker()
+    // Replay-fence (replay-fence-and-user-input D1/D2): the process start
+    // mark separates "binding created in-process" (fresh thread, render full
+    // history) from "binding from an earlier process" (its thread already
+    // shows that history; catch-up must not re-deliver it).
+    const processStartMs = Date.now()
+    /**
+     * The full reverse lookup the watermark paths need: binding key, parsed
+     * scope, and record for one session's owning thread (bindings are 1:1).
+     */
+    const threadBindingForSession = (sessionId: string): { key: string; scope: { threadId: string }; record: ThreadBinding } | undefined => {
+      for (const [key, record] of threadTable.entries()) {
+        if (record.sessionId !== sessionId) continue
+        const scope = parseThreadBindingKey(key)
+        if (scope !== undefined) return { key, scope, record }
+      }
+      return undefined
+    }
+    /**
+     * Durable catch-up seeding (D2): a persisted `renderedSeq` floors the
+     * watermark; a pre-feature binding (no watermark, created before this
+     * process) suppresses its first opening snapshot whole; a binding born
+     * in-process (resume adopt) seeds nothing so the fresh thread renders
+     * the session's full history.
+     */
+    const trackSeedFor = (sessionId: string): TrackSeedOptions | undefined => {
+      const found = threadBindingForSession(sessionId)
+      if (found === undefined) return undefined
+      const { record } = found
+      if (record.renderedSeq !== undefined) return { floor: record.renderedSeq }
+      if (record.createdAtMs < processStartMs) return { suppressOpeningSnapshot: true }
+      return undefined
+    }
+    /**
+     * Advance the owning thread's durable render watermark (D5): one
+     * revision-fenced write per turn boundary. A lost fence race is
+     * abandoned and retried at the next boundary — the watermark is a
+     * monotonic upper bound, so one lost write only widens the crash
+     * window's bounded re-render suffix.
+     */
+    const persistRenderedSeq = (sessionId: string, renderedSeq: number): Promise<void> => {
+      const found = threadBindingForSession(sessionId)
+      if (found === undefined) return Promise.resolve()
+      const { key, record } = found
+      if (renderedSeq <= (record.renderedSeq ?? 0)) return Promise.resolve()
+      return threadBindingStore.bind(key, {
+        sessionId: record.sessionId,
+        workspaceId: record.workspaceId,
+        createdBy: record.createdBy,
+        createdAtMs: record.createdAtMs,
+        renderedSeq,
+      }, { expectedRevision: record.revision }).then(outcome => {
+        if (!outcome.ok) rpcLog('discord_render_watermark_skipped', { sessionId, error: outcome.error })
+      }).catch((cause: unknown) => {
+        rpcLog('discord_render_watermark_threw', { sessionId, cause: String(cause) })
+      })
+    }
     // Approvals: process-local backing (minutes-lived; DSH replays pending
     // asks on mux reopen). turnActors maps submitted request ids to their
     // Discord authors — the ownership fact for approval/question clicks.
@@ -341,7 +397,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           },
           { log: rpcLog, rpcId: request.requestId },
         )
-        if (submitted.outcome === 'accepted') hostEvents.track(request.sessionId)
+        if (submitted.outcome === 'accepted') hostEvents.track(request.sessionId, trackSeedFor(request.sessionId))
         return submitted
       },
     }
@@ -719,14 +775,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     ctx.effect(() => () => { clearInterval(expiryTimer) }, 'discord interaction expiry sweep')
 
 
-    const threadForSession = (sessionId: string): string | undefined => {
-      for (const [key, record] of threadTable.entries()) {
-        if (record.sessionId !== sessionId) continue
-        const scope = parseThreadBindingKey(key)
-        if (scope !== undefined) return scope.threadId
-      }
-      return undefined
-    }
+    const threadForSession = (sessionId: string): string | undefined =>
+      threadBindingForSession(sessionId)?.scope.threadId
 
     // DSH ask answerers (0.1.6 composed-approval model): the waterfalls
     // dispatch on the BASE TREE's event bus (the profile composes one event
@@ -811,7 +861,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         cancel: sessionId => cancelSessionViaProxy(dsh, { sessionId }, { log: rpcLog }),
         steer: async (sessionId, prompt) => {
           const steered = await steerSession(dsh, { sessionId, prompt }, { log: rpcLog })
-          if (steered.outcome === 'accepted') hostEvents.track(sessionId)
+          if (steered.outcome === 'accepted') hostEvents.track(sessionId, trackSeedFor(sessionId))
           return steered
         },
         removeQueueItem: (sessionId, itemId) => removeQueueItemViaProxy(dsh, { sessionId, itemId }, { log: rpcLog }),
@@ -1102,11 +1152,17 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         approvalWait: copy.progressApprovalWait,
         turnSummary: copy.progressTurnSummary,
       }),
+      userEchoCopy: () => ({
+        label: copy.userInputLabel,
+        nonText: copy.userInputNonText,
+        truncated: copy.userInputTruncated,
+      }),
       onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
-      onTurnEnded: (sessionId) => {
+      onTurnEnded: (sessionId, info) => {
         const turn = turnTracker.active(sessionId)
         if (turn !== undefined) turnTracker.complete(turn.requestId)
         rpcLog('discord_turn_ended', { sessionId, hadActiveTurn: turn !== undefined })
+        if (info !== undefined) void persistRenderedSeq(sessionId, info.renderedSeq)
       },
     })
     // The ask patches steer the same renderer's progress line (3.2 wiring).
