@@ -23,6 +23,7 @@
 - **审批与提问** — DSH 的 ask 渲染为按钮、下拉菜单与自由文本弹窗。所有权强制校验（提问者——或后续 Turn 的线程属主——才能点击），超时清扫 fail-closed，结算后的控件原地置灰。
 - **会话控制** — `/steer`、`/stop`、`/queue list|remove` 带运行所有权校验；`/project bind|list|info` 与 `/session resume` 管理 Guild↔工作区绑定与历史会话；`/guild forget` 供操作员清理。
 - **模型切换** — `/model show` 读取会话的实时模型目录；`/model select` 走交互式 provider → 模型 → 推理强度级联，也可直接填写 `provider/model` 应用。默认对所有授权成员开放，可收紧为仅 Host 操作员。
+- **权限切换** — `/permission show` / `set` 读写会话权限预设（沙箱 + 审批捆绑档位），走宿主自己的 `/permission` 命令路径，journal 自动记审计；`danger-full-access` 需按钮二次确认。
 - **设置卡片，开箱双语** — Token 引导与连接/断开（存入 Host 凭据服务，绝不写入设置或日志）、服务器白名单、自动归档与语言。所有 Discord 可见文案提供中英双语；Bot 默认跟随 DSH 语言偏好，也可从卡片固定。
 - **安全设计** — 显式服务器白名单内的 deny-first 授权。提及抑制双保险：每条请求携带 `allowed_mentions`，外加 wire body 的字节级提及中和。DSH 提交至多一次，并做保留 unknown 的对账——结果不明的投递绝不盲目重发。绑定重启后持久；READY 扫描会重建被删除的 category/控制频道，而把被删除的工作区频道视为用户意图（解除映射，workspace 保持可重新绑定）。
 
@@ -70,6 +71,7 @@ dsh plugin --profile web rm @addozhang/dsh-discord   # 卸载；先执行 /guild
 | `deniedUserIds` / `deniedRoleIds` | `[]` | 拒绝名单；优先级高于上述一切授权。 |
 | `hostOperatorUserIds` | `[]` | Host 操作员（`/guild forget`；启用 `modelSelectOperatorOnly` 后也包括 `/model select`）。 |
 | `modelSelectOperatorOnly` | `false` | 将 `/model select` 限制为 Host 操作员（仅 `settings.yaml`，卡片不展示）。默认 `false`：任何授权成员均可切换，且切换仍会更新 Host 默认。 |
+| `permissionSelectOperatorOnly` | `true` | 将 `/permission set` 限制为 Host 操作员（仅 `settings.yaml`）。默认 `true`——比 `/model` 更严，因为「完全权限」会同时解除沙箱与审批；可放开为任何授权成员可切换。 |
 | `defaultVerbosity` | `essential-tools` | 工具活动行粒度：`text-only`、`essential-tools`、`full-tools`。 |
 | `language` | `auto` | Bot 可见文案语言：`auto` 跟随 DSH 语言偏好（非中文渲染英文），或固定 `zh`/`en`。 |
 | `streamUpdateIntervalMs` | `800` | 流式编辑合并间隔（250–10000）。 |
@@ -110,11 +112,12 @@ dsh-discord:
 | `/model show` / `select` | 会话线程 | 查看实时模型目录；`select` 不带参数时走交互式 provider → 模型 → 推理强度级联（默认对所有授权成员开放） |
 | `/session resume` | 项目频道 | 自动补全选择本工作区的历史会话（显示标题与时间，最新优先），恢复为当前频道的新线程；空白、已挂线程、subagent、已归档的会话不会出现。线程会渲染会话历史——回答与工具摘要之外，用户输入以引用行回显（插件/系统注入永不回显）。适配器重启后线程只补齐错过部分：持久化的渲染水位抑制已投递过的历史，已绑定会话在重连时自动重订阅，因此从 web UI 发起的回合也会落进对应线程 |
 | `/guild forget` | 任意频道 | 仅操作员：移除适配器记录 |
+| `/permission show` / `set` | 会话线程 | 查看或切换会话权限预设（仅可查看 / 工作区内修改 / 完全权限——沙箱与审批的捆绑档位，目录取自宿主实时配置）。`set danger-full-access` 先要求按钮确认；预设自动补全；默认仅 Host 操作员可切换（`permissionSelectOperatorOnly` 可放开）。任何入口（含 web UI）的切换都会在线程渲染一行系统消息 |
 
 
 ## 设计说明
 
-- 适配器为 function/namespace 插件（`inject: ['sessionController', 'workspaceController', 'sessionQuery', 'webServer', 'credentials', 'settings', 'storageDomain', 'connection']`），将 Discord Gateway、命令面、流式渲染器与设置卡片挂载到 DSH web profile。
+- 适配器为 function/namespace 插件（`inject: ['sessionController', 'workspaceController', 'sessionQuery', 'webServer', 'credentials', 'settings', 'storageDomain', 'connection', 'commands', 'permissionPresets']`），将 Discord Gateway、命令面、流式渲染器与设置卡片挂载到 DSH web profile。
 - 设置卡片是首次使用的引导面：Token 输入通过插件管理通道写入凭据服务的 `DSH_DISCORD_BOT_TOKEN` 引用，然后触发启动链。断开连接保留凭据；留空重连直接使用已存 Token。
 - 发布工作流通过 npm trusted publishing (OIDC) 认证——任何地方都不保存发布凭证。
 - 适配器启动链带代际计数，Connect/Disconnect 与初始启动竞争时只会产生一个 Gateway。

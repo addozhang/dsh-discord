@@ -94,7 +94,7 @@ describe('cordis-owned disposal', () => {
     const effects: { execute: () => unknown; label: string | undefined }[] = []
     const ctx = {
       get: (serviceName: string) => ({
-        sessionController: { prompt: () => {}, create: () => {}, list: () => {}, cancel: () => {}, updateQueue: () => {}, selectModel: () => {}, modelCatalog: () => {}, follow: () => {}, control: () => {} }, workspaceController: { follow: () => {} }, sessionQuery: { observeSession: () => {} }, webServer: {},
+        sessionController: { prompt: () => {}, create: () => {}, list: () => {}, cancel: () => {}, updateQueue: () => {}, selectModel: () => {}, modelCatalog: () => {}, follow: () => {}, control: () => {}, resolveAgent: () => {} }, workspaceController: { follow: () => {} }, sessionQuery: { observeSession: () => {} }, webServer: {}, commands: { execute: () => {} }, permissionPresets: { catalog: () => {} },
         credentials: { resolve: () => {}, describe: () => {}, set: () => {}, unset: () => {} },
         settings: { installSection: () => {} },
         storageDomain: { open: () => {} },

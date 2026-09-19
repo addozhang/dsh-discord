@@ -20,6 +20,14 @@ import { planStop } from './stop-control.js'
 import type { TurnTracker } from './turn-ownership.js'
 import { handleApprovalClick, type ApprovalClickOutcome, type DshApprovalRespondPort } from './approval-routing.js'
 import { applyModelSelection, type DshModelPort, type ModelApplyResult } from './model-control.js'
+import {
+  applyPermissionPreset,
+  requiresConfirmation,
+  showPermission,
+  type DshPermissionPort,
+  type PermissionApplyResult,
+} from './permission-control.js'
+import { permissionPresetLabel } from '../i18n.js'
 import type { QuestionInteractionOutcome } from './question-routing.js'
 import type { ApprovalStore } from './approval-store.js'
 import type { ChannelBinding } from '../state/records.js'
@@ -120,6 +128,13 @@ export interface InteractionRouterDeps {
    * deployments flip this so any authorized member can switch (16.42).
    */
   modelSelectOperatorOnly: () => boolean
+  /**
+   * Whether /permission set stays Host-operator-only (default true — the
+   * danger-full-access preset strips sandbox AND approval; 16.60).
+   */
+  permissionSelectOperatorOnly: () => boolean
+  /** The live permission-preset catalog + guarded switch (/permission surface). */
+  permission: DshPermissionPort
   log: (event: string, detail?: unknown) => void
   warn: (event: string, detail?: unknown) => void
 }
@@ -156,6 +171,17 @@ function renderModelApply(copy: CopyTable, result: ModelApplyResult): string {
   }
 }
 
+/** The ephemeral outcome line for a /permission switch attempt. */
+function renderPermissionApply(copy: CopyTable, result: PermissionApplyResult): string {
+  switch (result.outcome) {
+    case 'applied': return copy.permissionApplied(permissionPresetLabel(result.preset, copy))
+    case 'rejected': return copy.permissionRejected(result.reason)
+    case 'unknown': return copy.permissionUnknown
+    case 'refused':
+      return result.reason === 'not-host-operator' ? copy.permissionSelectOperatorOnly : copy.permissionNotInCatalog
+  }
+}
+
 export function createInteractionRouter(deps: InteractionRouterDeps): {
   route(event: NormalizedInteraction, interactionToken?: string): Promise<void>
 } {
@@ -171,7 +197,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
   }
 
   async function routeAutocomplete(event: RouterEvent, interactionToken: string): Promise<void> {
-    if (event.commandName !== 'project' && event.commandName !== 'session') return
+    if (event.commandName !== 'project' && event.commandName !== 'session' && event.commandName !== 'permission') return
     // Autocomplete has no deferred-ack form: whatever happens below, Discord
     // must receive exactly one type-8 answer, even if only empty choices.
     try {
@@ -213,6 +239,25 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           // Malformed catalog rows must degrade to empty choices, never to
           // an unanswered interaction.
           deps.warn('discord_autocomplete_catalog_failed', String(cause))
+        }
+      } else if (decision.allowed && event.commandName === 'permission') {
+        // /permission set: live catalog entries, labeled in the current
+        // language; the raw preset key is the value (custom deployments
+        // define their own tables, so nothing is hardcoded).
+        try {
+          const catalog = await deps.permission.catalog()
+          if (catalog.outcome === 'completed') {
+            const lowered = query.trim().toLowerCase()
+            choices.push(...catalog.entries
+              .filter(entry => entry.value !== lowered)
+              .filter(entry => lowered === ''
+                || entry.value.toLowerCase().includes(lowered)
+                || permissionPresetLabel(entry.value, deps.copy).toLowerCase().includes(lowered))
+              .slice(0, 25)
+              .map(entry => ({ name: permissionPresetLabel(entry.value, deps.copy), value: entry.value })))
+          }
+        } catch (cause) {
+          deps.warn('discord_autocomplete_permission_failed', String(cause))
         }
       }
       const rest = await deps.rest()
@@ -614,6 +659,75 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         await followUp(content)
         return
       }
+      if (event.commandName === 'permission') {
+        // /permission show|set (16.59–16.61): the bound Session's preset —
+        // the Host bundle of sandbox mode + approval policy. The switch
+        // rides the Host's own /permission command path.
+        const options = event.data['options'] as Array<{ name: string; options?: Array<{ name: string; value?: string }> }> | undefined
+        const subcommand = Array.isArray(options) ? options[0] : undefined
+        const subName = subcommand?.name
+        const sessionId = deps.sessionForThread(event.guildId, event.channelId)
+        if (sessionId === undefined) {
+          await followUp(deps.copy.permissionNeedsThread)
+          return
+        }
+        if (subName === 'show') {
+          const view = await showPermission(deps.permission, { sessionId })
+          if (view.outcome === 'failed') {
+            await followUp(deps.copy.permissionShowUnavailable)
+            return
+          }
+          const current = view.current === undefined
+            ? deps.copy.permissionShowUnknownCurrent
+            : permissionPresetLabel(view.current, deps.copy)
+          const entries = view.entries.map(preset => permissionPresetLabel(preset, deps.copy)).join(' · ')
+          await followUp(deps.copy.permissionShowHeader(current, entries))
+          return
+        }
+        if (subName === 'set') {
+          // Host-operator authority by default — danger-full-access strips
+          // sandbox AND approval at once (16.60); deployments may loosen.
+          const requireOperator = deps.permissionSelectOperatorOnly()
+          const decision = authorize(event)
+          if (!decision.allowed || (requireOperator && decision.level !== 'host-operator')) {
+            await followUp(deps.copy.permissionSelectOperatorOnly)
+            return
+          }
+          const wireOptions = Array.isArray(subcommand?.options) ? subcommand.options : []
+          const typedPreset = wireOptions.find(option => option.name === 'preset')?.value
+          if (typeof typedPreset !== 'string' || typedPreset === '') {
+            await followUp(deps.copy.permissionNotInCatalog)
+            return
+          }
+          if (requiresConfirmation(typedPreset)) {
+            // The dangerous preset(s) go through an explicit risk
+            // confirmation — the web UI shows the same gate (16.61).
+            const expiresAtMs = Date.now() + 15 * 60 * 1000
+            const base = { kind: 'permission-confirm', sessionId, preset: typedPreset, guildId: event.guildId, actorId: event.actorId, expiresAtMs }
+            const confirmId = deps.registry.register({ ...base, action: 'confirm' })
+            const cancelId = deps.registry.register({ ...base, action: 'cancel' })
+            const label = permissionPresetLabel(typedPreset, deps.copy)
+            await followUp(`${deps.copy.permissionConfirmHeader(label)}\n${deps.copy.permissionConfirmBody}`, [{
+              type: 1,
+              components: [
+                { type: 2, style: 3, label: deps.copy.permissionConfirmButton, custom_id: confirmId },
+                { type: 2, style: 4, label: deps.copy.permissionConfirmCancelButton, custom_id: cancelId },
+              ],
+            }])
+            return
+          }
+          const result = await applyPermissionPreset(deps.permission, {
+            decision,
+            sessionId,
+            preset: typedPreset,
+            requireHostOperator: requireOperator,
+          })
+          await followUp(renderPermissionApply(deps.copy, result))
+          return
+        }
+        await followUp(deps.copy.unknownSubcommand)
+        return
+      }
       if (event.commandName === 'session') {
         // /session resume: cold-adopt an existing DSH session into a new
         // thread of the bound project channel (16.44). /session new is
@@ -757,6 +871,52 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       flags: OUTBOUND_EPHEMERAL_FLAGS,
     })
     if (posted.outcome !== 'completed') deps.log('discord_followup_failed', posted.outcome)
+  }
+
+  /**
+   * The danger-full-access risk confirmation (16.61): ack, then re-authorize
+   * the clicker (deny-first — the initiating command's grant proves nothing
+   * at click time), settle as confirm-then-switch or cancel.
+   */
+  async function routePermissionConfirmComponent(event: RouterEvent, interactionToken: string): Promise<void> {
+    const customId = event.data['custom_id']
+    if (typeof customId !== 'string') return
+    const resolved = deps.registry.resolve(customId, Date.now())
+    const context = resolved.found ? resolved.context : undefined
+    if (context?.['kind'] !== 'permission-confirm') return
+    const rest = await deps.rest()
+    if (rest === undefined) { deps.log('discord_ack_failed', 'missing-token'); return }
+    const clicked = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, { type: 6 })
+    if (clicked.outcome !== 'completed') { deps.log('discord_ack_failed', clicked.outcome); return }
+    const owner = context['actorId']
+    const sessionId = context['sessionId']
+    const preset = context['preset']
+    if (owner !== event.actorId || typeof sessionId !== 'string' || typeof preset !== 'string') {
+      const denied = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, { content: deps.copy.confirmNotOwner, flags: OUTBOUND_EPHEMERAL_FLAGS })
+      if (denied.outcome !== 'completed') deps.log('discord_followup_failed', denied.outcome)
+      return
+    }
+    const respond = async (content: string): Promise<void> => {
+      const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, { content, flags: OUTBOUND_EPHEMERAL_FLAGS })
+      if (posted.outcome !== 'completed') deps.log('discord_followup_failed', posted.outcome)
+    }
+    if (context['action'] !== 'confirm') {
+      await respond(deps.copy.permissionCancelled)
+      return
+    }
+    // Re-run the full authorization + catalog validation at click time; the
+    // settings flag may have flipped since the prompt was posted.
+    const decision = authorize(event)
+    const result = await applyPermissionPreset(deps.permission, {
+      decision,
+      sessionId,
+      preset,
+      requireHostOperator: deps.permissionSelectOperatorOnly(),
+    })
+    deps.log('discord_permission_confirm', { outcome: result.outcome, preset })
+    await respond(result.outcome === 'applied'
+      ? `${deps.copy.permissionConfirmed(permissionPresetLabel(preset, deps.copy))}\n${renderPermissionApply(deps.copy, result)}`
+      : renderPermissionApply(deps.copy, result))
   }
 
   /** One cascade stage: ack, re-authorize, then advance or apply (16.35). */
@@ -988,6 +1148,10 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       }
       if (bindContext?.['kind'] === 'model') {
         await routeModelComponent(event, interactionToken)
+        return
+      }
+      if (bindContext?.['kind'] === 'permission-confirm') {
+        await routePermissionConfirmComponent(event, interactionToken)
         return
       }
       // A not-found custom_id means the control was never registered or has

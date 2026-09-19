@@ -77,6 +77,12 @@ export const MILESTONE_ONE_COMMANDS: readonly AdapterCommand[] = [
   grouped('guild', 'Guild-scoped adapter operations', [
     { name: 'forget' },
   ]),
+  grouped('permission', 'Show or switch the session permission preset', [
+    { name: 'show' },
+    // The preset autocompletes from the live Host catalog (16.61);
+    // danger-full-access goes through a button confirmation first.
+    { name: 'set', options: [{ name: 'preset', required: true, autocomplete: true }] },
+  ]),
 ]
 
 const DISCORD_APPLICATION_COMMAND = 1

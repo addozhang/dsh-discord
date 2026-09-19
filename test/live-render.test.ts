@@ -91,6 +91,8 @@ async function drive(frames: LiveFrame[], options: {
   progressCopy?: () => { thinking: string; thinkingStep: (step: number) => string; writing: string; approvalWait: string; turnSummary: (total: number, failed: number, breakdown: string) => string }
   /** User-echo copy provider (production always supplies one). */
   userEchoCopy?: () => { label: string; nonText: string; truncated: string }
+  /** Permission system-line copy provider (16.62). */
+  permissionLineCopy?: () => { line: (preset: string) => string }
 }): Promise<Array<{ kind: 'send' | 'edit' | 'typing' | 'rename' | 'delete'; channelId: string; messageId?: string; content?: string }>> {
   const { delivery, calls } = options.delivery !== undefined
     ? { delivery: options.delivery, calls: [] }
@@ -117,6 +119,7 @@ async function drive(frames: LiveFrame[], options: {
     ...(options.threadName === undefined ? {} : { threadName: options.threadName }),
     ...(options.progressCopy === undefined ? {} : { progressCopy: options.progressCopy }),
     ...(options.userEchoCopy === undefined ? {} : { userEchoCopy: options.userEchoCopy }),
+    ...(options.permissionLineCopy === undefined ? {} : { permissionLineCopy: options.permissionLineCopy }),
   })
   await gate
   await new Promise(resolve => { setTimeout(resolve, 10) })
@@ -795,5 +798,43 @@ describe('live render: user-input echo (replay-fence-and-user-input)', () => {
     })
 
     expect(endings).toEqual([{ sessionId: 'sess-1', info: { threadId: 'thread-1', renderedSeq: 10 } }])
+  })
+})
+
+describe('live render: permission preset system line (16.62)', () => {
+  const copy = () => ({ line: (preset: string) => `🔧 权限模式 → ${preset}` })
+
+  it('renders one system line per durable permission/preset event', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'permission/preset', { preset: 'danger-full-access' }),
+    ], { threadForSession: () => 'thread-1', permissionLineCopy: copy })
+
+    const sends = calls.filter(call => call.kind === 'send')
+    expect(sends).toHaveLength(1)
+    expect(sends[0]?.content).toBe('🔧 权限模式 → danger-full-access')
+  })
+
+  it('renders on the snapshot replay path too (restart catch-up)', async () => {
+    const calls = await drive([
+      { type: 'session/event', sessionId: 'sess-1', event: { type: 'permission/preset', data: { preset: 'read-only' } }, seq: 7, carrier: 'snapshot' },
+    ], { threadForSession: () => 'thread-1', permissionLineCopy: copy })
+
+    expect(calls.filter(call => call.kind === 'send')).toHaveLength(1)
+  })
+
+  it('never renders when no copy provider is wired (pre-feature posture)', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'permission/preset', { preset: 'read-only' }),
+    ], { threadForSession: () => 'thread-1' })
+
+    expect(calls.filter(call => call.kind === 'send')).toHaveLength(0)
+  })
+
+  it('skips malformed payloads (no preset string) without sending', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'permission/preset', {}),
+    ], { threadForSession: () => 'thread-1', permissionLineCopy: copy })
+
+    expect(calls.filter(call => call.kind === 'send')).toHaveLength(0)
   })
 })

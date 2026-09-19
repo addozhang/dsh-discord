@@ -22,6 +22,9 @@ describe('Discord settings', () => {
       hostOperatorUserIds: [],
       defaultVerbosity: 'essential-tools',
       modelSelectOperatorOnly: false,
+      // Stricter than /model by design (16.60): danger-full-access disables
+      // sandbox AND approval, so the permission switch gates operators only.
+      permissionSelectOperatorOnly: true,
     })
   })
 
@@ -60,5 +63,11 @@ describe('Discord settings', () => {
     expect(resolve({ language: 'zh' }).language).toBe('zh')
     expect(resolve({ language: 'en' }).language).toBe('en')
     expect(() => { resolve({ language: 'fr' }) }).toThrow()
+  })
+
+  it('defaults the permission switch to Host operators and admits the loosened flip', () => {
+    const resolve = DiscordSettingsSchema as unknown as (input: unknown) => DiscordSettings
+    expect(resolve({}).permissionSelectOperatorOnly).toBe(true)
+    expect(resolve({ permissionSelectOperatorOnly: false }).permissionSelectOperatorOnly).toBe(false)
   })
 })

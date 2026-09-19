@@ -67,7 +67,7 @@ check_grep() {
 
 # ── 1. inject services (8) ─────────────────────────────────────────────────
 echo "── 1. Inject services ──"
-for svc in sessionController workspaceController sessionQuery webServer credentials settings connection; do
+for svc in sessionController workspaceController sessionQuery webServer credentials settings connection commands permissionPresets; do
   actual=$(check_grep "$DEEPSEEK_DIR" "super(ctx, \"$svc\"")
   check "service '$svc'" "FOUND" "$actual"
 done
@@ -82,7 +82,7 @@ if [[ ! -d "$SESSION_DIR" ]]; then
   SESSION_DIR=$(find "$DEEPSEEK_DIR" -maxdepth 1 -name "*session-controller" -type d | head -1)
 fi
 echo "── 2. sessionController methods ──"
-for m in prompt create cancel updateQueue selectModel modelCatalog follow control; do
+for m in prompt create cancel updateQueue selectModel modelCatalog follow control resolveAgent; do
   actual=$(check_grep "$SESSION_DIR" "$m(")
   check "method '$m'" "FOUND" "$actual"
 done
@@ -126,6 +126,22 @@ check "approval/request waterfall" "FOUND" "$actual"
 QS_DIR="$DEEPSEEK_DIR/dsh-user-questions"
 actual=$(check_grep "$QS_DIR" "async ask(")
 check "userQuestions.ask()" "FOUND" "$actual"
+echo ""
+
+# ── 4b. permission surface (/permission command path) ──────────────────────
+echo "── 4b. Permission surface ──"
+COMMANDS_DIR="$DEEPSEEK_DIR/dsh-commands"
+actual=$(check_grep "$COMMANDS_DIR" "execute(agent")
+check "commands.execute(agent, line, attachments, signal)" "FOUND" "$actual"
+PRESETS_DIR="$DEEPSEEK_DIR/dsh-permission-presets"
+actual=$(check_grep "$PRESETS_DIR" "catalog()")
+check "permissionPresets.catalog()" "FOUND" "$actual"
+actual=$(check_grep "$PRESETS_DIR" "currentValue")
+check "permissions projection view {currentValue}" "FOUND" "$actual"
+actual=$(check_grep "$PRESETS_DIR" 'name: "permission"')
+check "/permission command registration" "FOUND" "$actual"
+actual=$(check_grep "$PRESETS_DIR" "permission/preset")
+check "durable permission/preset event" "FOUND" "$actual"
 echo ""
 
 # ── 5. settings exports ─────────────────────────────────────────────────────

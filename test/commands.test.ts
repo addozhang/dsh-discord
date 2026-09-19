@@ -13,13 +13,14 @@ import { describe, expect, it } from 'vitest'
 import { MILESTONE_ONE_COMMANDS, buildCommandRegistrations } from '../src/discord/commands.js'
 
 describe('milestone one command set', () => {
-  it('declares exactly the seven live commands', () => {
+  it('declares exactly the eight live commands', () => {
     // Only routed commands are registered: `/preset`, `/skill`, and `/host`
     // are deregistered until the router wires them (task 16.32); `/session
     // new` is dropped (the @mention is the new-session path) and `/session
-    // resume` is wired with autocomplete (16.44).
+    // resume` is wired with autocomplete (16.44). `/permission` joins with
+    // its router branches in the same change (16.61).
     expect(MILESTONE_ONE_COMMANDS.map(command => command.name)).toEqual([
-      'project', 'queue', 'steer', 'stop', 'model', 'session', 'guild',
+      'project', 'queue', 'steer', 'stop', 'model', 'session', 'guild', 'permission',
     ])
   })
 
@@ -51,6 +52,11 @@ describe('milestone one command set', () => {
     expect(subcommands.get('session')).toEqual([
       // Typing filters live candidates by session title (autocomplete 16.44).
       ['resume', [['session', true]]],
+    ])
+    expect(subcommands.get('permission')).toEqual([
+      ['show', []],
+      // The preset autocompletes from the live Host catalog (16.61).
+      ['set', [['preset', true]]],
     ])
     // `/preset`, `/skill`, and `/host` are deregistered (task 16.32); their
     // control modules stay implemented and unit-tested for the wiring
@@ -91,6 +97,19 @@ describe('milestone one command set', () => {
     expect(bindOptions).toEqual([{
       type: 3,
       name: 'workspace',
+      description: expect.any(String) as unknown,
+      required: true,
+      autocomplete: true,
+    }])
+
+    // The /permission set preset option autocompletes live catalog entries.
+    const permission = payloads.find(payload => payload['name'] === 'permission') as Record<string, unknown>
+    const permissionOptions = permission['options'] as Array<Record<string, unknown>>
+    expect(permissionOptions.map(option => option['type'])).toEqual([1, 1])
+    const set = permissionOptions.find(option => option['name'] === 'set') as Record<string, unknown>
+    expect(set['options']).toEqual([{
+      type: 3,
+      name: 'preset',
       description: expect.any(String) as unknown,
       required: true,
       autocomplete: true,

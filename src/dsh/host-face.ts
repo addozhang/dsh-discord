@@ -21,6 +21,7 @@ import type { ProjectListPort } from '../features/project-list.js'
 import type { WorkspaceResolver } from '../features/project-bind.js'
 import { parseWorkspaceReference } from '../policy/disclosure.js'
 import type { DshModelPort } from '../features/model-control.js'
+import type { DshPermissionPort } from '../features/permission-control.js'
 
 /** The workspace rows the catalog port needs (subset of WorkspaceView). */
 export interface WorkspaceCatalogEntry {
@@ -70,6 +71,12 @@ export interface DshSessionControllerFace {
   }, signal: AbortSignal): AsyncIterable<unknown>
   /** Host-wide live state stream (queue/jobs/projection frames over one baseline). */
   control(signal: AbortSignal): AsyncIterable<unknown>
+  /**
+   * Resolve or resume one Session's live Agent (0.1.6 probe-verified shape
+   * `{agent} | {error}`); the agent object stays opaque — it exists only to
+   * feed `commands.execute` for the Host-native `/permission` command path.
+   */
+  resolveAgent(sessionId: string): Promise<{ agent?: unknown; error?: { code?: string; message?: string } }>
 }
 
 /**
@@ -94,6 +101,29 @@ export interface DshSessionQueryFace {
   } & Partial<AsyncDisposable>>
 }
 
+/**
+ * Narrow slice of the `commands` cordis service (dsh-commands). `execute`
+ * runs one registered slash command against an exact agent WITHOUT sending
+ * it to the model, logging the command/run + command/done journal pair; the
+ * signal is owned by the caller. Signatures 2026-09-19 real-host verified.
+ */
+export interface DshCommandsFace {
+  execute(
+    agent: unknown,
+    line: string,
+    submittedAttachments: readonly unknown[],
+    signal: AbortSignal,
+  ): Promise<{ commandId: string; result?: { kind?: unknown; text?: unknown } } | undefined>
+}
+
+/**
+ * Narrow slice of the `permissionPresets` cordis service
+ * (dsh-permission-presets): the deployment's configured preset table.
+ */
+export interface DshPermissionPresetsFace {
+  catalog(): Promise<{ options?: unknown }>
+}
+
 /** The host-generation model catalog (`session/modelCatalog`, host-wide). */
 export interface ModelCatalogWireShape {
   default: ModelSelectionShape
@@ -107,6 +137,8 @@ export interface DshHostFace {
   session: DshSessionControllerFace
   workspace: DshWorkspaceControllerFace
   sessionQuery: DshSessionQueryFace
+  commands: DshCommandsFace
+  permissionPresets: DshPermissionPresetsFace
 }
 
 /**
@@ -116,7 +148,7 @@ export interface DshHostFace {
  */
 export function resolveHostFace(ctx: { get(name: string): unknown }): DshHostFace {
   const missing: string[] = []
-  for (const name of ['sessionController', 'workspaceController', 'sessionQuery'] as const) {
+  for (const name of ['sessionController', 'workspaceController', 'sessionQuery', 'commands', 'permissionPresets'] as const) {
     if (ctx.get(name) === undefined || ctx.get(name) === null) missing.push(name)
   }
   if (missing.length > 0) {
@@ -126,6 +158,8 @@ export function resolveHostFace(ctx: { get(name: string): unknown }): DshHostFac
     session: ctx.get('sessionController') as DshSessionControllerFace,
     workspace: ctx.get('workspaceController') as DshWorkspaceControllerFace,
     sessionQuery: ctx.get('sessionQuery') as DshSessionQueryFace,
+    commands: ctx.get('commands') as DshCommandsFace,
+    permissionPresets: ctx.get('permissionPresets') as DshPermissionPresetsFace,
   }
 }
 
@@ -890,5 +924,154 @@ export function createModelPort(
   return {
     models: sessionId => sessionModels(dsh, { sessionId }, options),
     selectModel: request => selectSessionModel(dsh, request, options),
+  }
+}
+
+// ── The /permission surface (16.59; signatures probe-verified 2026-09-19) ──
+
+/** One normalized preset row off the catalog's `options` array. */
+export interface PermissionCatalogEntry {
+  value: string
+  name?: string
+}
+
+export type PermissionCatalogOutcome =
+  | { outcome: 'completed'; entries: PermissionCatalogEntry[] }
+  | { outcome: 'failed' }
+
+/** Read the deployment's preset table (`permissionPresets.catalog`). */
+export async function permissionCatalog(
+  dsh: DshHostFace,
+  options: ApiProxyFaceOptions = {},
+): Promise<PermissionCatalogOutcome> {
+  const log = options.log
+  try {
+    const catalog = await withRpcTimeout(dsh.permissionPresets.catalog(), options.timeoutMs ?? CATALOG_TIMEOUT_MS)
+    if (!isRecord(catalog) || !Array.isArray(catalog['options'])) {
+      log?.('discord_permission_catalog_malformed', {})
+      return { outcome: 'failed' }
+    }
+    const entries: PermissionCatalogEntry[] = []
+    for (const row of catalog['options'] as unknown[]) {
+      if (!isRecord(row) || typeof row['value'] !== 'string') continue
+      entries.push({
+        value: row['value'],
+        ...(typeof row['name'] === 'string' ? { name: row['name'] } : {}),
+      })
+    }
+    return { outcome: 'completed', entries }
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      log?.('discord_permission_catalog_timeout', {})
+      return { outcome: 'failed' }
+    }
+    log?.('discord_permission_catalog_failed', { cause: String(cause) })
+    return { outcome: 'failed' }
+  }
+}
+
+/**
+ * Read the session's current preset off the `permissions` projection view
+ * (`{currentValue}`, stateVersion 2). Any read failure resolves failed —
+ * show degrades to "current unknown", never a hard failure.
+ */
+async function readSessionPermission(
+  dsh: DshHostFace,
+  sessionId: string,
+  options: ApiProxyFaceOptions,
+): Promise<string | undefined> {
+  const log = options.log
+  let observation: Awaited<ReturnType<DshSessionQueryFace['observeSession']>> | undefined
+  try {
+    observation = await withRpcTimeout(dsh.sessionQuery.observeSession(sessionId), options.timeoutMs ?? CATALOG_TIMEOUT_MS)
+  } catch {
+    return undefined
+  }
+  try {
+    const projections = isRecord(observation) && isRecord(observation['projections'])
+      ? observation['projections'] as Record<string, unknown>
+      : undefined
+    const values = projections !== undefined && isRecord(projections['values'])
+      ? projections['values']
+      : undefined
+    const permission = values !== undefined ? values['permissions'] : undefined
+    const current = isRecord(permission) ? permission['currentValue'] : undefined
+    return typeof current === 'string' ? current : undefined
+  } finally {
+    const dispose = (observation as { [Symbol.asyncDispose]?: () => unknown } | undefined)?.[Symbol.asyncDispose]
+      ?? (observation as { dispose?: () => unknown } | undefined)?.dispose
+    if (typeof dispose === 'function') {
+      try { void dispose.call(observation) } catch (cause) { log?.('discord_session_permission_dispose_threw', { cause: String(cause) }) }
+    }
+  }
+}
+
+export type SwitchSessionPermissionOutcome =
+  | { outcome: 'completed'; preset: string }
+  | { outcome: 'rejected'; reason: string }
+  | { outcome: 'unknown' }
+
+/**
+ * Switch the session's preset through the Host's OWN `/permission` command
+ * path (resolveAgent → commands.execute) — the same entry the web UI uses,
+ * inheriting its journal audit pair and admission checks. An execute throw
+ * is unknown (the command may have run): callers never retry blindly.
+ */
+export async function switchSessionPermission(
+  dsh: DshHostFace,
+  request: { sessionId: string; preset: string },
+  options: ApiProxyFaceOptions = {},
+): Promise<SwitchSessionPermissionOutcome> {
+  const log = options.log
+  const controller = new AbortController()
+  try {
+    const resolved = await withRpcTimeout(dsh.session.resolveAgent(request.sessionId), options.timeoutMs ?? PROMPT_TIMEOUT_MS)
+    if (!isRecord(resolved) || resolved['agent'] === undefined) {
+      const message = isRecord(resolved['error']) && typeof resolved['error']['message'] === 'string'
+        ? resolved['error']['message']
+        : 'session unavailable'
+      log?.('discord_permission_agent_unresolved', { sessionId: request.sessionId })
+      return { outcome: 'rejected', reason: message }
+    }
+    const agent: unknown = resolved['agent']
+    const execution = await withRpcTimeout(
+      dsh.commands.execute(agent, `/permission ${request.preset}`, [], controller.signal),
+      options.timeoutMs ?? PROMPT_TIMEOUT_MS,
+    )
+    if (execution === undefined) {
+      // Unmatched command: this Host has no /permission registered.
+      log?.('discord_permission_command_missing', { sessionId: request.sessionId })
+      return { outcome: 'rejected', reason: 'the Host has no /permission command' }
+    }
+    const result = isRecord(execution) && isRecord(execution['result']) ? execution['result'] : undefined
+    const kind = result !== undefined ? result['kind'] : undefined
+    const text = result !== undefined && typeof result['text'] === 'string' ? result['text'] : ''
+    if (kind === 'success') {
+      return { outcome: 'completed', preset: request.preset }
+    }
+    log?.('discord_permission_command_error', { sessionId: request.sessionId, text })
+    return { outcome: 'rejected', reason: text === '' ? 'the Host rejected the switch' : text }
+  } catch (cause) {
+    if (cause instanceof RpcTimeoutError) {
+      log?.('discord_permission_switch_timeout', { sessionId: request.sessionId })
+      return { outcome: 'unknown' }
+    }
+    log?.('discord_permission_switch_threw', { sessionId: request.sessionId, cause: String(cause) })
+    return { outcome: 'unknown' }
+  }
+}
+
+/** The /permission surface over the controller, command, and preset services. */
+export function createPermissionPort(
+  dsh: DshHostFace,
+  options: ApiProxyFaceOptions = {},
+): DshPermissionPort {
+  return {
+    catalog: () => permissionCatalog(dsh, options),
+    current: async sessionId => {
+      const preset = await readSessionPermission(dsh, sessionId, options)
+      return preset === undefined ? { outcome: 'failed' } : { outcome: 'completed', preset }
+    },
+    set: (sessionId, preset) => switchSessionPermission(dsh, { sessionId, preset }, options),
   }
 }

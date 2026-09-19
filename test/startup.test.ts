@@ -19,6 +19,7 @@ const controllerMembers = () => ({
   modelCatalog: () => {},
   follow: () => {},
   control: () => {},
+  resolveAgent: () => {},
 })
 
 function validServices(): Record<string, unknown> {
@@ -31,6 +32,8 @@ function validServices(): Record<string, unknown> {
     settings: { installSection: () => {} },
     storageDomain: { open: () => {} },
     connection: { rpc: { handle: () => () => {} } },
+    commands: { execute: () => {} },
+    permissionPresets: { catalog: () => {} },
   }
 }
 
@@ -45,6 +48,11 @@ describe('host capability boundary', () => {
       'settings',
       'storageDomain',
       'connection',
+      // The /permission surface (16.59): the Host command runtime and the
+      // permission-preset catalog joined the roster, both probe-verified on
+      // 0.1.6-alpha.2.
+      'commands',
+      'permissionPresets',
     ])
   })
 
@@ -58,6 +66,8 @@ describe('host capability boundary', () => {
     const services = validServices()
     services.sessionController = { prompt: () => {} }
     services.credentials = { resolve: () => {} }
+    services.commands = {}
+    services.permissionPresets = {}
     try {
       validateHostCapabilities(name => services[name])
       expect.unreachable()
@@ -66,8 +76,13 @@ describe('host capability boundary', () => {
       expect(message).toContain('sessionController')
       expect(message).toContain('modelCatalog')
       expect(message).toContain('follow')
+      expect(message).toContain('resolveAgent')
       expect(message).toContain('credentials')
       expect(message).toContain('describe')
+      expect(message).toContain('commands')
+      expect(message).toContain('execute')
+      expect(message).toContain('permissionPresets')
+      expect(message).toContain('catalog')
     }
   })
 

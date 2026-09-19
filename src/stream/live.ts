@@ -96,6 +96,11 @@ export interface LiveRenderDeps {
    * Unset: user/message records never echo (the pre-feature behavior).
    */
   userEchoCopy?: () => { label: string; nonText: string; truncated: string }
+  /**
+   * Localized permission system-line copy, resolved live (language can
+   * change). Unset: permission/preset records never render (16.62).
+   */
+  permissionLineCopy?: () => { line: (presetLabel: string) => string }
   /** Turn ownership release on turn/end; `info` carries the consumed watermark. */
   onTurnEnded?: (sessionId: string, info?: { threadId: string; renderedSeq: number }) => void
 }
@@ -508,6 +513,25 @@ export function startLiveRender(deps: LiveRenderDeps): {
     switch (event.type) {
       case 'user/message': {
         echoUserInput(threadId, runtime, data, event)
+        return
+      }
+      case 'permission/preset': {
+        // Durable preset intent (16.62): one audit line per switch, from
+        // ANY surface (web UI or Discord). The knob events that follow
+        // (sandbox/mode, approval/policy) stay unrendered — the preset
+        // table already implies them.
+        const copy = deps.permissionLineCopy?.()
+        if (copy === undefined) return
+        const preset = data['preset']
+        if (typeof preset !== 'string' || preset === '') return
+        const payload = buildOutboundMessage({ kind: 'tool', content: copy.line(preset) })
+        void deps.delivery.send({ channelId: threadId, content: payload.content }).then(sent => {
+          if (sent.outcome !== 'completed') {
+            deps.log?.('discord_live_permission_line_failed', { threadId, outcome: sent.outcome })
+          }
+        }).catch((cause: unknown) => {
+          deps.log?.('discord_live_permission_line_threw', { threadId, cause: String(cause) })
+        })
         return
       }
       case 'turn/start': {

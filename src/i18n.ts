@@ -143,6 +143,29 @@ const zh = {
   modelInvalidReasoning: '⚠️ 该推理强度对此模型无效。',
   modelTypedParseFailed: '⚠️ 模型需按 `provider/model` 格式填写，或留空进入交互式选择。',
 
+  // ── /permission show / set（16.59–16.61）─────────────────────────────
+  permissionNeedsThread: '⚠️ /permission 需要在已绑定 Session 的任务线程中使用（先在项目频道 @ 机器人）。',
+  permissionShowUnavailable: '⚠️ 权限目录暂时不可用，请稍后重试。',
+  permissionShowHeader: (current: string, entries: string) => `**当前权限模式：** ${current}\n**可切换：** ${entries}`,
+  permissionShowUnknownCurrent: '未知（投影暂不可读）',
+  permissionPresetReadOnly: '仅可查看',
+  permissionPresetWorkspaceWrite: '工作区内修改',
+  permissionPresetFullAccess: '完全权限',
+  permissionApplied: (label: string) => `✅ 权限模式已切换：${label}（沙箱与审批策略随预设生效）。`,
+  permissionRejected: (reason: string) => `⚠️ DSH 拒绝了此次切换：${reason}`,
+  permissionUnknown: '⚠️ 切换结果未知（命令可能已执行），请用 /permission show 确认。',
+  permissionSelectOperatorOnly: '⚠️ 只有 Host 操作员可以切换权限模式（完全权限会同时解除沙箱与审批）。',
+  permissionNotInCatalog: '⚠️ 该预设不在当前部署的权限目录中。',
+  permissionConfirmHeader: (label: string) => `⚠️ 确认启用「${label}」？`,
+  permissionConfirmBody: '启用后本会话将减少确认步骤，可直接执行敏感操作、文件修改或外部命令。仅建议在你信任后续任务时使用。',
+  permissionConfirmButton: '我已了解风险，启用',
+  permissionConfirmCancelButton: '取消',
+  permissionConfirmed: (label: string) => `✅ 已确认，正在切换到「${label}」……`,
+  permissionCancelled: '已取消，权限模式未变更。',
+  permissionConfirmExpired: '⚠️ 该确认已过期，请重新运行 /permission set。',
+  permissionSystemLine: (label: string) => `🔧 权限模式 → ${label}`,
+
+
   // ── /session resume ──────────────────────────────────────────────────
   sessionResumeNeedsBoundChannel: '⚠️ /session resume 需要在已绑定工作区的项目频道中使用。',
   sessionResumeStarted: (threadId: string) => `✅ 会话已恢复到 <#${threadId}>——历史在 Web 界面查看，线程内直接续聊。`,
@@ -290,6 +313,29 @@ const en: CopyTable = {
   modelInvalidReasoning: '⚠️ That reasoning effort is not valid for this model.',
   modelTypedParseFailed: '⚠️ The model must be `provider/model`, or left empty for the interactive cascade.',
 
+  // ── /permission show / set (16.59–16.61) ─────────────────────────────
+  permissionNeedsThread: '⚠️ /permission needs a task Thread bound to a Session (mention the bot in a project channel first).',
+  permissionShowUnavailable: '⚠️ The permission catalog is temporarily unavailable; try again shortly.',
+  permissionShowHeader: (current: string, entries: string) => `**Current permission mode:** ${current}\n**Switchable:** ${entries}`,
+  permissionShowUnknownCurrent: 'unknown (projection unreadable)',
+  permissionPresetReadOnly: 'View only',
+  permissionPresetWorkspaceWrite: 'Workspace edit',
+  permissionPresetFullAccess: 'Full access',
+  permissionApplied: (label: string) => `✅ Permission mode switched: ${label} (sandbox and approval follow the preset).`,
+  permissionRejected: (reason: string) => `⚠️ DSH rejected this switch: ${reason}`,
+  permissionUnknown: '⚠️ The switch outcome is unknown (the command may have run); confirm with /permission show.',
+  permissionSelectOperatorOnly: '⚠️ Only Host operators can switch the permission mode (full access disables both sandbox and approval).',
+  permissionNotInCatalog: "⚠️ That preset is not in this deployment's permission catalog.",
+  permissionConfirmHeader: (label: string) => `⚠️ Enable "${label}"?`,
+  permissionConfirmBody: 'After enabling, this Session will require fewer confirmations and can directly perform sensitive operations, file changes, or external commands. Only recommended when you trust the upcoming work.',
+  permissionConfirmButton: 'I understand the risk, enable',
+  permissionConfirmCancelButton: 'Cancel',
+  permissionConfirmed: (label: string) => `✅ Confirmed — switching to "${label}"…`,
+  permissionCancelled: 'Cancelled; the permission mode is unchanged.',
+  permissionConfirmExpired: '⚠️ That confirmation expired; run /permission set again.',
+  permissionSystemLine: (label: string) => `🔧 Permission mode → ${label}`,
+
+
   // ── /session resume ──────────────────────────────────────────────────
   sessionResumeNeedsBoundChannel: '⚠️ /session resume must run in a bound project channel.',
   sessionResumeStarted: threadId => `✅ Session resumed into <#${threadId}> — full history lives in the web UI; continue in the thread.`,
@@ -312,4 +358,16 @@ const en: CopyTable = {
 /** Discord-visible copy for the configured language. */
 export function createCopy(language: Language): CopyTable {
   return language === 'en' ? en : zh
+}
+
+/**
+ * Localize one permission-preset key for display. The dsh-base canonical
+ * three map to Discord copy; deployment-custom keys fall back to the raw
+ * host key (never invented labels).
+ */
+export function permissionPresetLabel(preset: string, copy: CopyTable): string {
+  if (preset === 'read-only') return copy.permissionPresetReadOnly
+  if (preset === 'workspace-write') return copy.permissionPresetWorkspaceWrite
+  if (preset === 'danger-full-access') return copy.permissionPresetFullAccess
+  return preset
 }

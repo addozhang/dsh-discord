@@ -131,6 +131,16 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   `input: [text, image]` 的解锁方式依旧有效
 - `session.selectModel` 宿主现在会尝试持久化默认（失败仅 warn）——
   "不得声称持久化成功"的文案限制可放松
+- **权限预设面（2026-09-19 一次性 profile 真机探针核实）**：dsh-base 配置三档
+  `read-only`/`workspace-write`/`danger-full-access`（沙箱+审批捆绑，部署可自定义表）。
+  读 = `permissionPresets.catalog()` → `{options:[{value,name}]}` +
+  `observeSession` 的 `permissions` 投影 view `{currentValue}`；写 = 宿主唯一认可的
+  `/permission` 命令路径（web 客户端同款 `live.command`）：进程内
+  `sessionController.resolveAgent(sessionId)` → `{agent}`（opaque）→
+  `commands.execute(agent, '/permission <name>', [], signal)` →
+  `{commandId, result:{kind,text}}`（未匹配命令返回 undefined）；命令生命周期自动记
+  `command/run`+`command/done` journal 审计对。切换产生 durable `permission/preset`
+  事件（payload `{preset}`），渲染层据此出系统行
 - `session.list` 行仍无 archived 标记（归档集只在 workspace 基线）；
   `session.list` 响应仍是 `{items}`，行不再有 `agentPreset`
 - **`ctx.connection.rpc.handle` 对外部插件不可用**（0.1.6 真机三连踩）：
@@ -209,9 +219,11 @@ scripts/host-surface-audit.sh --latest            # 审计 stable
 
 ### 接触面清单（审计脚本覆盖的全部）
 
-8 inject 服务 + 9 sessionController 方法 + 6 workspaceController 方法 +
-2 ask 服务入口 + 3 settings 导出（+3 已删符号确认未复活）+ 4 client 类型包
-（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = **39 项检查**
+10 inject 服务（+commands、permissionPresets）+ 10 sessionController 方法
+（+resolveAgent）+ 6 workspaceController 方法 +
+2 ask 服务入口 + 5 项权限面检查（execute 签名 / catalog / currentValue view /
+命令注册 / durable 事件）+ 3 settings 导出（+3 已删符号确认未复活）+ 4 client 类型包
+（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = **47 项检查**
 
 ## OpenSpec 工作流
 

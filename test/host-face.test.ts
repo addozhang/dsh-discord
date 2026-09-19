@@ -61,6 +61,7 @@ function face(
     })) as ReturnType<SessionFace['modelCatalog']>,
     follow: () => { throw new Error('not under test') },
     control: () => { throw new Error('not under test') },
+    resolveAgent: () => Promise.resolve({ agent: { id: 'agent-1' } }) as ReturnType<SessionFace['resolveAgent']>,
   }
   let sessionCreate: (() => Promise<unknown>) | undefined
   let sessionCancel: (() => Promise<unknown>) | undefined
@@ -79,6 +80,12 @@ function face(
     },
     sessionQuery: {
       observeSession: () => (observation ? observation() : Promise.resolve({})) as ReturnType<DshHostFace['sessionQuery']['observeSession']>,
+    },
+    commands: {
+      execute: () => { throw new Error('not under test') },
+    },
+    permissionPresets: {
+      catalog: () => { throw new Error('not under test') },
     },
   } as DshHostFace & { session: SessionFace }
   // Late-bound mutators so individual cases can override after construction.

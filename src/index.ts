@@ -21,14 +21,14 @@ import { createRestThreadPort } from './discord/thread-port.js'
 import { createComponentRegistry } from './discord/components.js'
 import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
-import { createModelPort, createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, resolveHostFace } from './dsh/host-face.js'
+import { createModelPort, createPermissionPort, createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, resolveHostFace } from './dsh/host-face.js'
 import { createApprovalStore, type ApprovalRecord } from './features/approval-store.js'
 import { createAskWiring } from './features/ask-wiring.js'
 import { sweepExpiredApprovals } from './features/approval-expiry.js'
 import { sweepExpiredQuestions, type DshTurnCancelPort } from './features/question-expiry.js'
 import { createQuestionStore } from './features/question-store.js'
 import { handleSelectInput, handleModalSubmit, type QuestionRoutingDeps } from './features/question-routing.js'
-import { createCopy, type CopyTable } from './i18n.js'
+import { createCopy, permissionPresetLabel, type CopyTable } from './i18n.js'
 import type { DshApprovalRespondPort } from './features/approval-routing.js'
 import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
@@ -884,6 +884,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         rpcLog('discord_reconcile_channel_retired', { channelId, reason: 'discord-deleted' })
       },
       model: createModelPort(dsh, { log: rpcLog }),
+      permission: createPermissionPort(dsh, { log: rpcLog }),
+      permissionSelectOperatorOnly: () => current.permissionSelectOperatorOnly,
       modelSelectOperatorOnly: () => current.modelSelectOperatorOnly,
       resumeCandidates: createResumeCandidatesPort({
         listSessions: () => listSessionSummaries(dsh, { log: rpcLog }),
@@ -1162,6 +1164,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         nonText: copy.userInputNonText,
         truncated: copy.userInputTruncated,
       }),
+      permissionLineCopy: () => ({ line: presetKey => copy.permissionSystemLine(permissionPresetLabel(presetKey, copy)) }),
       onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
       onTurnEnded: (sessionId, info) => {
         const turn = turnTracker.active(sessionId)

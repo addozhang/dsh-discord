@@ -54,6 +54,14 @@ export interface DiscordSettings {
    * re-tighten to the operator allowlist.
    */
   modelSelectOperatorOnly: boolean
+  /**
+   * Restrict /permission set to the explicit Host-operator allowlist.
+   * Defaults to true — stricter than /model because the danger-full-access
+   * preset disables BOTH sandbox and approval (16.60); single-user
+   * deployments may loosen it so any authorized member can switch, mirroring
+   * the loosened /model select vocabulary.
+   */
+  permissionSelectOperatorOnly: boolean
 }
 
 /** The archive durations Discord's API accepts (minutes). */
@@ -78,6 +86,7 @@ export const DEFAULT_DISCORD_SETTINGS: DiscordSettings = Object.freeze({
   questionTimeoutMs: 30 * 60_000,
   threadAutoArchiveMinutes: 1440,
   modelSelectOperatorOnly: false,
+  permissionSelectOperatorOnly: true,
 })
 
 const discordIdList = z.array(z.string()).default([])
@@ -102,6 +111,7 @@ export const DiscordSettingsSchema: z<DiscordSettings> = z.object({
   approvalTimeoutMs: z.number().step(1).min(30_000).max(86_400_000).default(600_000),
   questionTimeoutMs: z.number().step(1).min(30_000).max(86_400_000).default(1_800_000),
   modelSelectOperatorOnly: z.boolean().default(false),
+  permissionSelectOperatorOnly: z.boolean().default(true),
 })
 
 const DISCORD_SNOWFLAKE = /^\d{17,20}$/u

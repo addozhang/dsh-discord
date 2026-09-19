@@ -16,6 +16,10 @@ export const REQUIRED_HOST_SERVICES = [
   'settings',
   'storageDomain',
   'connection',
+  // The /permission surface (16.59): the Host command runtime and the
+  // permission-preset catalog (both ship in dsh-base).
+  'commands',
+  'permissionPresets',
 ] as const
 
 export type HostServiceName = (typeof REQUIRED_HOST_SERVICES)[number]
@@ -27,7 +31,7 @@ export type HostServiceName = (typeof REQUIRED_HOST_SERVICES)[number]
  * the startup probe should have refused; refuse rather than probe at runtime.
  */
 const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
-  sessionController: ['prompt', 'create', 'list', 'cancel', 'updateQueue', 'selectModel', 'modelCatalog', 'follow', 'control'],
+  sessionController: ['prompt', 'create', 'list', 'cancel', 'updateQueue', 'selectModel', 'modelCatalog', 'follow', 'control', 'resolveAgent'],
   workspaceController: ['follow'],
   sessionQuery: ['observeSession'],
   webServer: [],
@@ -35,6 +39,8 @@ const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
   settings: ['installSection'],
   storageDomain: ['open'],
   connection: ['rpc'],
+  commands: ['execute'],
+  permissionPresets: ['catalog'],
 }
 
 /** Actionable remediation hint appended to every activation failure. */

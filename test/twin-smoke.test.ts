@@ -347,6 +347,16 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
         return { outcome: 'started' as const, threadId }
       },
       modelSelectOperatorOnly: () => false,
+      permissionSelectOperatorOnly: () => true,
+      permission: {
+        catalog: () => Promise.resolve({ outcome: 'completed' as const, entries: [
+          { value: 'read-only', name: 'read-only' },
+          { value: 'workspace-write', name: 'workspace-write' },
+          { value: 'danger-full-access', name: 'danger-full-access' },
+        ] }),
+        current: () => Promise.resolve({ outcome: 'completed' as const, preset: 'workspace-write' }),
+        set: (_sessionId: string, preset: string) => Promise.resolve({ outcome: 'completed' as const, preset }),
+      },
       model: {
         models: () => Promise.resolve({
           outcome: 'completed' as const,
@@ -535,6 +545,68 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     })
     expect(done.content).toContain('DSH 工作区与 Session 未受影响')
     expect(rowMap.has(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }))).toBe(false)
+  }, 20_000)
+
+  it('/permission show reports the current preset from the permissions projection', async () => {
+    const interaction = await discord.simulateSlashCommand({
+      channelId: threadId, userId: USER, name: 'permission', options: [{ name: 'show', type: 1 }],
+    })
+    await discord.channel(threadId).waitForInteractionAck({ interactionId: interaction.id })
+    const reply = await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('当前权限模式'),
+    })
+    expect(reply.content).toContain('工作区内修改')
+    expect(reply.content).toContain('仅可查看')
+    expect(reply.content).toContain('完全权限')
+  }, 20_000)
+
+  it('/permission set refuses a non-operator and applies for the operator', async () => {
+    // A plain member (not a host operator) is refused by the default gate.
+    await discord.prisma.guildMember.update({
+      where: { guildId_userId: { guildId: GUILD, userId: '222222222222222223' } },
+      data: { permissions: '0' },
+    })
+    const denied = await discord.simulateSlashCommand({
+      channelId: threadId, userId: '222222222222222223', name: 'permission',
+      options: [{ name: 'set', type: 1, options: [{ name: 'preset', type: 3, value: 'read-only' }] }],
+    })
+    await discord.channel(threadId).waitForInteractionAck({ interactionId: denied.id })
+    await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('只有 Host 操作员可以切换权限'),
+    })
+
+    // The operator switches a plain preset directly — no confirmation.
+    const interaction = await discord.simulateSlashCommand({
+      channelId: threadId, userId: USER, name: 'permission',
+      options: [{ name: 'set', type: 1, options: [{ name: 'preset', type: 3, value: 'read-only' }] }],
+    })
+    await discord.channel(threadId).waitForInteractionAck({ interactionId: interaction.id })
+    const reply = await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('权限模式已切换'),
+    })
+    expect(reply.content).toContain('仅可查看')
+  }, 20_000)
+
+  it('/permission set danger-full-access goes through the risk confirmation', async () => {
+    const interaction = await discord.simulateSlashCommand({
+      channelId: threadId, userId: USER, name: 'permission',
+      options: [{ name: 'set', type: 1, options: [{ name: 'preset', type: 3, value: 'danger-full-access' }] }],
+    })
+    await discord.channel(threadId).waitForInteractionAck({ interactionId: interaction.id })
+    // The risk prompt carries the explicit confirm/cancel buttons.
+    const prompt = await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('确认启用「完全权限」'),
+    })
+    expect(prompt.content).toContain('敏感操作')
+    const row = (prompt.components?.[0] as { components?: Array<{ custom_id?: string; label?: string }> } | undefined)?.components ?? []
+    const confirmId = row.find(button => button.label === '我已了解风险，启用')?.custom_id
+    expect(typeof confirmId).toBe('string')
+
+    await discord.simulateButtonClick({ channelId: threadId, userId: USER, messageId: prompt.id, customId: confirmId ?? '' })
+    const done = await discord.channel(threadId).waitForMessage({
+      predicate: message => message.content.includes('权限模式已切换：完全权限'),
+    })
+    expect(done.content).toContain('已确认，正在切换')
   }, 20_000)
 
   it('answers a click on an unknown control with the ack plus an ephemeral rerun hint', async () => {
@@ -1220,6 +1292,16 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
       resumeCandidates: () => Promise.resolve({ outcome: 'ok' as const, options: [] }),
       resumeSession: () => Promise.resolve({ outcome: 'failed' as const }),
       modelSelectOperatorOnly: () => false,
+      permissionSelectOperatorOnly: () => true,
+      permission: {
+        catalog: () => Promise.resolve({ outcome: 'completed' as const, entries: [
+          { value: 'read-only', name: 'read-only' },
+          { value: 'workspace-write', name: 'workspace-write' },
+          { value: 'danger-full-access', name: 'danger-full-access' },
+        ] }),
+        current: () => Promise.resolve({ outcome: 'completed' as const, preset: 'workspace-write' }),
+        set: (_sessionId: string, preset: string) => Promise.resolve({ outcome: 'completed' as const, preset }),
+      },
       model: {
         models: () => Promise.resolve({
           outcome: 'completed' as const,
@@ -1673,6 +1755,16 @@ describe('twin smoke: isolation matrix (15.11)', () => {
       resumeCandidates: () => Promise.resolve({ outcome: 'ok' as const, options: [] }),
       resumeSession: () => Promise.resolve({ outcome: 'failed' as const }),
       modelSelectOperatorOnly: () => false,
+      permissionSelectOperatorOnly: () => true,
+      permission: {
+        catalog: () => Promise.resolve({ outcome: 'completed' as const, entries: [
+          { value: 'read-only', name: 'read-only' },
+          { value: 'workspace-write', name: 'workspace-write' },
+          { value: 'danger-full-access', name: 'danger-full-access' },
+        ] }),
+        current: () => Promise.resolve({ outcome: 'completed' as const, preset: 'workspace-write' }),
+        set: (_sessionId: string, preset: string) => Promise.resolve({ outcome: 'completed' as const, preset }),
+      },
       model: {
         models: () => Promise.resolve({
           outcome: 'completed' as const,
@@ -1887,6 +1979,16 @@ describe('twin smoke: English copy path (16.25)', () => {
       resumeCandidates: () => Promise.resolve({ outcome: 'ok' as const, options: [] }),
       resumeSession: () => Promise.resolve({ outcome: 'failed' as const }),
       modelSelectOperatorOnly: () => false,
+      permissionSelectOperatorOnly: () => true,
+      permission: {
+        catalog: () => Promise.resolve({ outcome: 'completed' as const, entries: [
+          { value: 'read-only', name: 'read-only' },
+          { value: 'workspace-write', name: 'workspace-write' },
+          { value: 'danger-full-access', name: 'danger-full-access' },
+        ] }),
+        current: () => Promise.resolve({ outcome: 'completed' as const, preset: 'workspace-write' }),
+        set: (_sessionId: string, preset: string) => Promise.resolve({ outcome: 'completed' as const, preset }),
+      },
       model: {
         models: () => Promise.resolve({
           outcome: 'completed' as const,
