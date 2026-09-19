@@ -107,13 +107,14 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   `finish`(reason) / `usage`。工具调用在 durable `tool/call` 之前就开始流式下发
 - **tool/result 失败标志** = `message.content[0].isError === true`（无顶层
   `error` 键；rc.2 的顶层形状已不存在）——live.ts `resultFailed` 两条都认
-- **已知未修：快照重放重复投递答案**（2026-09-18 发现，先于 turn-progress 变更
-  存在）：每次进程重启后首个 prompt 触发 track → follow 快照重放全部 journal，
-  重放的 `assistant/message` 在 `headMessageId === undefined`（新 runtime）下走
-  finalize send ——旧 turn 的答案作为新消息重复进线程（真机实测 whoami 答案 ×4，
-  每次重启 +1）。修复需要"历史 turn 的 finalize 抑制"决策（如 turn/end 先于
-  订阅水位的 turn 不渲染），未做。注意：assistantStream 修复后 live tail 已活，
-  快照只剩冷启动兜底角色，此 bug 的触发面 = 每次重启后的首个 prompt
+- **已修（2026-09-19，replay-fence-and-user-input change）：快照重放重复投递答案**
+  （2026-09-18 发现）：thread binding 持久化 `renderedSeq` 渲染水位，`track()` 播种
+  floor、渲染层在 turn/end 围栏回写；旧 binding（无水位）首快照整体抑制。同一
+  change 附带：catch-up/live 的 `user/message` 回显（`source.kind==='user'` 过滤，
+  `discord:` rpcId 仅新 runtime 首窗回显，plugin 注入永不渲染）+ READY 对幸存绑定
+  重跟踪（重启后 web-origin 回合不再渲染进虚空；水位只放行错过的后缀）。真机验证：
+  重启 ×2 零重放、错过后缀精确补投、水位 20→31→42→53 推进。崩溃窗口内 ≤1 turn
+  的有限重复成文接受（宁重复不丢消息）。
 - 审批/提问：waterfall 对**外部插件不可达**（2026-09-18 真机穷尽验证）：profile
   按 bundle 组装多棵事件树，ask waterfall 只枚举基座树自己的注册表——外部插件
   的 `ctx.on`、`{global:true}`、根 events 服务、甚至挂在 approval 服务 ctx 上的
