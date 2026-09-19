@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { createKvTableStub } from './helpers/kv-table.js'
-import { createBindingStore } from '../src/state/bindings.js'
+import { createBindingStore, renderWatermarkSeed } from '../src/state/bindings.js'
 import type { ChannelBinding } from '../src/state/records.js'
 
 const KEY = 'app:1:guild:2:channel:3'
@@ -112,5 +112,25 @@ describe('revision-fenced bindings', () => {
     expect(results.map(result => result.ok)).toEqual([true, true, true])
     expect(store.get(KEY)?.workspaceId).toBe('ws-c')
     expect(store.get(KEY)?.revision).toBe(3)
+  })
+})
+
+describe('render watermark seeding (replay-fence-and-user-input)', () => {
+  const base = { sessionId: 's1', workspaceId: 'ws1', revision: 1, createdBy: 'u1', createdAtMs: 1_000 }
+
+  it('floors the watermark from a persisted renderedSeq', () => {
+    expect(renderWatermarkSeed({ ...base, renderedSeq: 42 }, 5_000)).toEqual({ floor: 42 })
+  })
+
+  it('suppresses the first opening snapshot for pre-feature bindings from an earlier process', () => {
+    expect(renderWatermarkSeed({ ...base }, 5_000)).toEqual({ suppressOpeningSnapshot: true })
+  })
+
+  it('seeds nothing for a binding created in-process (fresh resume thread renders full history)', () => {
+    expect(renderWatermarkSeed({ ...base, createdAtMs: 6_000 }, 5_000)).toBeUndefined()
+  })
+
+  it('a persisted watermark wins even on legacy-looking timestamps', () => {
+    expect(renderWatermarkSeed({ ...base, renderedSeq: 0 }, 5_000)).toEqual({ floor: 0 })
   })
 })

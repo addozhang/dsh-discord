@@ -91,3 +91,25 @@ export type ChannelBindingStore = BindingStore<ChannelBinding>
 
 /** Convenience alias for the thread-binding table's store. */
 export type ThreadBindingStore = BindingStore<ThreadBinding>
+
+/** Catch-up seeding options for the event router's `track()` (replay-fence D2). */
+export interface RenderWatermarkSeed {
+  floor?: number
+  suppressOpeningSnapshot?: boolean
+}
+
+/**
+ * The durable catch-up seed for one thread binding (replay-fence-and-user-input
+ * D2): a persisted `renderedSeq` floors the watermark; a binding created
+ * before this process that never persisted one (pre-feature) suppresses its
+ * first opening snapshot whole; a binding born in-process seeds nothing so a
+ * fresh thread (resume adopt) renders the session's full history.
+ */
+export function renderWatermarkSeed(
+  record: ThreadBinding,
+  processStartMs: number,
+): RenderWatermarkSeed | undefined {
+  if (record.renderedSeq !== undefined) return { floor: record.renderedSeq }
+  if (record.createdAtMs < processStartMs) return { suppressOpeningSnapshot: true }
+  return undefined
+}

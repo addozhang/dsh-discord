@@ -37,7 +37,7 @@ import { guildKeysToForget, sweepExpired } from './state/retention.js'
 import { createHostEventRouter, type TrackSeedOptions } from './dsh/host-events.js'
 import { listSessionIds, listSessionSummaries } from './dsh/host-face.js'
 import { installAskServicePatches } from './dsh/host-asks.js'
-import { createBindingStore } from './state/bindings.js'
+import { createBindingStore, renderWatermarkSeed } from './state/bindings.js'
 import { createIntentStore, type InboundIntentRecord, type IntentTable } from './state/intents.js'
 import type { BindingTable } from './state/bindings.js'
 import { createTurnTracker } from './features/turn-ownership.js'
@@ -227,19 +227,14 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       return undefined
     }
     /**
-     * Durable catch-up seeding (D2): a persisted `renderedSeq` floors the
-     * watermark; a pre-feature binding (no watermark, created before this
-     * process) suppresses its first opening snapshot whole; a binding born
-     * in-process (resume adopt) seeds nothing so the fresh thread renders
-     * the session's full history.
+     * Durable catch-up seeding (D2), derived per record by
+     * `renderWatermarkSeed` — see state/bindings.ts.
      */
+    const trackSeedForRecord = (record: ThreadBinding): TrackSeedOptions | undefined =>
+      renderWatermarkSeed(record, processStartMs)
     const trackSeedFor = (sessionId: string): TrackSeedOptions | undefined => {
       const found = threadBindingForSession(sessionId)
-      if (found === undefined) return undefined
-      const { record } = found
-      if (record.renderedSeq !== undefined) return { floor: record.renderedSeq }
-      if (record.createdAtMs < processStartMs) return { suppressOpeningSnapshot: true }
-      return undefined
+      return found === undefined ? undefined : trackSeedForRecord(found.record)
     }
     /**
      * Advance the owning thread's durable render watermark (D5): one
@@ -735,6 +730,16 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             await threadTable.delete(key)
             rpcLog('discord_reconcile_thread_retired', { threadId: action.threadId, reason: action.reason })
           }
+        }
+        // Replay fence (16.70): re-arm follow subscriptions for every
+        // binding that survived reconciliation. Without a Discord-side
+        // acquisition event this process (create/prompt/steer/resume), a
+        // web-origin turn on a bound session would render into nothing —
+        // the seeded floor keeps the opening snapshot from re-delivering
+        // history the thread already shows, so only the missed suffix
+        // (bounded by the last persisted turn boundary) catches up.
+        for (const [, record] of threadTable.entries()) {
+          hostEvents.track(record.sessionId, trackSeedForRecord(record))
         }
         rpcLog('discord_reconcile_done', {})
       } finally {
