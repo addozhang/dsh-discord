@@ -67,12 +67,15 @@ check_grep() {
 
 # ── 1. inject services (8) ─────────────────────────────────────────────────
 echo "── 1. Inject services ──"
+# 0.1.7 lesson: the receiver parameter name (ctx vs ownerContext) and quote
+# style both drift; match any identifier as the receiver and either quote.
 for svc in sessionController workspaceController sessionQuery webServer credentials settings connection commands permissionPresets; do
-  actual=$(check_grep "$DEEPSEEK_DIR" "super(ctx, \"$svc\"")
+  actual=$(check_grep "$DEEPSEEK_DIR" "super([A-Za-z]*, ['\"]$svc['\"]")
   check "service '$svc'" "FOUND" "$actual"
 done
-# storageDomain registers via domainCtx.provide (not a Service subclass)
-actual=$(check_grep "$DEEPSEEK_DIR" 'provide("storageDomain"')
+# storageDomain registers via domainCtx.provide (not a Service subclass);
+# bare "(" is literal in BRE and "." swallows either quote style.
+actual=$(check_grep "$DEEPSEEK_DIR" 'provide(.storageDomain')
 check "service 'storageDomain'" "FOUND" "$actual"
 echo ""
 
@@ -147,7 +150,9 @@ echo ""
 # ── 5. settings exports ─────────────────────────────────────────────────────
 echo "── 5. Settings exports ──"
 SETTINGS_JS="$DEEPSEEK_DIR/dsh-settings/lib/index.js"
-for sym in SettingsProvider SettingsConflictError redactSecrets; do
+# SettingsProvider was replaced by SettingsForms in 0.1.7's profile-backed
+# forms refactor; SettingsNamespace (our only import) must survive either way.
+for sym in SettingsForms SettingsConflictError redactSecrets; do
   if grep -q "$sym" "$SETTINGS_JS" 2>/dev/null; then
     echo "  ✓ export '$sym'"
     OK=$((OK+1))
@@ -156,6 +161,27 @@ for sym in SettingsProvider SettingsConflictError redactSecrets; do
     MISSING=$((MISSING+1))
   fi
 done
+# The settings forms API the adapter's startup contract pins (0.6.x line):
+# describe feeds resolveLanguage's locale read; update is the service-side
+# landing of every card write.
+for member in describe update; do
+  if grep -q "$member(" "$SETTINGS_JS" 2>/dev/null; then
+    echo "  ✓ settings forms '$member'"
+    OK=$((OK+1))
+  else
+    echo "  ✗ settings forms '$member' — MISSING"
+    MISSING=$((MISSING+1))
+  fi
+done
+# Generational marker: installSection served the 0.1.6 installSection adapter
+# line (0.5.x); its absence marks the Config-driven forms generation.
+if grep -q "installSection" "$SETTINGS_JS" 2>/dev/null; then
+  echo "  ✓ installSection present (0.1.6-generation host; serves adapter 0.5.x)"
+  OK=$((OK+1))
+else
+  echo "  ⚠ installSection absent — Config-driven forms generation (adapter 0.5.x line cannot load; 0.6.x migrated)"
+  CHANGED=$((CHANGED+1))
+fi
 # removed symbols must STAY removed
 for sym in settingsNamespace installSettingsSection; do
   if grep -q "$sym" "$SETTINGS_JS" 2>/dev/null; then
