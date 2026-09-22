@@ -96,12 +96,13 @@ describe('cordis-owned disposal', () => {
       get: (serviceName: string) => ({
         sessionController: { prompt: () => {}, create: () => {}, list: () => {}, cancel: () => {}, updateQueue: () => {}, selectModel: () => {}, modelCatalog: () => {}, follow: () => {}, control: () => {}, resolveAgent: () => {} }, workspaceController: { follow: () => {} }, sessionQuery: { observeSession: () => {} }, webServer: {}, commands: { execute: () => {} }, permissionPresets: { catalog: () => {} },
         credentials: { resolve: () => {}, describe: () => {}, set: () => {}, unset: () => {} },
-        settings: { installSection: () => {} },
+        settings: { describe: () => {}, update: () => {} },
         storageDomain: { open: () => {} },
         connection: { rpc: { handle: () => () => {} } },
       })[serviceName],
       inject: vi.fn(),
       logger: { debug: vi.fn() },
+      on: vi.fn(() => () => {}),
       effect: (execute: () => unknown, label?: string) => { effects.push({ execute, label }) },
     }
     apply(ctx as never)

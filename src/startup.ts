@@ -25,10 +25,13 @@ export const REQUIRED_HOST_SERVICES = [
 export type HostServiceName = (typeof REQUIRED_HOST_SERVICES)[number]
 
 /**
- * Minimum contract members per service, confirmed against the 0.1.6
- * controller faces (dsh-api-session-controller / dsh-api-workspace-controller
- * / dsh-session-query). A service lacking any member means a version drift
- * the startup probe should have refused; refuse rather than probe at runtime.
+ * Minimum contract members per service, confirmed against the 0.1.7
+ * controller and settings faces (dsh-api-session-controller /
+ * dsh-api-workspace-controller / dsh-session-query / dsh-settings
+ * SettingsForms — describe reads the forms projection including the locale
+ * entry; update is the service-side landing of every card write). A service
+ * lacking any member means a version drift the startup probe should have
+ * refused; refuse rather than probe at runtime.
  */
 const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
   sessionController: ['prompt', 'create', 'list', 'cancel', 'updateQueue', 'selectModel', 'modelCatalog', 'follow', 'control', 'resolveAgent'],
@@ -36,7 +39,7 @@ const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
   sessionQuery: ['observeSession'],
   webServer: [],
   credentials: ['resolve', 'describe', 'set', 'unset'],
-  settings: ['installSection'],
+  settings: ['describe', 'update'],
   storageDomain: ['open'],
   connection: ['rpc'],
   commands: ['execute'],
@@ -44,7 +47,7 @@ const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
 }
 
 /** Actionable remediation hint appended to every activation failure. */
-const REMEDIATION = 'install @addozhang/dsh-discord into a dsh web profile providing the 0.1.6 host controller services'
+const REMEDIATION = 'install @addozhang/dsh-discord into a dsh web profile providing the 0.1.7 host services (profile-backed settings forms)'
 
 function missingMembers(service: unknown, required: readonly string[]): string[] {
   if (service === undefined || service === null) return [...required]

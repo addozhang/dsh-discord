@@ -21,7 +21,7 @@ import type {} from './slot-contract.js'
 export const name = 'dsh-discord-client'
 
 /** Client services the card needs: settings transport, slot registry, plugin RPC channel, and locale. */
-export const inject = ['settingsScope', 'slots', 'connection', 'locale']
+export const inject = ['configForms', 'slots', 'connection', 'locale']
 
 /** The status poll cadence; the Host is the only authority on connection state. */
 const STATUS_POLL_MS = 30_000
@@ -43,8 +43,8 @@ interface PluginRpcFace {
 
 /** Mount the Discord settings card into the Plugins section. */
 export function apply(ctx: Context): void {
-  const scope = ctx.settingsScope.bind<DiscordSettings>({ namespace: DISCORD_SETTINGS_NAMESPACE })
-  const controller = new DiscordCardController(scope)
+  const form = ctx.configForms.get<DiscordSettings>(DISCORD_SETTINGS_NAMESPACE)
+  const controller = new DiscordCardController(form)
   // Register the card's copy dictionary, then the card under the settings
   // UI's declared parent slot — a standalone slot name fails the loader's
   // children-table check at runtime.
