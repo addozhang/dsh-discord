@@ -56,12 +56,12 @@ describe('client entry', () => {
     const { scope } = fakeScope()
     const disposer = vi.fn()
     const ctx = {
-      settingsScope: { bind: vi.fn(() => scope) },
+      configForms: { get: vi.fn(() => scope) },
       slots: { register: vi.fn(() => disposer), inject: vi.fn((_name: string, factory: () => unknown) => factory()) },
       locale: { register: vi.fn() },
       effect: vi.fn((execute: () => unknown) => { execute() }),
     } as unknown as Context & {
-      settingsScope: { bind: ReturnType<typeof vi.fn> }
+      configForms: { get: ReturnType<typeof vi.fn> }
       slots: { register: ReturnType<typeof vi.fn>; inject: ReturnType<typeof vi.fn> }
       effect: ReturnType<typeof vi.fn>
     }
@@ -69,7 +69,7 @@ describe('client entry', () => {
     applyClient(ctx)
 
     expect(clientName).toBe('dsh-discord-client')
-    expect(ctx.settingsScope.bind).toHaveBeenCalledWith({ namespace: DISCORD_SETTINGS_NAMESPACE })
+    expect(ctx.configForms.get).toHaveBeenCalledWith(DISCORD_SETTINGS_NAMESPACE)
     expect(ctx.slots.register).toHaveBeenCalledTimes(1)
     const options = ctx.slots.register.mock.calls[0]?.[0] as Record<string, unknown>
     expect(options).toMatchObject({

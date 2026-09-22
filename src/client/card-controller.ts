@@ -5,7 +5,7 @@
  * store the framework binds as the `useDiscordCard` selector hook.
  */
 
-import type { SettingsScope } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { AdapterStatusView } from '../features/adapter-status.js'
 import type { DiscordSettings } from '../settings.js'
 import { DiscordCardForm, type CardManagement, type DiscordCardFace, type DiscordCardState } from './card-form.js'
@@ -15,8 +15,8 @@ export class DiscordCardController {
   private readonly form: DiscordCardForm
   private management: CardManagement | undefined
 
-  constructor(scope: SettingsScope<DiscordSettings>) {
-    this.form = new DiscordCardForm(scope)
+  constructor(form: ConfigForm<DiscordSettings>) {
+    this.form = new DiscordCardForm(form)
   }
 
   /** Attach the token write/connect path once the RPC face is known. */

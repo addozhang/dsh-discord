@@ -1,11 +1,9 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type z from '@deepseek-ai/schemastery'
 
 import {
   DEFAULT_DISCORD_SETTINGS,
   DiscordSettingsSchema,
-  installDiscordSettings,
-  normalizeDiscordSettings,
+  bindDiscordSettings,
   type DiscordSettings,
   } from './settings.js'
 import { installCancellationRoot } from './lifecycle.js'
@@ -61,7 +59,14 @@ export const inject = ['sessionController', 'workspaceController', 'sessionQuery
 
 export type Config = DiscordSettings
 
-export const Config: z<Config> = DiscordSettingsSchema
+/**
+ * The plugin's static Config (0.1.7 profile-backed forms): every field is
+ * volatile, so the Host delivers each as a stable live reference instead of
+ * remounting the fiber on writes. The annotation is deliberately absent —
+ * schemastery's volatile mode types field defaults as `Volatile<T>`, which a
+ * `z<DiscordSettings>` annotation cannot express.
+ */
+export const Config = DiscordSettingsSchema
 
 /**
  * Fixed Milestone 1 Gateway intents: guilds, messages, content. Member data
@@ -90,17 +95,25 @@ function emitLog(ctx: Context, level: 'debug' | 'warn', message: unknown): void 
 export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): void {
   validateHostCapabilities(name => ctx.get(name))
   installCancellationRoot(ctx)
-  let current = normalizeDiscordSettings(config)
   /**
    * Discord-visible copy, re-resolved on every access so a language change
    * on the settings card applies without rebuilding the composition. The
-   * 'auto' preference follows the DSH locale (the `locale` namespace the
-   * Host app registers); non-Chinese locales fall back to English.
+   * 'auto' preference follows the DSH locale — read from the settings forms
+   * describe projection (the 0.1.7 replacement for the retired
+   * `.get(namespace)` service method); non-Chinese locales fall back to
+   * English.
    */
+  const readLocalePreference = (service: unknown): string | undefined => {
+    const describe = (service as { describe?: (options?: { redactSecrets?: boolean }) => { ns: unknown, value: unknown }[] } | undefined)?.describe
+    if (typeof describe !== 'function') return undefined
+    const row = describe.call(service, { redactSecrets: true }).find(entry => entry.ns === 'locale')
+    const preference = (row?.value as { preference?: unknown } | undefined)?.preference
+    return typeof preference === 'string' ? preference : undefined
+  }
   const resolveLanguage = (): 'zh' | 'en' => {
     if (current.language !== 'auto') return current.language
-    const locale = (ctx.get('settings') as { get(namespace: unknown): unknown }).get('locale') as { preference?: string } | undefined
-    return typeof locale?.preference === 'string' && locale.preference.startsWith('zh') ? 'zh' : 'en'
+    const preference = readLocalePreference(ctx.get('settings'))
+    return preference !== undefined && preference.startsWith('zh') ? 'zh' : 'en'
   }
   const copy: CopyTable = new Proxy({} as CopyTable, {
     get: (_target, key) => createCopy(resolveLanguage())[key as keyof CopyTable],
@@ -108,7 +121,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
   // Reassigned once the async composition has built the real registrar.
   let registerCommands: () => Promise<void> = async () => {}
   const onGuildsChanged = (): void => { void registerCommands() }
-  installDiscordSettings(ctx, current, (next) => {
+  const settingsSource = bindDiscordSettings(ctx, config as unknown as Readonly<Record<string, unknown>>, (next) => {
     const guildsChanged = next.allowedGuildIds.join(',') !== current.allowedGuildIds.join(',')
     current = next
     if (guildsChanged) onGuildsChanged()
@@ -118,6 +131,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       allowedGuildCount: current.allowedGuildIds.length,
     })
   })
+  let current = settingsSource.get()
 
   // The settings card's status surface: credential presence seeded now, the
   // Gateway observation fed by the adapter composition as it starts.

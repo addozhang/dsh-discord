@@ -8,7 +8,7 @@
  */
 
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
-import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { AdapterStatusView } from '../features/adapter-status.js'
 import type { DiscordSettings } from '../settings.js'
 import { createLocalSnapshotStore } from './snapshot-store.js'
@@ -151,7 +151,7 @@ export class DiscordCardForm {
   private failed = false
   private status: AdapterStatusPresentation | undefined = undefined
 
-  constructor(private readonly scope: SettingsScope<DiscordSettings>) {
+  constructor(private readonly scope: ConfigForm<DiscordSettings>) {
     this.scope.subscribe(() => { this.publish() })
   }
 
@@ -245,7 +245,7 @@ export class DiscordCardForm {
     return ''
   }
 
-  private snapshot(): SettingsScopeSnapshot<DiscordSettings> {
+  private snapshot(): ConfigFormSnapshot<DiscordSettings> {
     return this.scope.getSnapshot()
   }
 

@@ -29,7 +29,7 @@ function validServices(): Record<string, unknown> {
     sessionQuery: { observeSession: () => {} },
     webServer: {},
     credentials: { resolve: () => {}, describe: () => {}, set: () => {}, unset: () => {} },
-    settings: { installSection: () => {} },
+    settings: { describe: () => {}, update: () => {} },
     storageDomain: { open: () => {} },
     connection: { rpc: { handle: () => () => {} } },
     commands: { execute: () => {} },

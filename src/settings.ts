@@ -3,25 +3,6 @@ import type { Context } from '@deepseek-ai/cordis'
 
 import { DISCORD_SETTINGS_NAMESPACE } from './settings-namespace.js'
 
-/**
- * The 0.1.6 settings provider face this module speaks: the standalone
- * `installSettingsSection` export became the provider's `installSection`
- * method (same register/setSource/watch semantics, same hooks).
- */
-interface SettingsSectionProvider {
-  installSection(
-    owner: Context,
-    ns: typeof DISCORD_SETTINGS_NAMESPACE,
-    schema: z<DiscordSettings>,
-    entry: DiscordSettings,
-    hooks: {
-      validate?: (value: DiscordSettings) => void
-      setSource: (current: () => DiscordSettings) => void
-      onChange: () => void
-    },
-  ): void
-}
-
 export { DISCORD_SETTINGS_NAMESPACE } from './settings-namespace.js'
 
 export type DiscordVerbosity = 'text-only' | 'essential-tools' | 'full-tools'
@@ -89,10 +70,19 @@ export const DEFAULT_DISCORD_SETTINGS: DiscordSettings = Object.freeze({
   permissionSelectOperatorOnly: true,
 })
 
-const discordIdList = z.array(z.string()).default([])
+/**
+ * Every field is volatile (0.1.7 profile-backed forms): values live-update
+ * through stable per-field references without remounting the plugin fiber —
+ * the exact semantics the 0.1.6 `installSection` registration provided.
+ * Snowflake patterns ride the schema so the Host rejects malformed IDs at
+ * write time (parity with the retired validate hook).
+ */
+const DISCORD_SNOWFLAKE = /^\d{17,20}$/u
 
-export const DiscordSettingsSchema: z<DiscordSettings> = z.object({
-  enabled: z.boolean().default(false),
+const discordIdList = z.array(z.string().pattern(DISCORD_SNOWFLAKE)).default([]).volatile()
+
+export const DiscordSettingsSchema = z.object({
+  enabled: z.boolean().default(false).volatile(),
   allowedGuildIds: discordIdList,
   memberUserIds: discordIdList,
   memberRoleIds: discordIdList,
@@ -102,19 +92,17 @@ export const DiscordSettingsSchema: z<DiscordSettings> = z.object({
   deniedRoleIds: discordIdList,
   hostOperatorUserIds: discordIdList,
   defaultVerbosity: z.union(['text-only', 'essential-tools', 'full-tools'] as const)
-    .default('essential-tools'),
-  language: z.union(['auto', 'zh', 'en'] as const).default('auto'),
+    .default('essential-tools').volatile(),
+  language: z.union(['auto', 'zh', 'en'] as const).default('auto').volatile(),
   threadAutoArchiveMinutes: z.union([60, 1440, 4320, 10080] as const)
-    .default(1440),
-  streamUpdateIntervalMs: z.number().step(1).min(250).max(10_000).default(800),
-  typingIntervalMs: z.number().step(1).min(1_000).max(30_000).default(7_000),
-  approvalTimeoutMs: z.number().step(1).min(30_000).max(86_400_000).default(600_000),
-  questionTimeoutMs: z.number().step(1).min(30_000).max(86_400_000).default(1_800_000),
-  modelSelectOperatorOnly: z.boolean().default(false),
-  permissionSelectOperatorOnly: z.boolean().default(true),
+    .default(1440).volatile(),
+  streamUpdateIntervalMs: z.number().step(1).min(250).max(10_000).default(800).volatile(),
+  typingIntervalMs: z.number().step(1).min(1_000).max(30_000).default(7_000).volatile(),
+  approvalTimeoutMs: z.number().step(1).min(30_000).max(86_400_000).default(600_000).volatile(),
+  questionTimeoutMs: z.number().step(1).min(30_000).max(86_400_000).default(1_800_000).volatile(),
+  modelSelectOperatorOnly: z.boolean().default(false).volatile(),
+  permissionSelectOperatorOnly: z.boolean().default(true).volatile(),
 })
-
-const DISCORD_SNOWFLAKE = /^\d{17,20}$/u
 
 const ID_FIELDS = [
   'allowedGuildIds',
@@ -169,23 +157,52 @@ export interface DiscordSettingsSource {
   get(): DiscordSettings
 }
 
-export function installDiscordSettings(
+/**
+ * The 0.1.7 stable config reference: a per-field handle whose `.get()`
+ * returns the latest immutable snapshot (probe-verified on 0.1.7-alpha.1 —
+ * the reference held since mount flips values without any remount).
+ */
+interface VolatileField {
+  get(): unknown
+}
+
+function isVolatileField(value: unknown): value is VolatileField {
+  return typeof value === 'object' && value !== null
+    && typeof (value as { get?: unknown }).get === 'function'
+}
+
+/**
+ * Bind the plugin's volatile Config fields into a whole-settings snapshot
+ * source. Fields arrive as stable references on the 0.1.7 host; plain values
+ * (tests, bare contexts) pass through unchanged. Change notification rides
+ * the Host's `settings/document-updated` event, filtered to this adapter's
+ * namespace — the entry id equals `DISCORD_SETTINGS_NAMESPACE`, which the
+ * cordis patch row fixes.
+ */
+/**
+ * The Host emits `settings/document-updated` (namespace, revision) on every
+ * forms revision bump; the event rides no published type declaration, so
+ * this face pins the slice we consume.
+ */
+interface DocumentUpdatedFace {
+  on(event: 'settings/document-updated', listener: (ns: unknown, revision: number) => void): () => void
+}
+
+export function bindDiscordSettings(
   ctx: Context,
-  entry: DiscordSettings,
+  config: Readonly<Record<string, unknown>>,
   onChange: (value: DiscordSettings) => void,
-): void {
-  let source = (): DiscordSettings => entry
-  const provider = ctx.get('settings') as SettingsSectionProvider | undefined
-  if (provider === undefined || typeof provider.installSection !== 'function') {
-    throw new TypeError('settings provider with installSection is unavailable on this Host')
+): DiscordSettingsSource {
+  const read = (): DiscordSettings => {
+    const raw = {} as Record<string, unknown>
+    for (const key of Object.keys(DEFAULT_DISCORD_SETTINGS)) {
+      const field = config[key]
+      raw[key] = isVolatileField(field) ? field.get() : field
+    }
+    return normalizeDiscordSettings(raw as unknown as DiscordSettings)
   }
-  provider.installSection(ctx, DISCORD_SETTINGS_NAMESPACE, DiscordSettingsSchema, entry, {
-    validate: value => { validateDiscordSettings(normalizeDiscordSettings(value)); },
-    setSource: current => {
-      source = () => normalizeDiscordSettings(current())
-    },
-    onChange: () => {
-      onChange(source())
-    },
+  ;(ctx as unknown as DocumentUpdatedFace).on('settings/document-updated', (ns: unknown) => {
+    if (ns === DISCORD_SETTINGS_NAMESPACE) onChange(read())
   })
+  return { get: read }
 }

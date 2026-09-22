@@ -6,20 +6,20 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { DiscordCardForm } from '../src/client/card-form.js'
-import type { SettingsScope, SettingsScopeSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
+import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 
 type Listener = () => void
 
-function fakeScope(initial: Partial<SettingsScopeSnapshot<Record<string, unknown>>> = {}): {
-  scope: SettingsScope<never>
-  snapshot: SettingsScopeSnapshot<Record<string, unknown>>
+function fakeScope(initial: Partial<ConfigFormSnapshot<Record<string, unknown>>> = {}): {
+  scope: ConfigForm<never>
+  snapshot: ConfigFormSnapshot<Record<string, unknown>>
   listeners: Set<Listener>
   setField: (field: string, value: unknown) => void
   user: Record<string, unknown>
 } {
   const listeners = new Set<Listener>()
   const user: Record<string, unknown> = {}
-  const snapshot: SettingsScopeSnapshot<Record<string, unknown>> = {
+  const snapshot: ConfigFormSnapshot<Record<string, unknown>> = {
     status: 'ready',
     value: {},
     base: {},
@@ -47,7 +47,7 @@ function fakeScope(initial: Partial<SettingsScopeSnapshot<Record<string, unknown
       snapshot.value = next
       return Promise.resolve()
     },
-  } as unknown as SettingsScope<never>
+  } as unknown as ConfigForm<never>
   return {
     scope,
     snapshot,
@@ -133,7 +133,7 @@ describe('DiscordCardForm', () => {
 
   it('keeps drafts and reports failure when the Host does not accept a write', async () => {
     const host = fakeScope()
-    const scope = host.scope as unknown as SettingsScope<never> & {
+    const scope = host.scope as unknown as ConfigForm<never> & {
       set: (field: string, value: unknown) => Promise<void>
     }
     scope.set = vi.fn(() => {

@@ -8,6 +8,18 @@ import {
   validateDiscordSettings,
 } from '../src/settings.js'
 
+/** Resolve through the schema and unwrap volatile references to plain values. */
+function resolveSchema(input: unknown): DiscordSettings {
+  const parsed = (DiscordSettingsSchema as unknown as (value: unknown) => Record<string, unknown>)(input)
+  const out: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(parsed)) {
+    out[key] = typeof value === 'object' && value !== null && typeof (value as { get?: unknown }).get === 'function'
+      ? (value as { get(): unknown }).get()
+      : value
+  }
+  return out as unknown as DiscordSettings
+}
+
 describe('Discord settings', () => {
   it('defaults to a disabled deny-by-default configuration', () => {
     expect(DEFAULT_DISCORD_SETTINGS).toMatchObject({
@@ -54,11 +66,11 @@ describe('Discord settings', () => {
   it('follows the DSH language by default and admits only auto/zh/en', () => {
     expect(DEFAULT_DISCORD_SETTINGS.language).toBe('auto')
 
-    // Schemastery schema nodes resolve by direct call. The call signature's
-    // static input type is the already-parsed DiscordSettings, so the test
-    // goes through an untyped view — Host configs arrive as untyped YAML and
-    // the runtime union/default is exactly what these assertions pin.
-    const resolve = DiscordSettingsSchema as unknown as (input: unknown) => DiscordSettings
+    // Schemastery schema nodes resolve by direct call. Volatile fields come
+    // back as stable references (0.1.7 forms model), so the untyped view
+    // unwraps `.get()` before asserting — exactly what bindDiscordSettings
+    // does against the mounted config.
+    const resolve = resolveSchema
     expect(resolve({}).language).toBe('auto')
     expect(resolve({ language: 'zh' }).language).toBe('zh')
     expect(resolve({ language: 'en' }).language).toBe('en')
@@ -66,7 +78,7 @@ describe('Discord settings', () => {
   })
 
   it('defaults the permission switch to Host operators and admits the loosened flip', () => {
-    const resolve = DiscordSettingsSchema as unknown as (input: unknown) => DiscordSettings
+    const resolve = resolveSchema
     expect(resolve({}).permissionSelectOperatorOnly).toBe(true)
     expect(resolve({ permissionSelectOperatorOnly: false }).permissionSelectOperatorOnly).toBe(false)
   })

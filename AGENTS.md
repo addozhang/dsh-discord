@@ -165,6 +165,67 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
 - 控制频道拒绝、候选 workspace 作用域等行为的判据见
   `session-resume.ts` 与 `index.ts` 的 resumeSession
 
+## 0.1.7-alpha.1 Host 面的事实（2026-09-22 真机核实，本地构建冒烟）
+
+- **settings 服务大改（profile-backed forms 重构）——本仓库唯一破坏点**：
+  `settings` 服务仍在（`SettingsForms extends Service`，`super(ownerContext,
+  'settings')`），但 `installSection` 与 `.get(ns)` **均已删除**。注册模型变为
+  插件静态 `Config` schema（`meta.volatile` 字段成为免重挂载的表单项），
+  `describe()` 直接读活跃 fiber 的 Config；`settings.yaml` 首启被自动导入
+  profile 文档并改名 `.imported`。我们的 `src/settings.ts` fail-fast 守卫与
+  startup 探针在真机上精准触发：
+  `dsh-discord cannot activate (incompatible service(s): settings lacks
+  'installSection')`——迁移方向 = Discord 设置改为插件 Config 声明（待做）
+- 新增 `settingsController` remote（`describe`/`update`/`replace`，全部
+  `redactSecrets: true` 视图）——设置卡片的远侧面，迁移时评估复用
+- `dsh-settings` 导出变化：`SettingsProvider` → `SettingsForms`（default
+  export）；我们仅 type-import `SettingsNamespace`，幸存
+- workspaceController：`baseline()` 一元方法存在但**是 WorkspaceFeed 内部
+  方法、非 `@Remote`**——follow-首帧取基线的绕法仍是正解；新增
+  `initializeDefault`/`delete`/`insertSessionBefore` remote（纯增量）
+- 事件面审计全绿（双层信封 + snapshot 帧不变）；journal V3 迁移
+  （"repair missing turn ends"）对 renderedSeq 水位围栏的影响待全功能真机验证
+- 审计脚本本次真机首跑暴露两类 grep 误报并已修：服务注册模式需容忍接收者
+  参数名（`ctx` vs `ownerContext`）与引号风格；`installSection` 现为显式
+  检查项（CHANGED 语义，迁移完成前持续标记）
+- **本地构建 dsh CLI 的坑**：旧工作树有已删包的僵尸 `lib/`（settings-file）
+  会让 tsdown 解析到死导出；`git clean -xfd -e node_modules` 后又因根包
+  entry glob 解析失败——**重新 clone 即愈**（Node 22 = CI 版本验证通过，
+  `pnpm install --frozen-lockfile && pnpm run build:official`）
+- **冒烟 profile 运维事实**：pnpm 11 的 `allowBuilds` 门会拦 `koffi`（profile
+  的 `pnpm-workspace.yaml` 有脚手架占位提示，设 `koffi: true`）；中断的
+  `plugin add` 留下 `package.json.lock` 僵尸导致下次 atomic-write 超时（删锁
+  重试）；锁恢复后重跑 add **不会**补登记 bundle 列表（按 README 手动登记
+  `dsh.profile.bundles`）；`@deepseek-ai/dsh-web-app` 的 npm `latest` 停在
+  0.0.1-rc.1（死依赖图）——alpha 线必须精确版本号安装；端口被占用用
+  `--port` flag
+
+- **已破案并修复（2026-09-22 二次核查，原"宿主 reload bug"结论改判）：设置写入
+  失败的根因是我们 packaging**——`@deepseek-ai/dsh-settings` 钉在 dependencies
+  里，pnpm 把它连同 `dsh-config-editor`→`dsh-app-boot` 的副本装进 profile
+  node_modules；profile 树的 ConfigEditor 解析到 profile 副本的 app-boot，其
+  模块级 `bootstrapIncludes` WeakMap 永远空 → 一切写入报 `profile reload
+  requires the root Include entry`（宿主双副本插桩实证：CLI 侧 hit、profile
+  侧 MISS）。**修复 = dsh-settings 挪 devDependencies**（我们仅 type-import）
+  后：写入全走 CLI 侧单例、legacy 导入落地、二次 boot 配置生效、adapter
+  RPC 围栏应答——全部真机验证通过。判例：**宿主内部包（settings/config-editor/
+  app-boot 等）绝不进插件 dependencies**；真运行时依赖（storage-domain 树干净
+  仅 zod+schemastery、credentials 仅 dsh-brand）可保留。宿主侧遗留脆弱性
+  （模块级 WeakMap 单例假设 + 按导入位置解析）值得上游反馈，但官方组合
+  不触发
+- **0.1.7 卡片侧事实（2026-09-22 源码核对）**：`settingsScope` 服务已删，
+  替代 `ctx.configForms.get<T>(ns)`（`dsh-client-ui-settings` 客户端注册）；
+  `ConfigForm`/`ConfigFormSnapshot` 与旧 `SettingsScope` 协议同构
+  （getSnapshot/subscribe/set/unset、快照 status/value/user/writable 一致）
+- **0.1.7 volatile 配置模型（2026-09-22 探针实证）**：schemastery ≥3.18.2 的
+  `.volatile()` 字段以 `Volatile<T>` 稳定引用到达 apply 的 config（`.get()`
+  取不可变快照）；宿主原地推送新值、纤维零重挂载；ns = cordis.patch.yml 行
+  `id`（我们 = `dsh-discord`，与存量 settings.yaml 段名天然对齐）；
+  通知 = `settings/document-updated` (ns, revision)（boot 全 ns 洪泛，按 ns
+  过滤）；locale 读 = `settings.describe()` 找 `ns==='locale'` 的
+  `value.preference`；schemastery 类型系统 volatile mode 使字段 default 类型
+  变 `Volatile<T>`——schema 常量不能再标 `z<DiscordSettings>` 注解
+
 ## 测试与联调约定
 
 - 纪律：行为变更先写失败测试（RED→GREEN）；wire 形状走 twin E2E，
@@ -225,8 +286,10 @@ scripts/host-surface-audit.sh --latest            # 审计 stable
 10 inject 服务（+commands、permissionPresets）+ 10 sessionController 方法
 （+resolveAgent）+ 6 workspaceController 方法 +
 2 ask 服务入口 + 5 项权限面检查（execute 签名 / catalog / currentValue view /
-命令注册 / durable 事件）+ 3 settings 导出（+3 已删符号确认未复活）+ 4 client 类型包
-（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = **47 项检查**
+命令注册 / durable 事件）+ 4 settings 面检查（SettingsForms /
+SettingsConflictError / redactSecrets / installSection，+2 已删符号确认未复活）+
+4 client 类型包（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = **49 项检查**
+（0.1.7-alpha.1 真机基线：47 OK + 2 CHANGED——installSection 与 baseline() 虚惊）
 
 ## OpenSpec 工作流
 
