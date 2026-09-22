@@ -29,13 +29,26 @@ No extra process: the adapter is a DSH plugin that mounts straight onto your `ds
 
 ## Requirements
 
-- The [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) `0.1.6-alpha.1` or a compatible newer release, running a web profile. Adapter `0.5.x` uses the 0.1.6 controller services and is not compatible with the former `apiProxy` host surface.
+- The [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh), running a web profile. Match the dsh and adapter channels — see [Versions](#versions).
 - Node.js `^22.19.0 || >=24`
 - A Discord application with a bot user and the **MESSAGE CONTENT** privileged intent enabled (Developer Portal → your application → Bot → Privileged Gateway Intents)
 
+## Versions
+
+Two channels ship in parallel, each pinned to the dsh host surface it was verified against. Pick the adapter and the dsh CLI from the same row:
+
+| Channel | Adapter | dsh CLI | Install |
+|---|---|---|---|
+| **stable** | `0.4.x` — npm `latest` | `0.1.5` — npm `latest` | `dsh plugin --profile web add @addozhang/dsh-discord` |
+| **next** | `0.5.x` — npm `next` | `0.1.6-alpha` — npm `alpha` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
+
+- **The rows do not mix.** Adapter `0.5.x` talks to the 0.1.6 controller services (`sessionController` / `workspaceController` / `sessionQuery`) and will not load on `0.1.5`; adapter `0.4.x` talks to the former `apiProxy` surface, which `0.1.6-alpha` removed. A mismatched pair fails at startup.
+- To switch the dsh CLI line: `npm install -g @deepseek-ai/dsh` (stable) or `npm install -g @deepseek-ai/dsh@alpha` (next).
+- Right after a `next` release, the `@next` spec can resolve to a stale cached version. If the installed copy looks old, install by exact version instead (e.g. `@addozhang/dsh-discord@0.5.0-rc.3`) and verify the `version` field inside the profile's `node_modules`.
+
 ## Install
 
-Install with the dsh CLI — it installs the package into the profile and registers the bundle for you:
+Install with the dsh CLI — it installs the package into the profile and registers the bundle for you. The stable channel is shown below; for the next channel use the `@next` command from the [Versions](#versions) table (`up` / `rm` take the same spec):
 
 ```sh
 dsh plugin --profile web add @addozhang/dsh-discord

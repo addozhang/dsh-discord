@@ -29,13 +29,26 @@
 
 ## 环境要求
 
-- [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh) `0.1.6-alpha.1` 或兼容的更新版本（web profile）。适配器 `0.5.x` 使用 0.1.6 的控制器服务，与旧版 `apiProxy` 宿主面不兼容。
+- [dsh CLI](https://www.npmjs.com/package/@deepseek-ai/dsh)（web profile）。dsh 与适配器的通道需匹配——见[版本支持](#版本支持)。
 - Node.js `^22.19.0 || >=24`
 - 一个 Discord 应用（含 Bot 用户），并在开发者门户启用 **MESSAGE CONTENT** 特权 intent（Developer Portal → 你的应用 → Bot → Privileged Gateway Intents）
 
+## 版本支持
+
+两条通道并行发布，各自钉在经过真机验证的 dsh 宿主面上。适配器与 dsh CLI 请取同一行：
+
+| 通道 | 适配器 | dsh CLI | 安装命令 |
+|---|---|---|---|
+| **stable** | `0.4.x` — npm `latest` | `0.1.5` — npm `latest` | `dsh plugin --profile web add @addozhang/dsh-discord` |
+| **next** | `0.5.x` — npm `next` | `0.1.6-alpha` — npm `alpha` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
+
+- **两行不可混搭。** 适配器 `0.5.x` 使用 0.1.6 的控制器服务（`sessionController` / `workspaceController` / `sessionQuery`），在 `0.1.5` 上无法加载；适配器 `0.4.x` 使用旧版 `apiProxy` 宿主面，而该面已在 `0.1.6-alpha` 中移除。错配会在启动时失败。
+- 切换 dsh CLI 通道：`npm install -g @deepseek-ai/dsh`（stable）或 `npm install -g @deepseek-ai/dsh@alpha`（next 线）。
+- `next` 刚发版后，`@next` 规格可能解析到过期的缓存版本。若装到的版本偏旧，请改用精确版本号安装（如 `@addozhang/dsh-discord@0.5.0-rc.3`），并核对 profile `node_modules` 中的 `version` 字段。
+
 ## 安装
 
-使用 dsh CLI 安装——它会自动把包装进 profile 并注册 bundle：
+使用 dsh CLI 安装——它会自动把包装进 profile 并注册 bundle。下面是 stable 通道；next 通道使用[版本支持](#版本支持)表中的 `@next` 命令（`up` / `rm` 同规格）：
 
 ```sh
 dsh plugin --profile web add @addozhang/dsh-discord
