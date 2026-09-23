@@ -165,7 +165,7 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
 - 控制频道拒绝、候选 workspace 作用域等行为的判据见
   `session-resume.ts` 与 `index.ts` 的 resumeSession
 
-## 0.1.7-alpha.1 Host 面的事实（2026-09-22 真机核实，本地构建冒烟）
+## 0.1.7-alpha.1 Host 面的事实（2026-09-22 真机核实，本地构建冒烟；alpha.2 复验通过——审计 49 OK 零漂移、激活/legacy 导入/二次 boot/RPC 围栏全绿，混合版本场景即本插件 alpha.1 钉版 + alpha.2 宿主亦通过）
 
 - **settings 服务大改（profile-backed forms 重构）——本仓库唯一破坏点**：
   `settings` 服务仍在（`SettingsForms extends Service`，`super(ownerContext,
