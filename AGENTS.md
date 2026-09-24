@@ -20,17 +20,19 @@ pnpm build             # lib + client bundle（client 有独立打包步骤，�
 pnpm pack --pack-destination /tmp
 ```
 
-联调部署（本地构建装进 profile）：
+联调部署（本地构建装进 profile）。**宿主运行期间持有 profile 的
+`package.json.lock`（flock），插件 rm/add 会撞锁——必须先停宿主**：
 
 ```sh
-pnpm pack --pack-destination /tmp
+pnpm build && pnpm pack --pack-destination /tmp
 dsh plugin --profile web rm @addozhang/dsh-discord     # 必须先 rm
 dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
-# 重启 dsh web 后生效；装完 diff 校验安装副本 == tarball（见"已知陷阱"）
+# 重启宿主后生效；装完 diff 校验安装副本 == tarball
 ```
 
-联调观测：`DSH_DISCORD_TRACE=1 dsh web --no-open` 启动，stderr 输出 mux 帧、
-丢弃点与投递结果（默认静默）。
+联调观测：`DSH_DISCORD_TRACE=1` 启动，stderr 输出 mux 帧、丢弃点与投递结果
+（默认静默）。启动形态：`dsh --profile <name> --no-open --port <n>`——
+`dsh web` 里的 `web` 是 **profile 名简写**，`--profile` 给值后不能再跟 app 名。
 
 ## 架构地图
 
@@ -61,170 +63,117 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   不再收养，被删除的绑定频道按用户意图 retire 映射
 - **控制频道（类目下 general）**不承载会话，也不参与 /session resume
 
-## 0.1.6 Host 面的事实（2026-09-18 真机核实，dsh 0.1.6-alpha.1）
+## Host 面事实（0.1.7 线；2026-09-24 rc.1 双矩阵真机核实）
 
-- 宿主接入面 = 三个 cordis 服务（`dsh-host-apiproxy`/`ctx.apiProxy` 已删除）：
-  `sessionController`（prompt/create/list/cancel/updateQueue/selectModel/
-  modelCatalog/follow/control）、`workspaceController`（create/rename/
-  archiveSession/unarchiveSession/insertBefore/**follow**——无 baseline 一元方法，
-  基线是 follow 流首帧 `{type:'baseline', value:{items, archivedSessionIds}}`，
-  本仓库 face 的 `readWorkspaceBaseline` 取首帧即断订）、`sessionQuery`
-  （`observeSession` → `projections.values.modelSelection` = `{lastUsed, next}`
-  视图，/model 的 current 来源）
+### 服务与调用面
+
+- 宿主接入面 = 三个 cordis 服务：`sessionController`（prompt/create/list/cancel/
+  updateQueue/selectModel/modelCatalog/follow/control/resolveAgent）、
+  `workspaceController`（create/rename/archiveSession/unarchiveSession/insertBefore/
+  follow——**基线 = follow 流首帧** `{type:'baseline', value:{…}}`；`baseline()`
+  一元方法存在但是 WorkspaceFeed 内部方法、非 @Remote）、`sessionQuery`
+  （`observeSession` → `projections.values.modelSelection` = `{lastUsed, next}`，
+  /model 的 current 来源）
 - 控制器是**直调**面：plain request 进、plain value 出、业务拒绝是**抛**
   `RemoteError`（`{code, message}`）；`session/` 前缀在 face 层翻译回旧词汇
-  （`session/agent-busy`→`agent-busy`），Discord 文案零变化
-- `session.prompt` 的 `requestId` **必填**（客户端铸造，宿主按其幂等去重）——
-  正好落在本仓库既有 rpcId 纪律上；content parts 仍是 text/image（新增
-  file+receiptId 路径未用）
-- `session.models` 没了：全局无参 `modelCatalog()`（`{default,
-  routableProviders, groups, failures}`）+ 按会话 modelSelection projection
-  组装；`routable:boolean` 由 `routableProviders.includes(current.provider)`
-  推导
-- **服务方法签名逐个核对过（2026-09-18 真机）**：`prompt(request, signal)`
-  signal **必填**（裸 `throwIfAborted`，缺参直接 TypeError→我们的 unknown 路径）；
-  `list(signal)` 与 `control(signal)` 只收 signal（传 `{}` 会把对象当 signal 炸）；
-  `create/attachment/updateQueue/cancel/selectModel(request)` 与
-  `modelCatalog()` 无 signal；`follow(request, signal)` 双参。规则：**signal
-  恒为最后一个参数，且各方法要不要/要不要不了——必须逐个实测**
-- 事件流 = `sessionController.follow({address}, signal)` 按会话 journal 帧，
-  **必须带 `assistantStream: true`**（2026-09-18 alpha.2 真机 A/B 实证）：不带时
-  宿主只推开窗快照、live tail 永不推送（turn 执行期记录全部缺席）；带上后
-  live 帧才开始流动。**两种载体形状**（都真机核实）：
-  - 快照开窗 `{type:'snapshot', records:[{type:'event', event:{type,seq,time,data}}]}`
-    ——双层信封，真正的事件在 `event` 键下（face 层已防御性兼容扁平形状）
-  - live 记录 `{type:'event', event:{type,seq,time,data}}`——**单记录直挂 `event`
-    键、无 `records` 数组**，翻译器两条路径都要认（host-events.ts 的 batch 归一）
-  **snapshot 开窗必须翻译**：turn 常在 prompt 准入与 follow 订阅之间完成，快照
-  是那些记录的唯一载体；按会话 seq 水位去重保证重订阅幂等（`replayHistory`
-  追赶路径从未接线，事实上不存在）+
-  `sessionController.control(signal)` 宿主级队列/投影帧；
-  `src/dsh/host-events.ts` 扇入为旧 LiveFrame 词汇，渲染层零改动
-- **assistant-stream 帧词汇**（`assistantStream: true` 时随 durable 流并推）：
-  `{type:'assistant-stream', frame:{type:'start'|'chunk'|'end', attemptId,
-  revision, index, …}}`；chunk 子型：`block-start`(blockType) / `block-end` /
-  `text-delta`(index,text) / `tool-call-delta`(index,id,name,argumentsDelta) /
-  `finish`(reason) / `usage`。工具调用在 durable `tool/call` 之前就开始流式下发
-- **tool/result 失败标志** = `message.content[0].isError === true`（无顶层
-  `error` 键；rc.2 的顶层形状已不存在）——live.ts `resultFailed` 两条都认
-- **已修（2026-09-19，replay-fence-and-user-input change）：快照重放重复投递答案**
-  （2026-09-18 发现）：thread binding 持久化 `renderedSeq` 渲染水位，`track()` 播种
-  floor、渲染层在 turn/end 围栏回写；旧 binding（无水位）首快照整体抑制。同一
-  change 附带：catch-up/live 的 `user/message` 回显（`source.kind==='user'` 过滤，
-  `discord:` rpcId 仅新 runtime 首窗回显，plugin 注入永不渲染）+ READY 对幸存绑定
-  重跟踪（重启后 web-origin 回合不再渲染进虚空；水位只放行错过的后缀）。真机验证：
-  重启 ×2 零重放、错过后缀精确补投、水位 20→31→42→53 推进。崩溃窗口内 ≤1 turn
-  的有限重复成文接受（宁重复不丢消息）。
-- 审批/提问：waterfall 对**外部插件不可达**（2026-09-18 真机穷尽验证）：profile
-  按 bundle 组装多棵事件树，ask waterfall 只枚举基座树自己的注册表——外部插件
-  的 `ctx.on`、`{global:true}`、根 events 服务、甚至挂在 approval 服务 ctx 上的
-  桥接插件**全都收不到**（只有基座树内的 api-remotes 等收得到）。**受支持做法 =
-  服务边界补丁**：包一层 `ApprovalService.request` / `UserQuestionService.ask`
-  （`installAskServicePatches`）：线程绑定的会话走 Discord 按钮流（askWiring 渲染
-  → 点击 → settle port → 返回 outcome），其余原样透传（web UI 面板不受影响）。
-  真机已验证全链路：claimed → 按钮 → 浏览器点击 → allowed-once → 工具执行落地。
-  `client-response` 信封与 respond RPC 已死；注意补丁路径不写 approval/asked
-  审计事件对（journal 少这对审计，工具侧语义完整）
-- 图片 modality 门语义不变（`inputModalities`/`MODEL_DOES_NOT_SUPPORT_IMAGES`
-  /`DEFAULT_INPUT=["text"]`），错误码改为
-  `RemoteError('session/attachment-invalid')`；settings.yaml 加
-  `input: [text, image]` 的解锁方式依旧有效
-- `session.selectModel` 宿主现在会尝试持久化默认（失败仅 warn）——
-  "不得声称持久化成功"的文案限制可放松
-- **权限预设面（2026-09-19 一次性 profile 真机探针核实）**：dsh-base 配置三档
-  `read-only`/`workspace-write`/`danger-full-access`（沙箱+审批捆绑，部署可自定义表）。
-  读 = `permissionPresets.catalog()` → `{options:[{value,name}]}` +
-  `observeSession` 的 `permissions` 投影 view `{currentValue}`；写 = 宿主唯一认可的
-  `/permission` 命令路径（web 客户端同款 `live.command`）：进程内
-  `sessionController.resolveAgent(sessionId)` → `{agent}`（opaque）→
-  `commands.execute(agent, '/permission <name>', [], signal)` →
-  `{commandId, result:{kind,text}}`（未匹配命令返回 undefined）；命令生命周期自动记
-  `command/run`+`command/done` journal 审计对。切换产生 durable `permission/preset`
-  事件（payload `{preset}`），渲染层据此出系统行
-- `session.list` 行仍无 archived 标记（归档集只在 workspace 基线）；
-  `session.list` 响应仍是 `{items}`，行不再有 `agentPreset`
-- **`ctx.connection.rpc.handle` 对外部插件不可用**（0.1.6 真机三连踩）：
-  它把路由挂到 connection 服务**自己的 ctx** 上，外部调用抛
-  "cannot get property webServer without inject"；包一层 runtime
-  `ctx.inject` 也不行——**已启动插件的 runtime inject 回调永不执行**
-  （静默 no-op，通道 405）。受支持做法 = 自己注册：
-  `ctx.effect(() => ctx.get('webServer').register({kind:'prefix', path,
-  handler}))` + 复用 `connection.requestRejection(req)` 围栏 + 手工复刻
-  channel 信封协议（见 `installAdapterStatusRpc`；endpoint 段模式
+- `session.prompt` 的 `requestId` **必填**（客户端铸造，宿主按其幂等去重）；
+  content parts 仍是 text/image
+- 模型目录 = 全局无参 `modelCatalog()`（`{default, routableProviders, groups,
+  failures}`）+ 按会话 modelSelection projection 组装；`routable` 由
+  `routableProviders.includes(current.provider)` 推导
+- **服务方法签名（逐个真机核实，不许凭类型推导）**：`prompt(request, signal)`
+  signal 必填；`list(signal)` / `control(signal)` 只收 signal（传 `{}` 会炸）；
+  `create/updateQueue/cancel/selectModel(request)` 与 `modelCatalog()` 无 signal；
+  `follow(request, signal)` 双参。规则：signal 恒为最后一个参数
+- `session.list` 行无 archived 标记（归档集只在 workspace 基线）；响应是
+  `{items}`，行无 `agentPreset`
+- **`ctx.connection.rpc.handle` 对外部插件不可用**（路由挂 connection 服务自己的
+  ctx，外部调用抛 inject 错误；runtime `ctx.inject` 对已启动插件是静默 no-op）。
+  受支持做法 = 自己注册：`ctx.effect(() => ctx.get('webServer').register(
+  {kind:'prefix', path, handler}))` + `connection.requestRejection(req)` 围栏 +
+  手工复刻 channel 信封协议（见 `installAdapterStatusRpc`；endpoint 段模式
   `/^[A-Za-z0-9_$.-]+$/`，方法必须等于 endpoint）
-- **启动 profile 必须带 `--profile` 标志**：`cd <profile dir> && dsh web`
-  启动的是**默认 profile** 而非 cwd 的——2026-09-18 排查 405 时被此误导
-  两个回合（web-test 目录里跑的一直是 web）
-- **tool view 策划已从 wire 上消失**：durable 事件无 view 字段，assistant-stream
-  帧只载 LLM 文本增量；Discord 渲染器本地推导（shell 家族取 arguments.command
-  首行经 safeTitle 消毒——`shellCommandTitle`；其余工具退到 allowlist 标签）
-- Discord autocomplete choice 无 description 字段等 Discord wire 事实不变
-- Gateway 断连在 stderr 可见：`[dsh-discord] gateway close: N`（1006=链路
-  异常断开，4000=会话失效强制 re-identify）；重连 + READY reconcile 自愈，
-  断连窗口内 autocomplete 报 "Loading options failed" 属预期
-- 控制频道拒绝、候选 workspace 作用域等行为的判据见
-  `session-resume.ts` 与 `index.ts` 的 resumeSession
 
-## 0.1.7-alpha.1 Host 面的事实（2026-09-22 真机核实，本地构建冒烟；alpha.2 复验通过——审计 49 OK 零漂移、激活/legacy 导入/二次 boot/RPC 围栏全绿，混合版本场景即本插件 alpha.1 钉版 + alpha.2 宿主亦通过）
+### 事件流与渲染围栏
 
-- **settings 服务大改（profile-backed forms 重构）——本仓库唯一破坏点**：
-  `settings` 服务仍在（`SettingsForms extends Service`，`super(ownerContext,
-  'settings')`），但 `installSection` 与 `.get(ns)` **均已删除**。注册模型变为
-  插件静态 `Config` schema（`meta.volatile` 字段成为免重挂载的表单项），
-  `describe()` 直接读活跃 fiber 的 Config；`settings.yaml` 首启被自动导入
-  profile 文档并改名 `.imported`。我们的 `src/settings.ts` fail-fast 守卫与
-  startup 探针在真机上精准触发：
-  `dsh-discord cannot activate (incompatible service(s): settings lacks
-  'installSection')`——迁移方向 = Discord 设置改为插件 Config 声明（待做）
-- 新增 `settingsController` remote（`describe`/`update`/`replace`，全部
-  `redactSecrets: true` 视图）——设置卡片的远侧面，迁移时评估复用
-- `dsh-settings` 导出变化：`SettingsProvider` → `SettingsForms`（default
-  export）；我们仅 type-import `SettingsNamespace`，幸存
-- workspaceController：`baseline()` 一元方法存在但**是 WorkspaceFeed 内部
-  方法、非 `@Remote`**——follow-首帧取基线的绕法仍是正解；新增
-  `initializeDefault`/`delete`/`insertSessionBefore` remote（纯增量）
-- 事件面审计全绿（双层信封 + snapshot 帧不变）；journal V3 迁移
-  （"repair missing turn ends"）对 renderedSeq 水位围栏的影响待全功能真机验证
-- 审计脚本本次真机首跑暴露两类 grep 误报并已修：服务注册模式需容忍接收者
-  参数名（`ctx` vs `ownerContext`）与引号风格；`installSection` 现为显式
-  检查项（CHANGED 语义，迁移完成前持续标记）
-- **本地构建 dsh CLI 的坑**：旧工作树有已删包的僵尸 `lib/`（settings-file）
-  会让 tsdown 解析到死导出；`git clean -xfd -e node_modules` 后又因根包
-  entry glob 解析失败——**重新 clone 即愈**（Node 22 = CI 版本验证通过，
-  `pnpm install --frozen-lockfile && pnpm run build:official`）
-- **冒烟 profile 运维事实**：pnpm 11 的 `allowBuilds` 门会拦 `koffi`（profile
-  的 `pnpm-workspace.yaml` 有脚手架占位提示，设 `koffi: true`）；中断的
-  `plugin add` 留下 `package.json.lock` 僵尸导致下次 atomic-write 超时（删锁
-  重试）；锁恢复后重跑 add **不会**补登记 bundle 列表（按 README 手动登记
-  `dsh.profile.bundles`）；`@deepseek-ai/dsh-web-app` 的 npm `latest` 停在
-  0.0.1-rc.1（死依赖图）——alpha 线必须精确版本号安装；端口被占用用
-  `--port` flag
+- 事件流 = `sessionController.follow({address}, signal)`，**必须带
+  `assistantStream: true`**——不带时宿主只推开窗快照、live tail 永不推送。
+  两种载体都要认：快照开窗 `{type:'snapshot', records:[{type:'event',
+  event:{…}}]}`（双层信封）与 live 单记录 `{type:'event', event:{…}}`
+  （host-events.ts 的 batch 归一）
+- **snapshot 开窗必须翻译**：turn 常在 prompt 准入与 follow 订阅之间完成；
+  按会话 seq 水位去重保证重订阅幂等
+- **渲染水位围栏**：thread binding 持久化 `renderedSeq`，`track()` 播种 floor、
+  渲染层在 turn/end 回写；无水位的旧 binding 首快照整体抑制。重启/reconnect 后
+  零重放 + 错过后缀精确补投（真机多次验证）；回写偶发 `stale-revision` 跳过会
+  自愈；崩溃窗口内 ≤1 turn 的有限重复成文接受（宁重复不丢消息）
+- **user/message 回显**（catch-up/live，`source.kind==='user'` 过滤；`discord:`
+  rpcId 仅新 runtime 首窗回显，plugin 注入永不渲染）——回显的是消息**原文**，
+  含密内容（如 token）会泄漏进线程；脱敏规则待做
+- assistant-stream 帧词汇：`{type:'start'|'chunk'|'end', attemptId, revision,
+  index, …}`；chunk 子型 block-start/block-end/text-delta/tool-call-delta/
+  finish/usage。工具调用在 durable `tool/call` 之前就开始流式下发
+- `tool/result` 失败标志 = `message.content[0].isError === true`（无顶层 error 键）
+- tool view 策划已从 wire 消失：渲染器本地推导（shell 家族取 arguments.command
+  首行经 `shellCommandTitle` 消毒；其余工具退到 allowlist 标签）
+- Gateway 断连 stderr 可见：`[dsh-discord] gateway close: N`（1006=链路异常，
+  4000=会话失效强制 re-identify）；重连 + READY reconcile 自愈，断连窗口内
+  autocomplete 报 "Loading options failed" 属预期
 
-- **已破案并修复（2026-09-22 二次核查，原"宿主 reload bug"结论改判）：设置写入
-  失败的根因是我们 packaging**——`@deepseek-ai/dsh-settings` 钉在 dependencies
-  里，pnpm 把它连同 `dsh-config-editor`→`dsh-app-boot` 的副本装进 profile
-  node_modules；profile 树的 ConfigEditor 解析到 profile 副本的 app-boot，其
-  模块级 `bootstrapIncludes` WeakMap 永远空 → 一切写入报 `profile reload
-  requires the root Include entry`（宿主双副本插桩实证：CLI 侧 hit、profile
-  侧 MISS）。**修复 = dsh-settings 挪 devDependencies**（我们仅 type-import）
-  后：写入全走 CLI 侧单例、legacy 导入落地、二次 boot 配置生效、adapter
-  RPC 围栏应答——全部真机验证通过。判例：**宿主内部包（settings/config-editor/
-  app-boot 等）绝不进插件 dependencies**；真运行时依赖（storage-domain 树干净
-  仅 zod+schemastery、credentials 仅 dsh-brand）可保留。宿主侧遗留脆弱性
-  （模块级 WeakMap 单例假设 + 按导入位置解析）值得上游反馈，但官方组合
-  不触发
-- **0.1.7 卡片侧事实（2026-09-22 源码核对）**：`settingsScope` 服务已删，
-  替代 `ctx.configForms.get<T>(ns)`（`dsh-client-ui-settings` 客户端注册）；
-  `ConfigForm`/`ConfigFormSnapshot` 与旧 `SettingsScope` 协议同构
-  （getSnapshot/subscribe/set/unset、快照 status/value/user/writable 一致）
-- **0.1.7 volatile 配置模型（2026-09-22 探针实证）**：schemastery ≥3.18.2 的
-  `.volatile()` 字段以 `Volatile<T>` 稳定引用到达 apply 的 config（`.get()`
-  取不可变快照）；宿主原地推送新值、纤维零重挂载；ns = cordis.patch.yml 行
-  `id`（我们 = `dsh-discord`，与存量 settings.yaml 段名天然对齐）；
-  通知 = `settings/document-updated` (ns, revision)（boot 全 ns 洪泛，按 ns
-  过滤）；locale 读 = `settings.describe()` 找 `ns==='locale'` 的
-  `value.preference`；schemastery 类型系统 volatile mode 使字段 default 类型
-  变 `Volatile<T>`——schema 常量不能再标 `z<DiscordSettings>` 注解
+### 审批 / 提问 / 权限
+
+- ask waterfall 对**外部插件不可达**（profile 按 bundle 组多棵事件树，只枚举基座
+  树注册表）。受支持做法 = **服务边界补丁**：包一层 `ApprovalService.request` /
+  `UserQuestionService.ask`（`installAskServicePatches`）——线程绑定会话走 Discord
+  按钮流，其余透传（web UI 不受影响）。补丁路径不写 approval/asked 审计对
+- 权限预设三档 `read-only` / `workspace-write` / `danger-full-access`（沙箱+审批
+  捆绑）。读 = `permissionPresets.catalog()` + `observeSession` 的 permissions
+  投影 `{currentValue}`；写 = 宿主唯一认可的 `/permission` 命令路径：
+  `resolveAgent(sessionId)` → `{agent}`（opaque）→ `commands.execute(agent,
+  '/permission <name>', [], signal)`；命令生命周期自动记 `command/run` +
+  `command/done` 审计对，切换产生 durable `permission/preset` 事件（渲染层出系统行）
+- 图片 modality 门：`inputModalities` / `MODEL_DOES_NOT_SUPPORT_IMAGES` /
+  `RemoteError('session/attachment-invalid')`；settings.yaml `input: [text, image]`
+  解锁方式有效
+
+### settings / Config 模型（0.1.7 profile-backed forms）
+
+- 注册模型 = 插件静态 `Config` schema（`meta.volatile` 字段是免重挂载表单项）；
+  `installSection` / `.get(ns)` 已删除；`settings.yaml` 首启自动导入 profile
+  文档并改名 `.imported`；`settingsController` remote（describe/update/replace，
+  redactSecrets 视图）可用
+- 客户端：`ctx.configForms.get<T>(ns)`（`settingsScope` 已删）；`ConfigForm` 与旧
+  SettingsScope 协议同构（getSnapshot/subscribe/set/unset）
+- volatile 语义：schemastery `.volatile()` 字段以 `Volatile<T>` 到达 apply 的
+  config（`.get()` 取不可变快照）；宿主原地推送、纤维零重挂载；ns =
+  cordis.patch.yml 行 `id`（我们 = `dsh-discord`）；通知 =
+  `settings/document-updated` (ns, revision)（boot 全 ns 洪泛，按 ns 过滤）；
+  locale 读 = `settings.describe()` 找 `ns==='locale'` 的 `value.preference`；
+  volatile mode 使字段 default 类型变 `Volatile<T>`——schema 常量不能标
+  `z<DiscordSettings>` 注解
+- **判例：宿主内部包（settings/config-editor/app-boot 等）绝不进插件
+  dependencies**（会装出双副本破坏宿主单例假设）；仅 type-import 的放
+  devDependencies；真运行时依赖（dsh-credentials、dsh-storage-domain）可保留
+
+### 全局态与多 profile（2026-09-24 实测）
+
+- `~/.dsh/sessions`（journal）、`~/.dsh/storages/dsh_discord.json`（三表）、
+  `~/.dsh/.credentials.yaml`（凭据**全局单槽**）跨 profile 共享——profile 只隔离
+  插件树与配置
+- 同机双宿主 + 同 bot token = **gateway 互踢**（后连者顶掉前者）；三表并发写有
+  竞争风险。**单宿主假设**：起验证实例前先确认其它宿主没有 Discord 插件在跑
+- 无效 token 的失败相位：REST 阶段（命令注册）失败时卡片只显示无 hint 的
+  disconnected——invalid-token 判定依赖 gateway close 4004（UX 缺口）
+- rc.1 宿主有**插件精确版本兼容门**：插件 peerDeps 钉 dsh 内部包版本不匹配即
+  禁用 row（官方 alpha 插件在 rc.1 宿主被禁）；本插件无 dsh 内部包 peer，
+  天然免疫；dependencies 自带副本的矩阵继续成立
+- storage-domain 0.1.7-rc.1+ 依赖 schemastery `~3.18.4`——插件 pin 必须对齐
+  （.pnpm 出现两实例 → 声明发射 TS2742）
+
+**验证基线**：2026-09-24 dsh 0.1.7-rc.1——混合矩阵（alpha.1-pin 插件 + rc.1 宿主）
+与同版矩阵（rc.1-pin）双真机通过（卡片/状态 RPC/命令注册与执行/permission 双向
+沙盒切换/ephemeral/流式渲染/零重放/错过后缀补投）；审计 49 OK + 2 已知 CHANGED
+（installSection 时代标记、baseline() 内部方法）零漂移。
 
 ## 测试与联调约定
 
@@ -232,24 +181,36 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   纯逻辑走模块单测
 - twin（discord-digital-twin）**不建模 Discord 表单校验**——nonce 长度这类
   wire 约束 twin 测不出来；wire 契约改动必须真机验证一次
-- twin 的 `waitForMessage` 扫频道全量历史：测试谓词必须跨用例唯一，
-  否则会匹配到早前用例的消息
+- twin 的 `waitForMessage` 扫频道全量历史：测试谓词必须跨用例唯一
 - 失败路径的日志必须可观测：失败形态事件升 warn（默认级别可见）
+
+CDP 驱动真机（rc 级验证要求）：
+
+- Chrome 带 `--remote-debugging-port=9222`；CDP 键盘事件需要页面焦点
+  （`Emulation.setFocusEmulationEnabled` + `Page.bringToFront`）；`Input.insertText`
+  能插入文本但 Discord 斜杠命令检测需逐键 keyDown；命令菜单的过滤与分组标签
+  （dsh 分组）可点击
+- 不要用 DOM API 清空 Slate 编辑器（内部模型脱同步，后续行为诡异）——整页
+  reload 重置
+- Discord 消息列表虚拟化：视口不在直播沿时新消息不进 DOM，读尾部前先滚到底
+- REST 可替代部分 UI 验证：guild commands 列表、频道消息尾读（带 bot token）
 
 ## 已知陷阱（本仓库真实发生过）
 
-- `dsh plugin add` 对同名 tarball 可能是空操作（pnpm "added 0"）——
-  重装必须先 `rm` 再 `add`，并 diff 校验安装副本
-- `dsh plugin add pkg@dist-tag` 可能解析到过期缓存版本（2026-09-19 实踩：
-  刚发布 rc.3 后 `@next` 装成了 alpha.1）——发版后一律用**精确版本号**安装，
-  装完核对 node_modules 里的 version 字段
+- `dsh plugin add` 对同名 tarball 可能是空操作（pnpm "added 0"）——重装必须先
+  `rm` 再 `add`，并 diff 校验安装副本
+- `dsh plugin add pkg@dist-tag` 可能解析到过期缓存版本——发版后一律用**精确
+  版本号**安装，装完核对 node_modules 里的 version 字段
 - compose 后 `lib/` 与源码可能不同步：`pnpm pack` 前必须 `pnpm build`
 - `exactOptionalPropertyTypes` 开启：可选属性不能显式赋 `undefined`
 - eslint：async 函数无 await（桩函数用 `() => Promise.resolve(...)`）、
   `no-unnecessary-condition` 对窄化后的联合类型敏感
-- 部署目标是 `~/.dsh/profiles/web`；`~/.dsh/settings.yaml` 的 `dsh-discord`
-  段是用户设置；凭据在 `~/.dsh/.credentials.yaml`（勿打印）
-- 卸载/排障后清理一次性 profile；`/tmp` 的 tarball 是部署中间产物
+- 冒烟 profile 运维：pnpm 11 `allowBuilds` 门会拦 `koffi`（profile 的
+  pnpm-workspace.yaml 设 `koffi: true`）；中断的 add 留 `package.json.lock`
+  僵尸（删锁重试；重跑 add 不补登记 bundle 列表，按 README 手动登记）；
+  `@deepseek-ai/dsh-web-app` npm `latest` 是死版本——精确版本号安装
+- 部署目标是 `~/.dsh/profiles/web`；凭据在 `~/.dsh/.credentials.yaml`
+  （全局单槽，勿打印）；一次性 profile 用完清理
 
 ## dsh 官方版本升级 playbook
 
@@ -285,11 +246,10 @@ scripts/host-surface-audit.sh --latest            # 审计 stable
 
 10 inject 服务（+commands、permissionPresets）+ 10 sessionController 方法
 （+resolveAgent）+ 6 workspaceController 方法 +
-2 ask 服务入口 + 5 项权限面检查（execute 签名 / catalog / currentValue view /
-命令注册 / durable 事件）+ 4 settings 面检查（SettingsForms /
-SettingsConflictError / redactSecrets / installSection，+2 已删符号确认未复活）+
+2 ask 服务入口 + 5 项权限面检查 + 4 settings 面检查（+2 已删符号确认未复活）+
 4 client 类型包（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = **49 项检查**
-（0.1.7-alpha.1 真机基线：47 OK + 2 CHANGED——installSection 与 baseline() 虚惊）
+（rc.1 基线：49 OK + 2 CHANGED——installSection 时代标记与 baseline() 内部方法，
+均为已知良性）
 
 ## OpenSpec 工作流
 
