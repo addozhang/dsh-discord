@@ -248,8 +248,8 @@ scripts/host-surface-audit.sh --latest            # 审计 stable
 （+resolveAgent）+ 6 workspaceController 方法 +
 2 ask 服务入口 + 5 项权限面检查 + 4 settings 面检查（+2 已删符号确认未复活）+
 4 client 类型包（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = **49 项检查**
-（rc.1 基线：49 OK + 2 CHANGED——installSection 时代标记与 baseline() 内部方法，
-均为已知良性）
+（rc.1 基线全绿；installSection 检查语义已随 Config 迁移完成翻转——缺席=正确，
+回归出现才告警；baseline() 内部一元存在与否均 OK，仅记录形态）
 
 ## OpenSpec 工作流
 

@@ -109,14 +109,15 @@ for m in create rename archiveSession unarchiveSession insertBefore follow; do
   actual=$(check_grep "$WS_DIR" "$m(")
   check "method '$m'" "FOUND" "$actual"
 done
-# baseline must NOT exist as a unary
+# baseline() unary is WorkspaceFeed-internal and NOT @Remote (0.1.7-rc.1
+# carries it, earlier builds don't) — the face uses follow-first-frame
+# either way, so both shapes are fine; recorded for information only.
 if grep -qE "^\tbaseline\(\)" "$WS_DIR/lib/index.js" 2>/dev/null; then
-  echo "  ⚠ baseline() unary exists — face uses follow-first-frame; may simplify"
-  CHANGED=$((CHANGED+1))
+  echo "  ✓ baseline() unary present (WorkspaceFeed-internal, non-@Remote; face uses follow-first-frame)"
 else
-  echo "  ✓ baseline() correctly absent (follow-first-frame model)"
-  OK=$((OK+1))
+  echo "  ✓ baseline() absent (follow-first-frame model)"
 fi
+OK=$((OK+1))
 echo ""
 
 # ── 4. ask services (service-boundary patches) ──────────────────────────────
@@ -173,14 +174,16 @@ for member in describe update; do
     MISSING=$((MISSING+1))
   fi
 done
-# Generational marker: installSection served the 0.1.6 installSection adapter
-# line (0.5.x); its absence marks the Config-driven forms generation.
+# Generational marker, flipped after the Config-driven migration shipped:
+# installSection served the pre-0.1.7 installSection adapter line. Current
+# hosts are Config-driven, so ABSENCE is correct; its RETURN would mean a
+# generation rollback worth investigating.
 if grep -q "installSection" "$SETTINGS_JS" 2>/dev/null; then
-  echo "  ✓ installSection present (0.1.6-generation host; serves adapter 0.5.x)"
-  OK=$((OK+1))
-else
-  echo "  ⚠ installSection absent — Config-driven forms generation (adapter 0.5.x line cannot load; 0.6.x migrated)"
+  echo "  ⚠ installSection present — 0.1.6-generation API returned; current adapter line is Config-driven"
   CHANGED=$((CHANGED+1))
+else
+  echo "  ✓ installSection correctly absent (Config-driven forms generation)"
+  OK=$((OK+1))
 fi
 # removed symbols must STAY removed
 for sym in settingsNamespace installSettingsSection; do
