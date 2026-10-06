@@ -197,6 +197,12 @@ credentials 0.2.0-rc.2 同版矩阵）真机通过（全量激活/卡片/状态 
 （0.1.7-rc.1 基线为 49 OK + 2 已知 CHANGED，接触面零漂移）。0.1.7-rc.1 旧基线
 见 openspec/changes/archive 的 0.1.7-migration。
 
+**0.2.1-alpha.1 冒烟（2026-10-06）**：API 面 51 OK 零漂移，但依赖门把
+`storage-domain@0.2.0-rc.2` 禁用（alpha 内部线已移 0.2.1-alpha.1）→ 同款级联
+pending——矩阵预期行为，不发布；等 dsh 0.2.1 进 rc 时发 `0.6.0-alpha.N`/
+`-rc.N` 配对。alpha 冒烟必须用**全新空 home**（无凭据 → 不连 gateway，避开
+单宿主互踢）。
+
 ## 测试与联调约定
 
 - 纪律：行为变更先写失败测试（RED→GREEN）；wire 形状走 twin E2E，
