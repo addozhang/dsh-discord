@@ -39,11 +39,11 @@
 
 | 通道 | 适配器 | dsh CLI | 安装命令 |
 |---|---|---|---|
-| **stable** | `0.5.0` — npm `latest` | `0.1.7-rc.1` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
-| **next** | `>=0.5.0-rc.4` — npm `next` | `0.1.7-alpha` — npm `alpha` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
+| **next（0.2.0 线）** | `>=0.6.0-rc.1` — npm `next` | `0.2.0-rc.2` — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
+| **stable（0.1.7 线）** | `0.5.0` — npm `latest` | `0.1.7-rc.1` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
 
-- **两行不可混搭。** 适配器 `>=0.5.0-rc.4`（含 `0.5.0`）使用 0.1.7 的 profile-backed settings forms 与控制器服务，在更旧的宿主上无法加载（startup 探针会给出一条可操作的诊断后拒绝激活）；`0.5.0-rc.1`–`rc.3` 对应 dsh `0.1.6-alpha`；适配器 `0.4.x` 使用旧版 `apiProxy` 宿主面（该面已在 `0.1.6-alpha` 中移除）——它仍是 dsh `0.1.5` stable 线的配对，可用精确版本号安装（如 `@addozhang/dsh-discord@0.4.0`）。错配会在启动时失败。
-- 切换 dsh CLI 通道：`npm install -g @deepseek-ai/dsh@next`（0.1.7-rc.1，配适配器 0.5.0）或 `npm install -g @deepseek-ai/dsh@alpha`（0.1.7-alpha 线）。
+- **两行不可混搭。** 适配器 `0.6.x` 携带的运行时依赖（`dsh-storage-domain`/`dsh-credentials`）钉在 dsh `0.2.0` 线——装到 0.1.7 宿主会被宿主的精确版本兼容门禁用（storageDomain 服务缺失，插件保持未激活）；适配器 `0.5.0` 在 0.2.0 宿主上同理反向被禁。适配器 `>=0.5.0-rc.4`（含 `0.5.0`）使用 0.1.7 的 profile-backed settings forms 与控制器服务，在更旧的宿主上无法加载（startup 探针会给出一条可操作的诊断后拒绝激活）；`0.5.0-rc.1`–`rc.3` 对应 dsh `0.1.6-alpha`；适配器 `0.4.x` 使用旧版 `apiProxy` 宿主面（该面已在 `0.1.6-alpha` 中移除）——它仍是 dsh `0.1.5` stable 线的配对，可用精确版本号安装（如 `@addozhang/dsh-discord@0.4.0`）。错配会在启动时失败。
+- 切换 dsh CLI 通道：`npm install -g @deepseek-ai/dsh@latest`（0.2.0-rc.2，配适配器 0.6.0-rc.1）或 `npm install -g @deepseek-ai/dsh@next`（0.1.7-rc.1，配适配器 0.5.0）。
 - `next` 刚发版后，`@next` 规格可能解析到过期的缓存版本。若装到的版本偏旧，请改用精确版本号安装（如 `@addozhang/dsh-discord@0.5.0-rc.4`），并核对 profile `node_modules` 中的 `version` 字段。
 
 ## 安装
