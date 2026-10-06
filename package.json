@@ -1,6 +1,6 @@
 {
   "name": "@addozhang/dsh-discord",
-  "version": "0.5.0",
+  "version": "0.6.0-rc.1",
   "description": "Discord adapter for DeepSeek Harness · DeepSeek Harness 的 Discord 适配器",
   "license": "MIT",
   "type": "module",
@@ -56,12 +56,12 @@
     "@deepseek-ai/cordis": "^4.0.3"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.3",
-    "@deepseek-ai/dsh-client-store": "0.1.7-rc.1",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.1.7-rc.1",
-    "@deepseek-ai/dsh-client-ui-settings": "0.1.7-rc.1",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.7-rc.1",
-    "@deepseek-ai/dsh-settings": "0.1.7-rc.1",
+    "@deepseek-ai/cordis": "4.0.4",
+    "@deepseek-ai/dsh-client-store": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-settings": "0.2.0-rc.2",
     "@eslint/js": "9.39.1",
     "@types/node": "24.10.1",
     "@types/react": "18.3.1",
@@ -76,8 +76,8 @@
     "vitest": "4.1.11"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-credentials": "0.1.7-rc.1",
-    "@deepseek-ai/dsh-storage-domain": "0.1.7-rc.1",
+    "@deepseek-ai/dsh-credentials": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-storage-domain": "0.2.0-rc.2",
     "@deepseek-ai/schemastery": "3.18.4",
     "zod": "^4.4.3"
   },
