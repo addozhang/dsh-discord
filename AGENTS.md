@@ -240,6 +240,34 @@ CDP 驱动真机（rc 级验证要求）：
 - 部署目标是 `~/.dsh/profiles/web`；凭据在 `~/.dsh/.credentials.yaml`
   （全局单槽，勿打印）；一次性 profile 用完清理
 
+### Desktop 形态（2026-10-06 实测本机 /Applications/DeepSeek Harness.app）
+
+- Desktop = Electron 壳（`app.asar` 内嵌 dsh 核心 + web app）+ `Resources/runtime`
+  工具链（node/pnpm/python，boot 时装进 `~/.dsh/dsh-runtimes/dsh-primary-runtime`）。
+  `desktop-host` 直接 `import { runProfile } from '@deepseek-ai/dsh/profile-boot'`——
+  **与 CLI 完全同一条 profile-boot 管线**，固定启 `~/.dsh/profiles/desktop`
+- **App 版本号 == 内嵌 dsh 核心版本**（monorepo 同 tag 发版；本机 0.1.7-rc.2 =
+  核心 0.1.7-rc.2）→ 兼容性判断直接按 desktop 版本对照适配器矩阵，无需拆包
+- 不走 npm（`@deepseek-ai/dsh-desktop` E404）；分发 = electron-updater generic
+  feed（`https://download.deepseek.com/dsh-desk/feeds/<plat>/`，channel nightly）
+  + 下载页。**auto-update 会静默换核心线**——desktop 用户可能在 App 更新后
+  突然撞依赖门（表现为适配器行 pending），README 配对表是唯一防线
+- 插件安装面不变：`dsh plugin --profile desktop add …`（desktop-host cli.ts
+  即"带 Desktop 打包包管理器的普通 CLI"）；desktop profile 的 bundle 组成与
+  web 相同（dsh-base + dsh-web-app + 插件）
+- **Desktop 验证法**（desktop 发新版后）：
+  1. 读版本：`plutil -p '/Applications/DeepSeek Harness.app/Contents/Info.plist'
+     | grep ShortVersion` → 对照矩阵选适配器线（0.1.7→0.5.x，0.2.0→0.6.x）
+  2. API 面照跑 `host-surface-audit.sh <同版本号>`——desktop 核心就是同名
+     npm 包，审计直接适用
+  3. 冒烟：desktop profile 装对应适配器 → `open -a 'DeepSeek Harness' --args
+     --remote-debugging-port=9223`（Electron 吃 Chrome 开关）→ **同一套 CDP
+     脚本**驱动桌面窗口验证卡片/设置表单（窗口即 web app）；gateway/命令走
+     REST + trace 同 CLI 流程
+  4. **单宿主红线加倍**：desktop profile 与 web profile 同用 `~/.dsh`（同凭据
+     槽、同三表）——两个 profile 同时装本插件 + 同 token = gateway 互踢 +
+     三表并发写。验证时只允许一个 profile 启用插件
+
 ## dsh 官方版本升级 playbook
 
 ### 检测（每次 dsh 发版后 30 秒）
