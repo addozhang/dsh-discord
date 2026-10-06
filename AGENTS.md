@@ -63,7 +63,7 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   不再收养，被删除的绑定频道按用户意图 retire 映射
 - **控制频道（类目下 general）**不承载会话，也不参与 /session resume
 
-## Host 面事实（0.1.7 线；2026-09-24 rc.1 双矩阵真机核实）
+## Host 面事实（0.2.0-rc.2 线；2026-10-06 真机核实；0.1.7-rc.1 判例一并保留）
 
 ### 服务与调用面
 
@@ -164,16 +164,38 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   竞争风险。**单宿主假设**：起验证实例前先确认其它宿主没有 Discord 插件在跑
 - 无效 token 的失败相位：REST 阶段（命令注册）失败时卡片只显示无 hint 的
   disconnected——invalid-token 判定依赖 gateway close 4004（UX 缺口）
-- rc.1 宿主有**插件精确版本兼容门**：插件 peerDeps 钉 dsh 内部包版本不匹配即
-  禁用 row（官方 alpha 插件在 rc.1 宿主被禁）；本插件无 dsh 内部包 peer，
-  天然免疫；dependencies 自带副本的矩阵继续成立
-- storage-domain 0.1.7-rc.1+ 依赖 schemastery `~3.18.4`——插件 pin 必须对齐
-  （.pnpm 出现两实例 → 声明发射 TS2742）
+- rc.1+ 宿主有**插件精确版本兼容门**：插件 peerDeps 钉 dsh 内部包版本不匹配即
+  禁用 row。0.2.0 判例（2026-10-06）：本插件 dependencies 自带的
+  `dsh-storage-domain@0.1.7-rc.1` 在 0.2.0-rc.2 宿主上被门禁 → `storageDomain`
+  服务缺失 → workspace/sessionController 级联 pending，插件永不激活（startError
+  不会出现——是依赖行先死）。**适配器依赖线必须与宿主线同版矩阵**；0.6.x 钉
+  0.2.0-rc.2，0.5.x 钉 0.1.7-rc.1，反向混搭同样被禁
+- storage-domain 依赖 schemastery `~3.18.4`——插件 pin 必须对齐
+  （.pnpm 出现两实例 → 声明发射 TS2742）；0.1.7→0.2.0 的 storage-domain 与
+  dsh-credentials **lib 代码逐字节相同**，唯一差异是 peer pin——跨线 bump 是零
+  API 风险操作（diff 两个 npm tarball 即可证明）
+- 0.2.0 宿主会**主动结束 session follow 流**（命令交互后 `follow-end
+  aborted=false`，0.1.7 未观察到）：插件 re-arm 重订阅 → snapshot 开窗按
+  renderedSeq 水位补投后缀 → turn 后的非 turn 行（如 permission 系统行）会
+  重复渲染一次（turn 内容有持久化水位保护不重放）。属"宁重复不丢消息"已接受
+  类别；重启后快照不再追加重复
+- npm 隔离前缀装 dsh 时，目录里**必须先有 package.json**（`npm init -y`）——
+  否则 npm 向上找 monorepo 根的 `workspace:` 协议依赖报 EUNSUPPORTEDPROTOCOL；
+  或直接装到 /tmp 下的独立目录（审计脚本就是这么做的）
+- CDP 测 Discord **ephemeral 回复不跨标签会话**：新开标签/刷新后旧的 ephemeral
+  消息不可见（客户端本地态）。验证含按钮的 ephemeral 流必须命令→确认在同一
+  页面会话内完成
+- bot token 经聊天/剪贴板转写**会损坏**（实测首段末字符 N↔M 漂移 + secret 段
+  缺字符，REST 401）；可靠路径 = 开发者门户 Reset（需 MFA）后**程序化从页面
+  DOM 读出**直接落凭据文件。首段 base64 解码应等于 application id，可作快速
+  自检
 
-**验证基线**：2026-09-24 dsh 0.1.7-rc.1——混合矩阵（alpha.1-pin 插件 + rc.1 宿主）
-与同版矩阵（rc.1-pin）双真机通过（卡片/状态 RPC/命令注册与执行/permission 双向
-沙盒切换/ephemeral/流式渲染/零重放/错过后缀补投）；审计 49 OK + 2 已知 CHANGED
-（installSection 时代标记、baseline() 内部方法）零漂移。
+**验证基线**：2026-10-06 dsh 0.2.0-rc.2——适配器 0.6.0-rc.1（storage-domain/
+credentials 0.2.0-rc.2 同版矩阵）真机通过（全量激活/卡片/状态 RPC/8 命令注册
+与执行/project bind+确认流/@mention 会话+流式渲染+finalize/permission 双向
+切换+持久系统行/model show/零重放+后缀补投/guild forget）；审计 **51 OK 全绿**
+（0.1.7-rc.1 基线为 49 OK + 2 已知 CHANGED，接触面零漂移）。0.1.7-rc.1 旧基线
+见 openspec/changes/archive 的 0.1.7-migration。
 
 ## 测试与联调约定
 
@@ -247,9 +269,10 @@ scripts/host-surface-audit.sh --latest            # 审计 stable
 10 inject 服务（+commands、permissionPresets）+ 10 sessionController 方法
 （+resolveAgent）+ 6 workspaceController 方法 +
 2 ask 服务入口 + 5 项权限面检查 + 4 settings 面检查（+2 已删符号确认未复活）+
-4 client 类型包（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = **49 项检查**
-（rc.1 基线全绿；installSection 检查语义已随 Config 迁移完成翻转——缺席=正确，
-回归出现才告警；baseline() 内部一元存在与否均 OK，仅记录形态）
+4 client 类型包（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = 当前
+**51 项检查**（脚本随迁移增补；0.2.0-rc.2 基线全绿；installSection
+检查语义已随 Config 迁移完成翻转——缺席=正确，回归出现才告警；baseline()
+内部一元存在与否均 OK，仅记录形态）
 
 ## OpenSpec 工作流
 
