@@ -26,7 +26,6 @@ function fakeScope(initial: Partial<ConfigFormSnapshot<Record<string, unknown>>>
     user,
     revision: 1,
     writable: true,
-    mode: 'host',
     ...initial,
   }
   const scope = {
