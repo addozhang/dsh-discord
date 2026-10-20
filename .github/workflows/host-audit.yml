@@ -6,7 +6,7 @@ name: Host surface audit
 # archaeology session into a CI notification.
 #
 # The audit script installs the target dsh release into a temp dir and greps
-# 39 touchpoints (see AGENTS.md "dsh 官方版本升级 playbook" for the full
+# 51 touchpoints (see AGENTS.md "dsh 官方版本升级 playbook" for the full
 # inventory). Exit 1 opens an issue naming what to fix.
 
 on:

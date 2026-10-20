@@ -36,7 +36,8 @@ if [[ ! -d "$DEEPSEEK_DIR" ]]; then
   exit 1
 fi
 
-echo "Auditing touchpoints against $(node -e "console.log(require('$WORK_DIR/node_modules/@deepseek-ai/dsh/package.json').version)") …"
+HOST_VER="$(node -e "console.log(require('$WORK_DIR/node_modules/@deepseek-ai/dsh/package.json').version)")"
+echo "Auditing touchpoints against $HOST_VER …"
 echo ""
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -199,7 +200,8 @@ echo ""
 
 # ── 6. client type packages ─────────────────────────────────────────────────
 echo "── 6. Client type packages ──"
-for pkg in dsh-client-ui-settings dsh-client-ui-slots dsh-client-ui-renderer; do
+# settings + renderer are runtime deps of dsh-web-app — they must sit in the tree.
+for pkg in dsh-client-ui-settings dsh-client-ui-renderer; do
   if [[ -d "$DEEPSEEK_DIR/$pkg" ]]; then
     echo "  ✓ package '$pkg'"
     OK=$((OK+1))
@@ -208,6 +210,36 @@ for pkg in dsh-client-ui-settings dsh-client-ui-slots dsh-client-ui-renderer; do
     MISSING=$((MISSING+1))
   fi
 done
+# dsh-client-ui-slots flipped at 0.2.1: it left the host install tree (only a
+# type-chain devDependency of dsh-client-ui-settings now) but stays published.
+# Correct state on 0.2.1+: absent from the tree, present on the registry at the
+# audited line. The plugin type-imports it from devDependencies, never runtime.
+# Pre-0.2.1 hosts keep the old semantics (tree presence = OK).
+HOST_CORE="$(echo "$HOST_VER" | sed 's/-.*$//')"
+SLOTS_TREE="present"; SLOTS_REG="NOT_FOUND"
+[[ -d "$DEEPSEEK_DIR/dsh-client-ui-slots" ]] || SLOTS_TREE="absent"
+SLOTS_REG=$(npm view "@deepseek-ai/dsh-client-ui-slots@$VERSION" version 2>/dev/null || echo "NOT_FOUND")
+NEW_SEMANTICS=$(printf '%s\n0.2.1\n' "$HOST_CORE" | sort -V | head -1)
+if [[ "$NEW_SEMANTICS" == "0.2.1" ]]; then
+  if [[ "$SLOTS_TREE" == "absent" && "$SLOTS_REG" != "NOT_FOUND" ]]; then
+    echo "  ✓ package 'dsh-client-ui-slots' correctly absent from tree (type-chain only; registry: $SLOTS_REG)"
+    OK=$((OK+1))
+  elif [[ "$SLOTS_TREE" == "present" ]]; then
+    echo "  ⚠ package 'dsh-client-ui-slots' re-appeared in host tree (0.2.1+ expectation: type-chain devDep only)"
+    CHANGED=$((CHANGED+1))
+  else
+    echo "  ✗ package 'dsh-client-ui-slots' — MISSING from registry at $VERSION (plugin type-import would break)"
+    MISSING=$((MISSING+1))
+  fi
+else
+  if [[ "$SLOTS_TREE" == "present" ]]; then
+    echo "  ✓ package 'dsh-client-ui-slots' (pre-0.2.1 tree semantics)"
+    OK=$((OK+1))
+  else
+    echo "  ✗ package 'dsh-client-ui-slots' — MISSING"
+    MISSING=$((MISSING+1))
+  fi
+fi
 # dsh-client-store is published separately (not a dsh dependency) — check the registry
 STORE_VER=$(npm view "@deepseek-ai/dsh-client-store" version 2>/dev/null || echo "NOT_FOUND")
 if [[ "$STORE_VER" != "NOT_FOUND" ]]; then
