@@ -168,12 +168,13 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   禁用 row。0.2.0 判例（2026-10-06）：本插件 dependencies 自带的
   `dsh-storage-domain@0.1.7-rc.1` 在 0.2.0-rc.2 宿主上被门禁 → `storageDomain`
   服务缺失 → workspace/sessionController 级联 pending，插件永不激活（startError
-  不会出现——是依赖行先死）。**适配器依赖线必须与宿主线同版矩阵**；0.6.x 钉
-  0.2.0-rc.2，0.5.x 钉 0.1.7-rc.1，反向混搭同样被禁
-- storage-domain 依赖 schemastery `~3.18.4`——插件 pin 必须对齐
-  （.pnpm 出现两实例 → 声明发射 TS2742）；0.1.7→0.2.0 的 storage-domain 与
+  不会出现——是依赖行先死）。**适配器依赖线必须与宿主线同版矩阵**；0.6.1+ 钉
+  0.2.1 线，0.6.0 钉 0.2.0-rc.2，0.5.x 钉 0.1.7-rc.1，反向混搭同样被禁
+- storage-domain 依赖 schemastery `~3.18.4`（0.2.1 线起 `~3.18.5`）——插件 pin
+  必须对齐（.pnpm 出现两实例 → 声明发射 TS2742）；0.1.7→0.2.0 的 storage-domain 与
   dsh-credentials **lib 代码逐字节相同**，唯一差异是 peer pin——跨线 bump 是零
-  API 风险操作（diff 两个 npm tarball 即可证明）
+  API 风险操作（diff 两个 npm tarball 即可证明）。0.2.0→0.2.1 不再逐字节相同但
+  同为低风险（见下方 0.2.1 审计段）
 - 0.2.0 宿主会**主动结束 session follow 流**（命令交互后 `follow-end
   aborted=false`，0.1.7 未观察到）：插件 re-arm 重订阅 → snapshot 开窗按
   renderedSeq 水位补投后缀 → turn 后的非 turn 行（如 permission 系统行）会
@@ -202,6 +203,60 @@ credentials 0.2.0-rc.2 同版矩阵）真机通过（全量激活/卡片/状态 
 pending——矩阵预期行为，不发布；等 dsh 0.2.1 进 rc 时发 `0.6.0-alpha.N`/
 `-rc.N` 配对。alpha 冒烟必须用**全新空 home**（无凭据 → 不连 gateway，避开
 单宿主互踢）。
+
+**0.2.1-rc.2 审计（2026-10-18）**：dist-tags 三线齐动（latest=next=
+0.2.1-rc.2，alpha=0.2.1-alpha.5）。审计 **51 OK 全绿**，但一项检查语义已翻转：
+`dsh-client-ui-slots` 自 0.2.1 起**离开宿主安装树**（降为 dsh-client-ui-settings
+的 type-chain devDependency，不再传递安装），包本身仍发布（0.2.1-rc.2 在册）。
+插件只用其类型（`LocaleNamespaceMap` 增补 + `InjectFace`/`PropsLocale`/
+`PropsRuntime`/`TranslateNS`），全部仍在且纯增量（`inline?: true`、
+`KeyedStandardSource` 可选 member 参）——零代码影响；审计脚本已按版本感知翻转
+（≥0.2.1 缺席=正确，查 registry 在册）。依赖矩阵 diff（0.2.0-rc.2→0.2.1-rc.2）：
+
+- storage-domain：核心 API（open/表句柄/domain/changed）不变，仅文档注释；peer
+  → dsh-storage 0.2.1-rc.2 + cordis ~4.0.5，deps → schemastery ~3.18.5（**插件
+  pin 必须 3.18.4→3.18.5**）+ zod 钉 4.4.3；`./invariant` 导出删除（插件从未用）
+- credentials：**语义变化——存储值优先于环境变量**：`set()` 不再因 env 遮蔽而
+  拒绝（消除 token 保存的一个失败模式，利好）、`unset()` 后 env 回退重新生效；
+  `./invariant` 同删；describe/resolve 面不变，插件 `describeDiscordCredential`
+  的 resolve 探针逻辑不受影响
+- settings（type 面删除）：`ConfigFormSnapshot.mode`、memory 持久化路径、
+  mirror `unavailable` 终态全删——grep 证实插件零引用
+- 宿主树内 peer 就位：dsh-storage / dsh-brand 均 0.2.1-rc.2；dsh-invariants
+  已从宿主树消失（两包 peer 均已弃用）
+- **0.6.1-rc.1 发布配方**：dependencies {dsh-credentials, dsh-storage-domain}
+  → 0.2.1-rc.2；devDependencies {cordis→4.0.5, dsh-client-store,
+  dsh-client-ui-renderer, dsh-client-ui-settings, dsh-client-ui-slots,
+  dsh-settings} → 0.2.1-rc.2；schemastery → 3.18.5；然后全功能真机验证（CDP）
+
+**验证基线（0.2.1-rc.2 线，2026-10-20 真机通过）**：本地构建（deps 0.2.1-rc.2 矩阵）
+在隔离 CLI + 一次性 profile `web-021rc2` 上全量通过——插件 running 无 pending、
+设置卡片（**Settings → Discord section**，非 Plugins 列表页）含 Connected 状态/
+guild 配置/auto-archive/language、adapter.status RPC、8 命令注册与执行
+（/guild forget 完整确认流）、/project bind（autocomplete→Confirm bind→commit，
+workspace 绑定 #tmp）、@mention 会话创建+projection 流+回复渲染。764/764 测试绿。
+typecheck 唯一触点 = 测试 fixture 的 `mode` 字段（settings type 面删除，src 零改动）。
+
+**新判例（2026-10-20 验证踩出）**：
+
+- **token 聊天转写连首段都会漂**：MTU0↔MTQ0（app id 首位数字 5↔4）两次 401；
+  secret 段形状不能做有效性判据（新版就是 38 字符）。**先 REST users/@me 验证再落盘**；
+  可靠路径不变：门户 Reset 后从页面 DOM 读出（`/tmp/portal-token-read2.mjs` 模式：
+  通用 token 正则 + REST 200 + guild 成员校验后才写）
+- **隔离 CLI 的新 profile 会从共享 hoisted 根解析旧线 bundles**（`~/.dsh/profiles/
+  node_modules` 全 0.2.0-rc.2）→ 混合树假象。干净线做法：profile dependencies 显式
+  钉 `dsh-base`/`dsh-web-app` 精确版本，pnpm 把冲突版本落 profile 本地
+- pnpm 11 `allowBuilds`：install 后 workspace yaml 自动生成占位（"set this to true
+  or false"），koffi/node-pty/protobufjs/dsh-subprocess-local/@google/genai 全设 true
+  重装；**卡死形态**（0 CPU 无子进程）= `rm -rf node_modules` 重装即愈
+- **同 token 双客户端抢 gateway 事件**：bot token 给错（opencode 的 token）时，
+  opencode serve 与适配器互踢事件流——表现是命令注册成功但 interaction 永远
+  "The application did not respond"。先核对 `users/@me` 的 bot 身份再查别处
+- CDP 细节：开发者门户 tab 也在 discord.com 域——锚定 `discord.com/channels/`；
+  旧 ephemeral 消息的按钮（"Confirm forget"）在页面会话内一直可点——确认按钮
+  必须按精确文案匹配（"Confirm bind"）；mention 自动补全行是 `[role=option]`，
+  `^dsh` 前缀匹配（`\bdsh\b` 会因 "dshdsh#0905" 无词边界而漏）；`<@&id>` = 角色
+  mention（@DSH 是角色不是 bot），REST 拉原始消息看 mentions 数组是权威判定
 
 ## 测试与联调约定
 
@@ -257,7 +312,8 @@ CDP 驱动真机（rc 级验证要求）：
   web 相同（dsh-base + dsh-web-app + 插件）
 - **Desktop 验证法**（desktop 发新版后）：
   1. 读版本：`plutil -p '/Applications/DeepSeek Harness.app/Contents/Info.plist'
-     | grep ShortVersion` → 对照矩阵选适配器线（0.1.7→0.5.x，0.2.0→0.6.x）
+     | grep ShortVersion` → 对照矩阵选适配器线（0.1.7→0.5.x，0.2.0→0.6.0，
+     0.2.1→0.6.1+）
   2. API 面照跑 `host-surface-audit.sh <同版本号>`——desktop 核心就是同名
      npm 包，审计直接适用
   3. 冒烟：desktop profile 装对应适配器 → `open -a 'DeepSeek Harness' --args
@@ -304,9 +360,10 @@ scripts/host-surface-audit.sh --latest            # 审计 stable
 （+resolveAgent）+ 6 workspaceController 方法 +
 2 ask 服务入口 + 5 项权限面检查 + 4 settings 面检查（+2 已删符号确认未复活）+
 4 client 类型包（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = 当前
-**51 项检查**（脚本随迁移增补；0.2.0-rc.2 基线全绿；installSection
-检查语义已随 Config 迁移完成翻转——缺席=正确，回归出现才告警；baseline()
-内部一元存在与否均 OK，仅记录形态）
+**51 项检查**（脚本随迁移增补；0.2.1-rc.2 基线全绿；installSection
+检查语义已随 Config 迁移完成翻转——缺席=正确，回归出现才告警；dsh-client-ui-slots
+检查语义已随 0.2.1 翻转——宿主树缺席=正确、registry 在册为准，脚本按宿主版本
+感知切换新旧语义；baseline() 内部一元存在与否均 OK，仅记录形态）
 
 ## OpenSpec 工作流
 
