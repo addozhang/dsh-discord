@@ -1245,6 +1245,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         nonText: copy.userInputNonText,
         truncated: copy.userInputTruncated,
       }),
+      // Echo-redaction seam (review D4, decision A): identity until the
+      // redaction policy lands — the hook is the single place it will
+      // occupy.
+      echoRedact: text => text,
       permissionLineCopy: () => ({ line: presetKey => copy.permissionSystemLine(permissionPresetLabel(presetKey, copy)) }),
       onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
       onTurnEnded: (sessionId, info) => {

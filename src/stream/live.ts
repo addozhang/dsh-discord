@@ -99,6 +99,12 @@ export interface LiveRenderDeps {
    */
   userEchoCopy?: () => { label: string; nonText: string; truncated: string }
   /**
+   * Redaction seam for the user-input echo (review D4, decision A):
+   * identity in production until the policy lands; tests can inject a
+   * filter to pin that echoed text passes through it.
+   */
+  echoRedact?: (text: string) => string
+  /**
    * Localized permission system-line copy, resolved live (language can
    * change). Unset: permission/preset records never render (16.62).
    */
@@ -519,7 +525,11 @@ export function startLiveRender(deps: LiveRenderDeps): {
     if (kind !== 'user') return
     const fromDiscord = typeof rpcId === 'string' && rpcId.startsWith('discord:')
     if (fromDiscord && (event.carrier === 'live' || runtime.caughtUp)) return
-    const text = userTextParts(data['content'])
+    // Redaction seam (review D4, decision A): the echo renders the user's
+    // ORIGINAL text, so a secret pasted into a web-UI prompt would persist
+    // into Discord channel history. The seam is identity today; when the
+    // redaction policy lands it has exactly one hook to occupy.
+    const text = deps.echoRedact !== undefined ? deps.echoRedact(userTextParts(data['content'])) : userTextParts(data['content'])
     const body = text === ''
       ? copy.nonText
       : text.length <= USER_ECHO_MAX

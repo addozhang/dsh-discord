@@ -88,6 +88,8 @@ async function drive(frames: LiveFrame[], options: {
   /** Test-controlled delivery for interleaving races (16.39). */
   delivery?: LiveDeliveryPort
   /** Progress-phase copy provider (production always supplies one). */
+  /** Redaction seam for the user-input echo (D4). */
+  echoRedact?: (text: string) => string
   progressCopy?: () => { thinking: string; thinkingStep: (step: number) => string; writing: string; approvalWait: string; turnSummary: (total: number, failed: number, breakdown: string) => string }
   /** User-echo copy provider (production always supplies one). */
   userEchoCopy?: () => { label: string; nonText: string; truncated: string }
@@ -119,6 +121,7 @@ async function drive(frames: LiveFrame[], options: {
     ...(options.threadName === undefined ? {} : { threadName: options.threadName }),
     ...(options.progressCopy === undefined ? {} : { progressCopy: options.progressCopy }),
     ...(options.userEchoCopy === undefined ? {} : { userEchoCopy: options.userEchoCopy }),
+    ...(options.echoRedact === undefined ? {} : { echoRedact: options.echoRedact }),
     ...(options.permissionLineCopy === undefined ? {} : { permissionLineCopy: options.permissionLineCopy }),
   })
   await gate
@@ -126,6 +129,21 @@ async function drive(frames: LiveFrame[], options: {
   live.dispose()
   return calls
 }
+
+describe('user-input echo redaction seam (D4)', () => {
+  it('passes the echoed original text through the seam', async () => {
+    const calls = await drive([
+      userMessage('deploy with token sk-secret123 now', { carrier: 'snapshot', seq: 8 }),
+    ], {
+      threadForSession: () => 'thread-1',
+      userEchoCopy: () => ({ label: '💬 Input', nonText: '(non-text message)', truncated: '(truncated)' }),
+      echoRedact: text => text.replaceAll('sk-secret123', 'sk-***'),
+    })
+    const echo = calls.find(call => call.kind === 'send' && call.content?.includes('💬 Input'))
+    expect(echo?.content).toContain('sk-***')
+    expect(echo?.content).not.toContain('sk-secret123')
+  })
+})
 
 describe('live render', () => {
   it('streams one head answer message and edits it with the latest accumulated text', async () => {
