@@ -34,7 +34,6 @@ function validServices(): Record<string, unknown> {
     connection: { rpc: { handle: () => () => {} }, requestRejection: () => {} },
     commands: { execute: () => {} },
     permissionPresets: { catalog: () => {} },
-    approval: { request: () => {} },
   }
 }
 
@@ -54,9 +53,6 @@ describe('host capability boundary', () => {
       // 0.1.6-alpha.2.
       'commands',
       'permissionPresets',
-      // The ask service patches resolve the approval service directly
-      // (review E5): its absence must fail at the startup boundary.
-      'approval',
     ])
   })
 

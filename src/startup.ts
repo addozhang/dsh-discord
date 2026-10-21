@@ -20,10 +20,6 @@ export const REQUIRED_HOST_SERVICES = [
   // permission-preset catalog (both ship in dsh-base).
   'commands',
   'permissionPresets',
-  // The ask service patches (16.53) resolve this directly; without it the
-  // composition dies mid-apply on a bare TypeError instead of the
-  // actionable startup diagnostic (review E5).
-  'approval',
 ] as const
 
 export type HostServiceName = (typeof REQUIRED_HOST_SERVICES)[number]
@@ -51,7 +47,6 @@ const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
   webServer: ['register'],
   commands: ['execute'],
   permissionPresets: ['catalog'],
-  approval: ['request'],
 }
 
 /** Actionable remediation hint appended to every activation failure. */

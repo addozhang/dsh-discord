@@ -57,7 +57,8 @@ const APP = me.body?.id ?? ''
 const cmds = await rest('GET', `/applications/${APP}/guilds/${GUILD}/commands`)
 const names = Array.isArray(cmds.body) ? cmds.body.map(c => c.name).sort() : []
 check('8 commands registered', names.length === 8, names.join(','))
-const withDmp = Array.isArray(cmds.body) ? cmds.body.filter(c => c.default_member_permissions !== undefined) : []
+// Discord returns the field as null when unset — only a non-null value is a violation.
+const withDmp = Array.isArray(cmds.body) ? cmds.body.filter(c => c.default_member_permissions != null) : []
 check('D1: default_member_permissions omitted on every command', withDmp.length === 0,
   withDmp.length === 0 ? '' : `offenders: ${withDmp.map(c => c.name).join(',')}`)
 
