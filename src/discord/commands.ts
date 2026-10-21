@@ -104,10 +104,15 @@ function argumentToWire(option: CommandArgument): Record<string, unknown> {
 /**
  * Build the bulk-overwrite registration payload for
  * `PUT /applications/{application.id}/commands`.
- * `default_member_permissions: '0'` keeps every command visible: the
- * adapter's own deny-first RBAC authorizes at interaction time, because
- * Discord roles cannot express Workspace-administrator or Host-operator
- * authority.
+ * `default_member_permissions` is deliberately OMITTED: `'0'` is Discord's
+ * "disabled for everyone except server admins" sentinel, which hid the
+ * commands from ordinary members entirely — the opposite of the adapter's
+ * model, where every command is visible to the guild and the deny-first
+ * RBAC gate authorizes at interaction time (Discord roles cannot express
+ * Workspace-administrator or Host-operator authority anyway). Omitted
+ * means @everyone may invoke, subject to the guild's own role overrides.
+ * Wire change: verify once on a real machine with a plain member account
+ * (the digital twin does not model permission gating).
  */
 export function buildCommandRegistrations(): Array<Record<string, unknown>> {
   return MILESTONE_ONE_COMMANDS.map((command) => {
@@ -124,7 +129,6 @@ export function buildCommandRegistrations(): Array<Record<string, unknown>> {
       name: command.name,
       description: command.description,
       contexts: [DISCORD_GUILD_CONTEXT],
-      default_member_permissions: '0',
       ...(options === undefined || options.length === 0 ? {} : { options }),
     }
   })

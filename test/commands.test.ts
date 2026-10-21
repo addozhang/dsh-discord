@@ -82,7 +82,12 @@ describe('milestone one command set', () => {
     for (const payload of payloads) {
       expect(payload['type']).toBe(1)
       expect(payload['contexts']).toEqual([0])
-      expect(payload['default_member_permissions']).toBe('0')
+      // default_member_permissions is OMITTED: '0' is Discord's "disabled
+      // for everyone except admins" sentinel, which hid the commands from
+      // ordinary members — the opposite of the adapter's model, where
+      // every command is visible and deny-first RBAC authorizes at
+      // interaction time. Omitted means @everyone (the default) can invoke.
+      expect('default_member_permissions' in payload).toBe(false)
       expect(typeof payload['name']).toBe('string')
       expect(typeof payload['description']).toBe('string')
     }
