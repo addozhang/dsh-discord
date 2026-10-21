@@ -670,7 +670,10 @@ export function startLiveRender(deps: LiveRenderDeps): {
             },
             headMessageId: inFlightHead ?? runtime.headMessageId ?? '',
           })
-          const finalText = text + ANSWER_MARKER(interrupted, deps.interruptedMarker?.() ?? '*（已被中断）*')
+          // The fallback is the neutral English literal: production always
+          // wires the localized provider, and a Chinese-only fallback would
+          // leak into English threads (same rule as queueSummary above).
+          const finalText = text + ANSWER_MARKER(interrupted, deps.interruptedMarker?.() ?? '*(interrupted)*')
           return finalizer.finalize(finalText)
         }).then(result => {
           // A partial finalize means the answer tail was never delivered;
@@ -777,7 +780,7 @@ export function startLiveRender(deps: LiveRenderDeps): {
         .join(' '),
       120,
     )
-    return { id, summary: text === '' ? '（非文本消息）' : text }
+    return { id, summary: text === '' ? (deps.userEchoCopy?.().nonText ?? '(non-text message)') : text }
   }
 
   function handleFrame(raw: unknown): void {
@@ -882,7 +885,11 @@ export function startLiveRender(deps: LiveRenderDeps): {
         backoffMs = 1_000
       } catch (cause) {
         if (isDisposed()) return
-        deps.log?.('discord_live_stream_error', { cause: String(cause) })
+        // Failed-shaped name: the rpcLog escalation regex only lifts
+        // failed/threw/blocked/unknown to warn, and a dropped mux stream
+        // (the event that forces the backoff reopen) must be visible at
+        // the default level like every sibling failure.
+        deps.log?.('discord_live_stream_failed', { cause: String(cause) })
         trace('stream closed:', String(cause))
       }
       if (isDisposed()) return

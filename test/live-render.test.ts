@@ -655,6 +655,42 @@ describe('live render: delivery failure posture', () => {
     expect(ended.at(-1)).toEqual({ sessionId: 'sess-b', renderedSeq: 7 })
   })
 
+  it('renders the queue non-text placeholder through the copy provider', async () => {
+    // The /queue summary's non-text placeholder is Discord-visible copy:
+    // it must ride the localized copy provider, not a hardcoded Chinese
+    // literal that English locales would render verbatim.
+    const snapshots: Array<Array<{ id: string; summary: string }>> = []
+    await drive([
+      { type: 'session/queue', sessionId: 'sess-1', items: [
+        { id: 'm-img', message: { content: [{ type: 'image', url: 'https://cdn.example/a.png' }] } },
+      ] } as unknown as LiveFrame,
+    ], {
+      threadForSession: () => 'thread-1',
+      onQueueSnapshot: (_sessionId, items) => { snapshots.push(items.map(item => ({ id: item.id, summary: item.summary }))) },
+      userEchoCopy: () => ({ label: '💬 Input', nonText: '(non-text message)', truncated: '(truncated)' }),
+    })
+
+    expect(snapshots.at(-1)?.[0]).toEqual({ id: 'm-img', summary: '(non-text message)' })
+  })
+
+  it('uses the neutral fallback interrupted marker when no provider is wired', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'assistant/message', {
+        turn: 1,
+        step: 1,
+        interrupted: true,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] },
+      }),
+      sessionEvent('sess-1', 'turn/end', { turn: 1, reason: { kind: 'stop' } }),
+    ], { threadForSession: () => 'thread-1' })
+
+    const sent = calls.filter(call => call.kind === 'send' || call.kind === 'edit').map(call => call.content ?? '').join('\n')
+    expect(sent).toContain('partial answer')
+    expect(sent).toContain('*(interrupted)*')
+    expect(sent).not.toContain('已被中断')
+  })
+
   it('completes the in-flight head send instead of duplicating the answer (16.39)', async () => {
     // The live race: the last coalesced flush's send is still in flight
     // (headMessageId unset) when the authoritative assistant/message
