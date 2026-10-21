@@ -495,6 +495,89 @@ describe('live render: delivery failure posture', () => {
     expect(lastEdit?.content).toContain('AB')
   })
 
+  it('a superseded step\'s in-flight head send never re-points the live head', async () => {
+    // The flush-path twin of the finalize fence: step-1's INTERIM head
+    // send is still in REST when step 2 opens and posts its own head.
+    // The late step-1 write-back must not repoint the head — step-2's
+    // message stays the edit target, or step 2's edits land on step 1's
+    // completed message and its own stalls at the prefix.
+    const calls: Array<{ kind: string; channelId?: string; messageId?: string; content?: string }> = []
+    let releaseHeadSend!: () => void
+    const headSendGate = new Promise<void>((resolve) => { releaseHeadSend = resolve })
+    const { delivery } = (() => {
+      let n = 0
+      const delivery: LiveDeliveryPort = {
+        send: (request) => {
+          calls.push({ kind: 'send', channelId: request.channelId, content: request.content })
+          n += 1
+          const id = `dm-${String(n)}`
+          if (request.content.includes('step-one-live')) {
+            return headSendGate.then(() => ({ outcome: 'completed' as const, messageId: id }))
+          }
+          return Promise.resolve({ outcome: 'completed' as const, messageId: id })
+        },
+        edit: (request) => {
+          calls.push({ kind: 'edit', channelId: request.channelId, messageId: request.messageId, content: request.content })
+          return Promise.resolve({ outcome: 'completed' as const })
+        },
+        typing: () => Promise.resolve(),
+        renameThread: () => Promise.resolve({ outcome: 'completed' as const }),
+        delete: () => Promise.resolve({ outcome: 'completed' as const }),
+      }
+      return { delivery }
+    })()
+
+    const queue: LiveFrame[] = []
+    let notify: (() => void) | undefined
+    let drainedClosed = false
+    const sleep = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms) })
+    async function* source(): AsyncIterable<LiveFrame> {
+      while (!drainedClosed) {
+        if (queue.length === 0) {
+          await new Promise<void>(resolve => { notify = resolve })
+          continue
+        }
+        const frame = queue.shift()
+        if (frame === undefined) continue
+        yield frame
+        await sleep(5)
+      }
+    }
+    const live = startLiveRender({
+      frames: source,
+      threadForSession: () => 'thread-1',
+      delivery,
+      updateIntervalMs: 0,
+      activityCoalesceMs: 0,
+      typingIntervalMs: 60_000,
+    })
+    const push = (frame: LiveFrame): void => { queue.push(frame); notify?.() }
+
+    push(sessionEvent('sess-1', 'turn/start', { turn: 1 }))
+    await sleep(10)
+    push(sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }))
+    await sleep(10)
+    // Step-1's interim flush posts the head — gated in flight.
+    push(sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'step-one-live' } }))
+    await sleep(20)
+    // Step 2 opens its own head while step-1's send is still in REST.
+    push(sessionEvent('sess-1', 'step/start', { turn: 1, step: 2 }))
+    await sleep(10)
+    push(sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 2, chunk: { type: 'text-delta', index: 0, text: 'A' } }))
+    await sleep(20)
+    releaseHeadSend()
+    await sleep(20)
+    push(sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 2, chunk: { type: 'text-delta', index: 0, text: 'B' } }))
+    await sleep(20)
+    drainedClosed = true
+    notify?.()
+    live.dispose()
+
+    const lastEdit = calls.filter(call => call.kind === 'edit').at(-1)
+    expect(lastEdit?.messageId).toBe('dm-2')
+    expect(lastEdit?.content).toContain('AB')
+  })
+
   it('completes the in-flight head send instead of duplicating the answer (16.39)', async () => {
     // The live race: the last coalesced flush's send is still in flight
     // (headMessageId unset) when the authoritative assistant/message

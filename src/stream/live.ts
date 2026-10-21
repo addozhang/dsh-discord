@@ -340,7 +340,12 @@ export function startLiveRender(deps: LiveRenderDeps): {
           if (runtime.headAttempted) return undefined
           const sent = await deps.delivery.send({ channelId: threadId, content: payloadContent })
           if (sent.outcome === 'completed') {
-            runtime.headMessageId = sent.messageId
+            // Fence the write-back (same rule as finalize): a send that
+            // lands after this step was superseded must not repoint the
+            // head — the newer step owns its own message.
+            if (runtime.stepSeq === stepSeq && runtime.headMessageId === undefined) {
+              runtime.headMessageId = sent.messageId
+            }
             return sent.messageId
           }
           if (sent.outcome === 'unknown') {
@@ -443,7 +448,11 @@ export function startLiveRender(deps: LiveRenderDeps): {
 
   /** Render the tool rows into one bounded activity message (create once, edit after). */
   function renderActivity(threadId: string, runtime: ThreadRuntime): () => Promise<void> {
+    // The activity surface is TURN-scoped (its scheduler is recreated per
+    // turn, not per step): fence on the turn epoch, not the step counter.
+    const turnId = runtime.turnId
     return async () => {
+      if (runtime.turnId !== turnId) return
       if (runtime.tools.render().length === 0 && progressPhaseLine(runtime) === undefined) return
       // The flush promise records the message id it created so turn/end's
       // cleanup can delete a send that is still in flight (orphan guard).
@@ -455,7 +464,12 @@ export function startLiveRender(deps: LiveRenderDeps): {
           if (runtime.activityAttempted) return undefined
           const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
           if (sent.outcome === 'completed') {
-            runtime.activityMessageId = sent.messageId
+            // Same write-back fence as the answer head: a send landing
+            // after this turn was superseded must not repoint the
+            // activity message.
+            if (runtime.turnId === turnId && runtime.activityMessageId === undefined) {
+              runtime.activityMessageId = sent.messageId
+            }
             return sent.messageId
           }
           if (sent.outcome === 'unknown') {
