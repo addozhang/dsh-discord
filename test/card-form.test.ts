@@ -297,3 +297,22 @@ describe('archive select field', () => {
     expect(host.user.threadAutoArchiveMinutes).toBeUndefined()
   })
 })
+
+describe('DiscordCardForm store binding', () => {
+  it('binds one shared store — repeated faces do not accumulate listeners', () => {
+    const host = fakeScope()
+    const form = new DiscordCardForm(host.scope)
+    const first = form.bind()
+    const second = form.bind()
+    // The slot's inject factory calls face() on every settings-dialog
+    // mount; each extra bind() used to leak a permanent publish listener
+    // plus a live store. One shared projection pump serves every face.
+    expect(second).toBe(first)
+
+    // The shared store still projects host pushes exactly once.
+    host.snapshot.value = { ...host.snapshot.value, allowedGuildIds: ['123456789012345678'] }
+    host.snapshot.revision = (host.snapshot.revision ?? 1) + 1
+    for (const listener of host.listeners) listener()
+    expect(first.getSnapshot().allowedGuildIds.text).toBe('123456789012345678')
+  })
+})
