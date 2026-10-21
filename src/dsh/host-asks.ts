@@ -185,7 +185,13 @@ export function installAskServicePatches(
     if (req.signal?.aborted === true) pending.dispose()
     void pending.promise.then(() => {
       deps.onWaitState?.(threadId, false)
-      void deps.askWiring.disableControl(approvalId)
+      void deps.askWiring.disableControl(approvalId).catch((cause: unknown) => {
+        deps.log('discord_ask_control_disable_failed', { key: approvalId, cause: String(cause) })
+      })
+    }).catch((cause: unknown) => {
+      // The ask itself has settled; a failing wait-state clear must not
+      // escape as an unhandled rejection.
+      deps.log('discord_ask_wait_clear_failed', { threadId, cause: String(cause) })
     })
     return pending.promise
   }
@@ -217,7 +223,11 @@ export function installAskServicePatches(
       if (req.signal?.aborted === true) pending.dispose()
       void pending.promise.then(() => {
         deps.onWaitState?.(threadId, false)
-        void deps.askWiring.disableControl(rpcId)
+        void deps.askWiring.disableControl(rpcId).catch((cause: unknown) => {
+          deps.log('discord_ask_control_disable_failed', { key: rpcId, cause: String(cause) })
+        })
+      }).catch((cause: unknown) => {
+        deps.log('discord_ask_wait_clear_failed', { threadId, cause: String(cause) })
       })
       return pending.promise
     }

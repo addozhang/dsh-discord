@@ -771,6 +771,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       for (const key of plan.intentKeys) {
         void intentTable.delete(key).then(() => {
           rpcLog('discord_retention_intent_expired', { key })
+        }).catch((cause: unknown) => {
+          rpcLog('discord_retention_intent_delete_failed', { key, cause: String(cause) })
         })
       }
     }, 6 * 60 * 60_000)

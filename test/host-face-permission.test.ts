@@ -169,4 +169,21 @@ describe('createPermissionPort', () => {
     await port.current('sess-1')
     expect(disposed).toBe(1)
   })
+
+  it('absorbs a rejecting observation disposal instead of leaving it unhandled', async () => {
+    const events: string[] = []
+    const observation = {
+      projections: { values: { permissions: { currentValue: 'read-only' } } },
+      // The asyncDispose convention returns a promise; a rejection must be
+      // caught and logged, not escape as an unhandled rejection that kills
+      // the host process.
+      [Symbol.asyncDispose]: () => Promise.reject(new Error('dispose boom')),
+    }
+    const port = createPermissionPort(permissionFace({ observe: () => Promise.resolve(observation) }), {
+      log: (event: string) => { events.push(event) },
+    })
+    await expect(port.current('sess-1')).resolves.toEqual({ outcome: 'completed', preset: 'read-only' })
+    await new Promise(resolve => { setImmediate(resolve) })
+    expect(events.some(event => event.includes('dispose_threw'))).toBe(true)
+  })
 })
