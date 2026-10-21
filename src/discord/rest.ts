@@ -2,9 +2,14 @@
  * The typed Discord REST adapter. Every request resolves to exactly one of
  * three outcomes — `completed`, `rejected`, or `unknown` — because cross-system
  * delivery is never provably once: a refused request (4xx, exhausted 429) is
- * definitive, while an unobservable outcome (network failure, abort,
- * exhausted 5xx) may or may not have been applied and must be reconciled,
- * never blindly retried by callers.
+ * definitive, while an unobservable outcome (network failure, abort, 5xx)
+ * may or may not have been applied and must be reconciled, never blindly
+ * retried by callers. That holds inside the adapter too: transient failures
+ * are auto-retried only for idempotent methods (GET/PUT/DELETE/PATCH); a
+ * POST that hits 5xx or the network fails returns `unknown` on the first
+ * failure — the retry decision belongs to the caller's nonce
+ * reconciliation, because a re-sent POST whose first attempt landed would
+ * double-deliver with no error to show for it.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -163,6 +168,14 @@ export function createRestClient(
           }
           await sleep(outcome.delayMs)
           continue
+        }
+        // A 5xx or network failure may mean the request was already applied
+        // upstream. Auto-retrying a non-idempotent POST could then deliver
+        // the message twice and the retry's 200 would mask it — so POST
+        // surfaces unknown immediately and the caller's nonce reconciliation
+        // decides; only idempotent methods ride the bounded retry loop.
+        if (method !== 'GET' && method !== 'PUT' && method !== 'DELETE' && method !== 'PATCH') {
+          return { outcome: 'unknown', reason: 'network-unreachable' }
         }
         if (isFinalAttempt) {
           return { outcome: 'unknown', reason: 'network-unreachable' }
