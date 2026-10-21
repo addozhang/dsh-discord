@@ -9,7 +9,8 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { reconcileIntents, type IntentEvidenceInput } from '../src/features/reconcile-intents.js'
+import { reconcileIntents, staleUncertainIntents, type IntentEvidenceInput } from '../src/features/reconcile-intents.js'
+import type { InboundIntentRecord } from '../src/state/intents.js'
 
 function intent(overrides: Partial<IntentEvidenceInput> = {}): IntentEvidenceInput {
   return {
@@ -66,6 +67,25 @@ describe('uncertain intent reconciliation', () => {
     expect(result.unresolved).toEqual(['msg-x'])
     expect(result.proven).toEqual([])
     expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it('flags crash-parked and unconfirmed intents past the threshold for the sweep to warn', () => {
+    const record = (state: InboundIntentRecord['state'], claimedAtMs: number): InboundIntentRecord =>
+      ({ contentHash: 'h', state, claimedAtMs })
+    const entries = [
+      ['msg-crash', record('claimed', 0)],
+      ['msg-unknown', record('unknown', 1_000)],
+      ['msg-fresh', record('claimed', 4_000)],
+      ['msg-done', record('succeeded', 0)],
+      ['msg-failed', record('failed', 0)],
+    ] as const
+
+    // nowMs = 5_000, threshold = 2_000: only the two stale
+    // prove-nothing records surface, with their ages.
+    expect(staleUncertainIntents(entries, 5_000, 2_000)).toEqual([
+      { messageId: 'msg-crash', state: 'claimed', ageMs: 5_000 },
+      { messageId: 'msg-unknown', state: 'unknown', ageMs: 4_000 },
+    ])
   })
 
   it('fails closed when a probe could not complete', async () => {

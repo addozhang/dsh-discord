@@ -32,6 +32,7 @@ import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
 import { planBindingReconciliation } from './features/reconcile-bindings.js'
 import { guildKeysToForget, sweepExpired } from './state/retention.js'
+import { staleUncertainIntents } from './features/reconcile-intents.js'
 import { createHostEventRouter, type TrackSeedOptions } from './dsh/host-events.js'
 import { listSessionIds, listSessionSummaries } from './dsh/host-face.js'
 import { installAskServicePatches } from './dsh/host-asks.js'
@@ -773,6 +774,17 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           rpcLog('discord_retention_intent_expired', { key })
         }).catch((cause: unknown) => {
           rpcLog('discord_retention_intent_delete_failed', { key, cause: String(cause) })
+        })
+      }
+      // Crash-parked (claimed) or unconfirmed (unknown) intents never age
+      // out by design — surface the ones past the submission window so a
+      // silently dropped prompt is diagnosable at warn level.
+      const stale = staleUncertainIntents([...intentTable.entries()], Date.now(), 10 * 60_000)
+      if (stale.length > 0) {
+        rpcLog('discord_intent_stale_unknown', {
+          count: stale.length,
+          oldest: stale.reduce((max, item) => Math.max(max, item.ageMs), 0),
+          messages: stale.slice(0, 10).map(item => `${item.messageId}:${item.state}`),
         })
       }
     }, 6 * 60 * 60_000)

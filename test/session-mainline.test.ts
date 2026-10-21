@@ -66,10 +66,11 @@ function createFixture(options: {
     images?: ReadonlyArray<{ mediaType: string; base64: string }>
   }> = []
   const prompts: DshPromptPort = {
-    submit: options.submit ?? ((request) => {
+    submit: (request) => {
       promptCalls.push(request)
-      return Promise.resolve({ outcome: 'accepted' })
-    }),
+      const overridden = options.submit
+      return overridden !== undefined ? overridden(request) : Promise.resolve({ outcome: 'accepted' })
+    },
   }
   const collectCalls: Array<{ attachments: ReadonlyArray<{ url: string; declaredSize: number; contentType: string }> }> = []
   const images: MainlineImageCollector = {
@@ -145,6 +146,30 @@ describe('session mainline', () => {
 
     const replay = await f.mainline.admitMention(request)
     expect(replay).toEqual({ outcome: 'admitted', threadId: 'thread-1', sessionId: 'preallocated-1' })
+    expect(f.promptCalls).toHaveLength(1)
+  })
+
+  it('never reports admitted for a redelivery whose intent never confirmed', async () => {
+    // The DSH admission came back unknown: the intent record is parked
+    // uncertain and nothing proves the prompt landed. A gateway
+    // redelivery of the same message must answer prompt-unknown —
+    // reporting admitted would silently drop the user's prompt while
+    // claiming success.
+    const f = createFixture({ submit: () => Promise.resolve({ outcome: 'unknown' }) })
+    const request = {
+      applicationId: APP,
+      guildId: GUILD,
+      channelId: 'channel-1',
+      messageId: 'm-unconfirmed',
+      authorId: 'member-1',
+      workspaceId: 'ws-1',
+      prompt: 'fix the bug',
+    }
+    const first = await f.mainline.admitMention(request)
+    expect(first).toEqual({ outcome: 'prompt-unknown' })
+
+    const replay = await f.mainline.admitMention(request)
+    expect(replay).toEqual({ outcome: 'prompt-unknown' })
     expect(f.promptCalls).toHaveLength(1)
   })
 
