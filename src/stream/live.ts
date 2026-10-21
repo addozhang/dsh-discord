@@ -602,12 +602,14 @@ export function startLiveRender(deps: LiveRenderDeps): {
           const finalizedStepSeq = runtime.stepSeq
           const finalizer = createAnswerFinalizer({
             delivery: {
+              // The finalizer builds each piece's final outbound payload
+              // (table wrap + mention suppression + length fence); these
+              // adapters only carry it to the wire.
               editHead: async ({ messageId, content }) => {
-                const payload = buildOutboundMessage({ kind: 'assistant', content })
                 // No head exists (text arrived without flushed chunks): the
                 // first finalize send IS the head, recorded for continuations.
                 if (messageId === '') {
-                  const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+                  const sent = await deps.delivery.send({ channelId: threadId, content })
                   if (sent.outcome === 'completed') {
                     if (runtime.stepSeq === finalizedStepSeq && runtime.headMessageId === undefined) {
                       runtime.headMessageId = sent.messageId
@@ -616,12 +618,11 @@ export function startLiveRender(deps: LiveRenderDeps): {
                   }
                   return { outcome: 'failed' as const }
                 }
-                const edited = await deps.delivery.edit({ channelId: threadId, messageId, content: payload.content })
+                const edited = await deps.delivery.edit({ channelId: threadId, messageId, content })
                 return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
               },
               sendContinuation: async ({ content }) => {
-                const payload = buildOutboundMessage({ kind: 'assistant', content })
-                const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+                const sent = await deps.delivery.send({ channelId: threadId, content })
                 return sent.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
               },
             },
@@ -629,6 +630,16 @@ export function startLiveRender(deps: LiveRenderDeps): {
           })
           const finalText = text + ANSWER_MARKER(interrupted, deps.interruptedMarker?.() ?? '*（已被中断）*')
           return finalizer.finalize(finalText)
+        }).then(result => {
+          // A partial finalize means the answer tail was never delivered;
+          // surface it — silently dropping the suffix is the worst outcome.
+          if (result.outcome === 'partial') {
+            deps.log?.('discord_live_finalize_failed', {
+              threadId,
+              editedHead: result.editedHead,
+              continuations: result.continuations,
+            })
+          }
         }).catch((cause: unknown) => {
           deps.log?.('discord_live_finalize_threw', { threadId, cause: String(cause) })
         })

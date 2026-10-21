@@ -98,4 +98,25 @@ describe('answer finalizer', () => {
     expect(result).toEqual({ outcome: 'finalized', editedHead: true, continuations: 0 })
     expect(editHead).toHaveBeenCalledTimes(2)
   })
+
+  it('never hands the port a piece over the wire limit after outbound inflation', async () => {
+    const { port, editHead, sendContinuation } = deliveryPort({})
+    const finalizer = createAnswerFinalizer({ delivery: port, headMessageId: 'm-head' })
+
+    // A long fenced answer: fence rebalancing plus the outbound transforms
+    // (table wrapping, mention suppression) must never push any sent piece
+    // past Discord's 2,000-character message limit.
+    const fenced = '```ts\n' + 'y'.repeat(4_300) + '\n```'
+    const tabular = ['| a | b |', '|---|---|', ...Array.from({ length: 120 }, (_, index) => `| v${String(index)} | @user${String(index)} |`)].join('\n')
+    await finalizer.finalize(`${fenced}\n${tabular}`)
+
+    const sent = [
+      ...editHead.mock.calls.map(call => (call[0] as { content: string }).content),
+      ...sendContinuation.mock.calls.map(call => (call[0] as { content: string }).content),
+    ]
+    expect(sent.length).toBeGreaterThan(1)
+    for (const content of sent) {
+      expect(content.length).toBeLessThanOrEqual(2_000)
+    }
+  })
 })

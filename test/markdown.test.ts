@@ -88,4 +88,20 @@ describe('splitMarkdownAware', () => {
       }
     }
   })
+
+  it('never emits a chunk over the limit after fence rebalancing', () => {
+    // Rebalancing adds text (a reopened fence line, a closing fence); long
+    // unbreakable fenced content used to come back over the limit.
+    const fencedBlob = '```ts\n' + 'y'.repeat(4_300) + '\n```'
+    const languageBlob = ['```python', ...Array.from({ length: 60 }, () => 'z'.repeat(120)), '```'].join('\n')
+    for (const text of [fencedBlob, languageBlob]) {
+      for (const chunk of splitMarkdownAware(text, 2_000)) {
+        expect(chunk.length).toBeLessThanOrEqual(2_000)
+      }
+    }
+    // The property holds at any limit, not just Discord's.
+    for (const chunk of splitMarkdownAware(languageBlob, 500)) {
+      expect(chunk.length).toBeLessThanOrEqual(500)
+    }
+  })
 })
