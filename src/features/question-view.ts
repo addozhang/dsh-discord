@@ -27,6 +27,18 @@ const BUTTON_STYLE_PRIMARY = 1
 /** The reserved select value that routes a question to the custom-text modal. */
 export const CUSTOM_ANSWER_VALUE = '__custom__'
 
+/**
+ * Discord caps one message at five action rows. A batch of five selects
+ * fills the cap and cannot carry a dedicated Submit button, so the routing
+ * layer auto-submits that batch when its last answer lands — this shared
+ * predicate is the single source of truth for both sides.
+ */
+export const SUBMIT_ROW_QUESTION_CAPACITY = 5
+
+export function hasDedicatedSubmitRow(questionCount: number): boolean {
+  return questionCount < SUBMIT_ROW_QUESTION_CAPACITY
+}
+
 export interface QuestionViewInput {
   registry: ComponentRegistry
   batch: QuestionBatch
@@ -100,7 +112,7 @@ export function renderQuestionControls(input: QuestionViewInput): QuestionViewPa
     components: [selectFor(registry, batch, question)],
   }))
 
-  if (batch.questions.length < 5) {
+  if (hasDedicatedSubmitRow(batch.questions.length)) {
     rows.push({
       type: ACTION_ROW,
       components: [{

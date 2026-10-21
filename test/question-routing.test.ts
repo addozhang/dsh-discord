@@ -130,7 +130,7 @@ describe('custom-answer modal flow', () => {
     const modalContext = registry.resolve('dc:opaque-4', 0)
     expect(modalContext.found).toBe(true)
 
-    const outcome = handleModalSubmit(
+    const outcome = await handleModalSubmit(
       { registry, store, port: { respond: vi.fn() }, nowMs: () => 0, controls: { disable: async () => {} } },
       { customId: 'dc:opaque-4', text: 'whichever is cheaper', userId: 'user-owner', threadId: 'thread-1' },
     )
@@ -142,7 +142,7 @@ describe('custom-answer modal flow', () => {
     const { registry, store, select } = setup()
     await select('dc:opaque-1', [CUSTOM_ANSWER_VALUE])
 
-    const outcome = handleModalSubmit(
+    const outcome = await handleModalSubmit(
       { registry, store, port: { respond: vi.fn() }, nowMs: () => 0, controls: { disable: async () => {} } },
       { customId: 'dc:opaque-4', text: 'sneaky', userId: 'user-other', threadId: 'thread-1' },
     )
@@ -154,7 +154,7 @@ describe('custom-answer modal flow', () => {
     const { registry, store, select } = setup()
     await select('dc:opaque-1', [CUSTOM_ANSWER_VALUE])
 
-    const outcome = handleModalSubmit(
+    const outcome = await handleModalSubmit(
       { registry, store, port: { respond: vi.fn() }, nowMs: () => 60_000, controls: { disable: async () => {} } },
       { customId: 'dc:opaque-4', text: 'too late', userId: 'user-owner', threadId: 'thread-1' },
     )
@@ -205,7 +205,7 @@ describe('custom-answer modal flow', () => {
   it('encodes the submitted batch with labels and custom text per question', async () => {
     const { registry, store, port, respond, select } = setup()
     await select('dc:opaque-1', [CUSTOM_ANSWER_VALUE])
-    handleModalSubmit(
+    await handleModalSubmit(
       { registry, store, port, nowMs: () => 0, controls: { disable: async () => {} } },
       { customId: 'dc:opaque-4', text: 'whichever is cheaper', userId: 'user-owner', threadId: 'thread-1' },
     )

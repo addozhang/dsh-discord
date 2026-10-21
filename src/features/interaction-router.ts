@@ -84,7 +84,7 @@ export interface InteractionRouterDeps {
     userId: string
     threadId: string
     text: string
-  }) => QuestionInteractionOutcome
+  }) => Promise<QuestionInteractionOutcome>
   rest: () => Promise<SharedRestClient | undefined>
   /**
    * Delete one channel→Workspace binding row (bind precheck: a bound
@@ -1199,7 +1199,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
         if (typeof modalCustomId !== 'string') return
         try {
           const text = event.modalFields.find(field => field.customId === 'answer')?.value ?? ''
-          const outcome = deps.handleQuestionModal({
+          const outcome = await deps.handleQuestionModal({
             customId: modalCustomId,
             userId: event.actorId,
             threadId: event.channelId,

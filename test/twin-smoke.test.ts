@@ -1568,6 +1568,49 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     })
   }, 20_000)
 
+  it('auto-submits a five-question batch when its last answer lands', async () => {
+    // Five selects fill Discord's five-action-row cap, so the batch renders
+    // WITHOUT a Submit button: the last answer landing must submit the ask
+    // by itself, or the turn hangs until the expiry sweep cancels it.
+    askSink.onQuestionRequested({
+      sessionId: 'sess-1', threadId, rpcId: 'ask-five', expiresAtMs: Date.now() + 600_000,
+      questions: Array.from({ length: 5 }, (_, index) => ({
+        id: `f${String(index + 1)}`,
+        question: `Five-batch probe ${String(index + 1)}`,
+        options: [{ label: `Opt ${String(index + 1)}A` }, { label: `Opt ${String(index + 1)}B` }],
+      })),
+    })
+
+    const scope = discord.channel(threadId)
+    const control = await scope.waitForMessage({
+      predicate: message => message.content.includes('5 questions need answers'),
+    })
+    const rows = control.components as Array<{ components: Array<{ custom_id?: string }> }>
+    // Five select rows, no submit row to click.
+    expect(rows).toHaveLength(5)
+
+    for (let index = 0; index < 5; index += 1) {
+      const selectId = rows[index]?.components[0]?.custom_id
+      if (typeof selectId !== 'string') throw new TypeError(`select ${String(index)} missing custom_id`)
+      await discord.simulateSelectMenu({
+        channelId: threadId, userId: USER, messageId: control.id, customId: selectId,
+        values: [`Opt ${String(index + 1)}A`],
+      })
+      await new Promise(resolve => { setTimeout(resolve, 200) })
+    }
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+
+    const sent = settleRecords.filter(record => record.key === 'ask-five')
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      kind: 'question',
+      answer: { answers: Array.from({ length: 5 }, (_, index) => ({
+        id: `f${String(index + 1)}`,
+        selected: [`Opt ${String(index + 1)}A`],
+      })) },
+    })
+  }, 20_000)
+
   it('never settles a claimed ask twice, even from a repeated click', async () => {
     // The Host-semantics regression: an ask answered once is no longer
     // pending — a duplicate answer must NOT be treated as delivered.
