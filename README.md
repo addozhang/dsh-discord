@@ -148,7 +148,7 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 
 ```sh
 pnpm install --ignore-scripts
-pnpm test          # 729 tests incl. gateway/REST twin E2E
+pnpm test          # 782 tests incl. gateway/REST twin E2E
 pnpm typecheck
 pnpm lint
 pnpm build         # lib + client bundle
