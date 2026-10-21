@@ -919,6 +919,15 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       if (denied.outcome !== 'completed') deps.log('discord_followup_failed', denied.outcome)
       return
     }
+    // Click-time re-authorization (review D2, aligned with permission-
+    // confirm): the 15-minute control window outlives an operator
+    // revocation, and forget mutates adapter-owned state for the whole
+    // guild — owner identity alone is not authority enough at click time.
+    if (!deps.policy().hostOperatorUserIds.includes(event.actorId)) {
+      const refused = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, { content: deps.copy.forgetOperatorOnly, flags: OUTBOUND_EPHEMERAL_FLAGS })
+      if (refused.outcome !== 'completed') deps.log('discord_followup_failed', refused.outcome)
+      return
+    }
     await deps.forgetGuild(guildId)
     deps.log('discord_guild_forget_commit', { guildId })
     const posted = await rest.request('POST', `/webhooks/${deps.applicationId()}/${interactionToken}`, {
