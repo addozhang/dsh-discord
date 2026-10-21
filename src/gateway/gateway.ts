@@ -112,7 +112,15 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
   }
 
   function send(socket: GatewaySocket, op: number, d: unknown): void {
-    socket.send(JSON.stringify({ op, d }))
+    try {
+      socket.send(JSON.stringify({ op, d }))
+    } catch {
+      // The socket can be mid-teardown (close frame received, onclose not
+      // yet dispatched) and ws.send throws InvalidStateError from inside
+      // timer callbacks — an uncaught throw there kills the host process.
+      // The missed frame is covered by the reconnect machinery: the
+      // heartbeat-ack timeout terminates and onclose reschedules.
+    }
   }
 
   function connect(): void {
