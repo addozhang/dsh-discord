@@ -796,6 +796,12 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     // Approval/question expiry: 30s sweep — approvals auto-reject before
     // their controls expire; question expiry cancels the owning turn.
     const expiryTimer = setInterval(() => {
+      // Component-registry hygiene rides the same cadence: lazy expiry
+      // only fires when a stale custom_id is re-resolved, so never-clicked
+      // controls (one ask registers 2-6 entries) would otherwise stay in
+      // the registry for the process lifetime.
+      const purged = sharedRegistry.purgeExpired(Date.now())
+      if (purged > 0) rpcLog('discord_registry_purged', { purged })
       void sweepExpiredApprovals({
         store: approvalsStore,
         port: approvalRespondPort,
@@ -1215,6 +1221,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     liveProgressRef.current = liveRef.current
     ctx.effect(() => () => { liveRef.current?.dispose() }, 'dsh-discord live render')
     ctx.effect(() => () => { runtimeRef.current?.dispose() }, 'dsh-discord composed runtime')
+    // The router's follow loops and re-arm timers survive nothing else's
+    // teardown: without this, plugin removal leaves zombie subscriptions.
+    ctx.effect(() => () => { hostEvents.dispose() }, 'dsh-discord host event router')
 
   })().catch((cause: unknown) => {
     console.error('[dsh-discord] composition failed:', cause)

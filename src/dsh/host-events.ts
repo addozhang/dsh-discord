@@ -50,7 +50,7 @@ interface FrameQueue {
 }
 
 /** Build the push-side of the single consumer queue. */
-function createFrameQueue(): FrameQueue & { iterate(signal: AbortSignal): AsyncIterable<unknown> } {
+export function createFrameQueue(): FrameQueue & { iterate(signal: AbortSignal): AsyncIterable<unknown> } {
   const buffered: unknown[] = []
   let notify: (() => void) | undefined
   let closed = false
@@ -83,12 +83,18 @@ function createFrameQueue(): FrameQueue & { iterate(signal: AbortSignal): AsyncI
               }
               if (closed) return
               await new Promise<void>(resolve => {
-                notify = resolve
                 const abort = () => {
                   notify = undefined
                   resolve()
                 }
                 signal.addEventListener('abort', abort, { once: true })
+                notify = () => {
+                  // The wake path must drop its abort listener: a streaming
+                  // session parks here per drain, and a leaked listener per
+                  // park accumulates into MaxListenersExceededWarning.
+                  signal.removeEventListener('abort', abort)
+                  resolve()
+                }
               })
             }
           } finally {
@@ -139,6 +145,8 @@ export function createHostEventRouter(
 ): {
   track(sessionId: string, seed?: TrackSeedOptions): void
   stream(signal: AbortSignal): AsyncIterable<unknown>
+  /** Abort every tracked follow loop, cancel pending re-arms, stop the router. */
+  dispose(): void
 } {
   const log = options.log
   const tracked = new Map<string, AbortController>()
@@ -146,8 +154,11 @@ export function createHostEventRouter(
   const watermark = new Map<string, number>()
   /** Sessions whose NEXT opening snapshot is swallowed whole (legacy bindings). */
   const suppressOnce = new Set<string>()
+  /** Pending re-arm timers: disposed routers must stop resubscribing. */
+  const rearmTimers = new Set<ReturnType<typeof setTimeout>>()
   let consumer: FrameQueue | undefined
   let rootSignal: AbortSignal | undefined
+  let disposed = false
 
   const startLoop = (sessionId: string, attempt = 0): void => {
     const per = new AbortController()
@@ -262,12 +273,15 @@ export function createHostEventRouter(
         // process restart replays the journal. Re-arm with backoff.
         if (!per.signal.aborted) {
           const delayMs = Math.min(30_000, 1_000 * 2 ** attempt)
-          setTimeout(() => {
-            if (!per.signal.aborted && !tracked.has(sessionId)) {
-              log?.('discord_host_follow_resubscribed', { sessionId, delayMs })
-              startLoop(sessionId, attempt + 1)
-            }
+          const timer = setTimeout(() => {
+            rearmTimers.delete(timer)
+            if (disposed || per.signal.aborted || tracked.has(sessionId)) return
+            log?.('discord_host_follow_resubscribed', { sessionId, delayMs })
+            startLoop(sessionId, attempt + 1)
           }, delayMs)
+          // A parked re-arm must never pin the host's event loop open.
+          timer.unref()
+          rearmTimers.add(timer)
         }
       }
     })()
@@ -310,7 +324,7 @@ export function createHostEventRouter(
   return {
     track(sessionId, seed) {
       if (sessionId === '' || tracked.has(sessionId)) return
-      if (rootSignal?.aborted) return
+      if (disposed || rootSignal?.aborted) return
       if (seed !== undefined) {
         // Seed BEFORE the loop opens: the opening snapshot races the very
         // first watermark read.
@@ -334,6 +348,19 @@ export function createHostEventRouter(
       }
       startControlLoop(signal)
       return queue.iterate(signal)
+    },
+    dispose() {
+      // Plugin teardown: the per-session follow loops run on their own
+      // controllers (the consumer signal only reaches the control loop),
+      // so nothing else stops them — without this, disposal leaves zombie
+      // subscriptions and a re-arm chain that resubscribes forever.
+      disposed = true
+      rootSignal = undefined
+      for (const [, per] of [...tracked.entries()]) per.abort()
+      tracked.clear()
+      for (const timer of rearmTimers) clearTimeout(timer)
+      rearmTimers.clear()
+      consumer?.close()
     },
   }
 }
