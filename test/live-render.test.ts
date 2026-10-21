@@ -169,6 +169,27 @@ describe('live render', () => {
     expect(editCount).toBeGreaterThanOrEqual(0)
   })
 
+  it('never sends an interim flush over the wire limit — the head shows the first window', async () => {
+    // Once the accumulated answer outgrows one Discord message, every
+    // interim edit of the whole text is a guaranteed 400: the visible
+    // stream freezes and warn churn accumulates per chunk. The interim
+    // head must stay within the limit (showing the first window — the
+    // same layout finalize lands on) until the finalizer delivers the
+    // full answer with continuations.
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }),
+      sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'y'.repeat(3_400) } }),
+      sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: ' tail' } }),
+    ], { threadForSession: () => 'thread-1' })
+
+    const answerTraffic = calls.filter(call => (call.kind === 'send' || call.kind === 'edit') && call.channelId === 'thread-1')
+    expect(answerTraffic.length).toBeGreaterThanOrEqual(1)
+    for (const call of answerTraffic) {
+      expect(call.content?.length ?? 0).toBeLessThanOrEqual(2_000)
+    }
+  })
+
   it('stops typing on turn end and notifies the owner', async () => {
     const turnEnds: string[] = []
     const calls = await drive([

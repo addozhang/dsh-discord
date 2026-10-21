@@ -15,6 +15,8 @@ import { createTypingLifecycle, type TypingLifecycle } from './typing.js'
 import { createToolActivitySurface, type ToolActivitySurface, type ToolRow } from './tool-view.js'
 import { createAnswerFinalizer, type AnswerFinalizer } from './finalizer.js'
 import { buildOutboundMessage } from './outbound.js'
+import { splitMarkdownAware } from './markdown.js'
+import { DISCORD_MESSAGE_LIMIT, splitMessage } from './splitter.js'
 import { toolCategoryIcon } from './icons.js'
 import { shellCommandTitle } from './tool-view.js'
 import { discordChannelNameKey, safeTitle } from '../policy/disclosure.js'
@@ -307,19 +309,36 @@ export function startLiveRender(deps: LiveRenderDeps): {
     return runtime
   }
 
+  /**
+   * The interim view of the accumulating answer, always within the wire
+   * limit: once the text outgrows one Discord message, the head shows the
+   * FIRST window — the same layout finalize lands on (head = chunk 0,
+   * overflow as continuations), so the transition is seamless and no
+   * interim edit can 400 on length while the stream is still running.
+   */
+  function interimHeadWindow(content: string): string {
+    const chunks = content.length > DISCORD_MESSAGE_LIMIT
+      ? splitMarkdownAware(content, DISCORD_MESSAGE_LIMIT)
+      : [content]
+    const first = chunks[0] ?? ''
+    const built = buildOutboundMessage({ kind: 'assistant', content: first }).content
+    if (built.length <= DISCORD_MESSAGE_LIMIT) return built
+    return splitMessage(built, DISCORD_MESSAGE_LIMIT)[0] ?? built
+  }
+
   /** Flush the current answer text: create the head once, then edit it. */
   function flushAnswer(threadId: string, runtime: ThreadRuntime): (content: string) => Promise<void> {
     const stepSeq = runtime.stepSeq
     return (content: string): Promise<void> => {
       if (runtime.stepSeq !== stepSeq) return Promise.resolve()
-      const payload = buildOutboundMessage({ kind: 'assistant', content })
+      const payloadContent = interimHeadWindow(content)
       const flush = (async (): Promise<string | undefined> => {
         if (runtime.headMessageId === undefined) {
           // An earlier send whose application was unobservable must never be
           // blind-resent (rest.ts contract): the stream pauses here and the
           // finalizer's single fresh send carries the answer instead.
           if (runtime.headAttempted) return undefined
-          const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+          const sent = await deps.delivery.send({ channelId: threadId, content: payloadContent })
           if (sent.outcome === 'completed') {
             runtime.headMessageId = sent.messageId
             return sent.messageId
@@ -330,7 +349,7 @@ export function startLiveRender(deps: LiveRenderDeps): {
           }
           return undefined
         }
-        await deps.delivery.edit({ channelId: threadId, messageId: runtime.headMessageId, content: payload.content })
+        await deps.delivery.edit({ channelId: threadId, messageId: runtime.headMessageId, content: payloadContent })
         return runtime.headMessageId
       })()
       runtime.headFlush = flush
