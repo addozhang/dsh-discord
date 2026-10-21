@@ -141,6 +141,29 @@ describe('discord rest client', () => {
     expect(h.calls).toHaveLength(2)
   })
 
+  it('aborts an interaction callback parked behind a long Retry-After within the ack budget', async () => {
+    // Discord grants one callback per interaction inside a 3-second ack
+    // deadline: a request parked behind a Retry-After sleep (or a 5xx
+    // backoff) delivers an ack that can no longer matter. The client
+    // enforces the budget for /interactions/ paths itself.
+    vi.useRealTimers()
+    try {
+      const h = createHarness({ interactionAckBudgetMs: 50 })
+      h.script(
+        { status: 429, headers: { 'retry-after': '2' }, body: { code: 0, message: 'rate limited' } },
+        { status: 429, headers: { 'retry-after': '2' }, body: { code: 0, message: 'rate limited' } },
+      )
+      const startedAt = Date.now()
+      const pending = h.client.request('POST', '/interactions/i-1/tok/callback', { type: 6 })
+      const result = await pending
+      expect(result).toEqual({ outcome: 'unknown', reason: 'aborted' })
+      expect(h.calls).toHaveLength(1)
+      expect(Date.now() - startedAt).toBeLessThan(1_500)
+    } finally {
+      vi.useFakeTimers()
+    }
+  })
+
   it('reports aborted as an unknown outcome and stops retrying', async () => {
     const h = createHarness()
     const controller = new AbortController()
