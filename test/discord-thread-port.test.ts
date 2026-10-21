@@ -88,11 +88,13 @@ describe('createRestThreadPort', () => {
     })).resolves.toEqual({ outcome: 'not-found' })
   })
 
-  it('degrades a failed thread listing to not-found (claim stays, caller decides)', async () => {
+  it('reports an unobservable listing as unknown, never as a definitive absence', async () => {
+    // Crash-window recovery reads this: an unknown listing must not let the
+    // caller conclude a thread that may exist was never created.
     const { rest } = createRest([{ outcome: 'unknown' }])
     await expect(createRestThreadPort(rest).findThreadBySource({
       guildId: 'guild-1', sourceMessageId: 'm-1',
-    })).resolves.toEqual({ outcome: 'not-found' })
+    })).resolves.toEqual({ outcome: 'unknown' })
   })
 
   it('PUTs the author into the thread members and maps outcomes', async () => {

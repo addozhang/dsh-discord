@@ -64,7 +64,11 @@ export function createRestThreadPort(rest: ThreadPortRest, options: ThreadPortOp
         'GET',
         `/guilds/${request.guildId}/threads/active`,
       )
-      if (listed.outcome !== 'completed') return { outcome: 'not-found' }
+      // An unobservable listing is NOT a definitive absence (review A4):
+      // conflating the two lets crash-window recovery conclude a thread
+      // that exists was never created. Only a completed listing that
+      // scanned past the source message proves 'not-found'.
+      if (listed.outcome !== 'completed') return { outcome: 'unknown' }
       const threads = Array.isArray(listed.body?.threads) ? listed.body.threads : []
       for (const thread of threads.slice(0, MAX_THREADS_SCANNED)) {
         const oldest = await rest.request<Array<{ id: string }>>(

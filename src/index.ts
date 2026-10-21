@@ -25,6 +25,7 @@ import { createAskWiring } from './features/ask-wiring.js'
 import { sweepExpiredApprovals } from './features/approval-expiry.js'
 import { sweepExpiredQuestions, type DshTurnCancelPort } from './features/question-expiry.js'
 import { createQuestionStore } from './features/question-store.js'
+import { createTrailingSingleFlight } from './features/single-flight.js'
 import { handleSelectInput, handleModalSubmit, type QuestionRoutingDeps } from './features/question-routing.js'
 import { createCopy, permissionPresetLabel, type CopyTable } from './i18n.js'
 import type { DshApprovalRespondPort } from './features/approval-routing.js'
@@ -120,8 +121,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     get: (_target, key) => createCopy(resolveLanguage())[key as keyof CopyTable],
   })
   // Reassigned once the async composition has built the real registrar.
-  let registerCommands: () => Promise<void> = async () => {}
-  const onGuildsChanged = (): void => { void registerCommands() }
+  let registerCommands: () => void = () => {}
+  const onGuildsChanged = (): void => { registerCommands() }
   const settingsSource = bindDiscordSettings(ctx, config as unknown as Readonly<Record<string, unknown>>, (next) => {
     const guildsChanged = next.allowedGuildIds.join(',') !== current.allowedGuildIds.join(',')
     current = next
@@ -814,6 +815,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         controls: { disable: key => askWiring.disableControl(key) },
         nowMs: () => Date.now(),
       }).catch((cause: unknown) => { rpcLog('discord_question_expiry_threw', String(cause)) })
+      // Settled question batches age out of the in-memory store (mirrors
+      // the approval store's retention); unresolved ones stay by design.
+      const prunedQuestions = questionsStore.pruneSettled(Date.now(), 7 * 24 * 60 * 60_000)
+      if (prunedQuestions > 0) rpcLog('discord_question_store_pruned', { pruned: prunedQuestions })
     }, 30_000)
     ctx.effect(() => () => { clearInterval(expiryTimer) }, 'discord interaction expiry sweep')
 
@@ -892,6 +897,13 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       nowMs: () => Date.now(),
       controls: { disable: key => askWiring.disableControl(key) },
     }
+    // Per-session resume serialization (review C-1): the flow is
+    // check-then-create across seconds of REST round trips, so two
+    // concurrent resumes of one session could both pass the pre-check
+    // and bind two threads to one session — violating binding-equals-
+    // ownership. The chain serializes them; the loser then sees the
+    // winner's binding in the pre-check.
+    const resumeChains = new Map<string, Promise<unknown>>()
     const interactionRouter = createInteractionRouter({
       policy,
       applicationId: () => applicationIdRef.current,
@@ -940,7 +952,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         },
         copy,
       }),
-      resumeSession: async ({ sessionId, workspaceId, guildId, parentChannelId, actorId }) => {
+      resumeSession: ({ sessionId, workspaceId, guildId, parentChannelId, actorId }) => {
+        const run = async (): Promise<
+          | { outcome: 'started'; threadId: string }
+          | { outcome: 'already-bound'; threadId: string }
+          | { outcome: 'refused-control-channel' }
+          | { outcome: 'refused-subagent' }
+          | { outcome: 'refused-archived' }
+          | { outcome: 'failed' }
+        > => {
         const rest = await sharedRest()
         if (rest === undefined) return { outcome: 'failed' }
         // threadBindings is the Discord-ownership record: a session with a
@@ -1001,15 +1021,31 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           rpcLog('discord_session_resume_thread_unknown', { sessionId })
           return { outcome: 'failed' }
         }
-        await threadBindingStore.bind(threadBindingKey({ applicationId: applicationIdRef.current, guildId, threadId: thread.body.id }), {
+        const bound = await threadBindingStore.bind(threadBindingKey({ applicationId: applicationIdRef.current, guildId, threadId: thread.body.id }), {
           sessionId,
           workspaceId,
           createdBy: actorId,
           createdAtMs: Date.now(),
         })
+        // The bind is the ownership claim — a lost race (session bound by a
+        // concurrent resume) surfaces here instead of silently double-
+        // binding; the losing thread is left unbound for reconcile to judge.
+        if (!bound.ok) {
+          rpcLog('discord_session_resume_bind_failed', { sessionId, threadId: thread.body.id, error: bound.error })
+          return { outcome: 'failed' }
+        }
         rpcLog('discord_session_resumed', { sessionId, threadId: thread.body.id, title })
         hostEvents.track(sessionId)
         return { outcome: 'started', threadId: thread.body.id }
+        }
+        const tail = resumeChains.get(sessionId) ?? Promise.resolve()
+        const next = tail.then(run, run)
+        resumeChains.set(sessionId, next.then(() => undefined, () => undefined))
+        void next.then(() => {
+          // Self-clean: the map holds only in-flight chains.
+          if (resumeChains.get(sessionId) !== undefined) resumeChains.delete(sessionId)
+        })
+        return next
       },
       log: rpcLog,
       warn: (event, detail) => {
@@ -1045,6 +1081,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (rest === undefined) throw new TypeError('discord bot token unavailable')
         const me = await rest.request<{ id: string }>('GET', '/users/@me')
         if (me.outcome !== 'completed') throw new TypeError('cannot resolve bot identity')
+        // Backfill the application id here too: gateway dispatches can
+        // arrive before the REST command registration resolves its
+        // identity, and every binding-key lookup before then would use
+        // the placeholder and misroute bound-channel mentions.
+        applicationIdRef.current = me.body.id
         return me.body.id
       },
       intents: GATEWAY_INTENTS,
@@ -1089,31 +1130,27 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     // Register the Milestone 1 command set per allowed Guild (instant
     // propagation, unlike global commands) once the bot identity is known.
     // Re-runs whenever the allowlist changes — apply-time settings may still
-    // be loading, so the first non-empty list wins.
-    let registering = false
-    registerCommands = async (): Promise<void> => {
-      if (registering || current.allowedGuildIds.length === 0) return
-      registering = true
-      try {
-        const rest = await sharedRest()
-        if (rest === undefined) return
-        const me = await rest.request<{ id: string }>('GET', '/users/@me')
-        if (me.outcome !== 'completed') return
-        applicationIdRef.current = me.body.id
-        const registrations = buildCommandRegistrations()
-        for (const guildId of current.allowedGuildIds) {
-          const result = await rest.request('PUT', `/applications/${me.body.id}/guilds/${guildId}/commands`, registrations)
-          if (result.outcome !== 'completed') {
-            emitLog(ctx, 'warn', { event: 'discord_command_register_failed', guildId })
-          }
+    // be loading, so the first non-empty list wins. Trailing-edge single
+    // flight (review C-2): a trigger landing mid-pass carries NEW guild
+    // state — dropping it silently skipped registering an added guild (or
+    // left a removed guild's stale commands until reload); the flight
+    // re-runs once after the pass, concurrent triggers coalesce.
+    registerCommands = createTrailingSingleFlight(async (): Promise<void> => {
+      if (current.allowedGuildIds.length === 0) return
+      const rest = await sharedRest()
+      if (rest === undefined) return
+      const me = await rest.request<{ id: string }>('GET', '/users/@me')
+      if (me.outcome !== 'completed') return
+      applicationIdRef.current = me.body.id
+      const registrations = buildCommandRegistrations()
+      for (const guildId of current.allowedGuildIds) {
+        const result = await rest.request('PUT', `/applications/${me.body.id}/guilds/${guildId}/commands`, registrations)
+        if (result.outcome !== 'completed') {
+          emitLog(ctx, 'warn', { event: 'discord_command_register_failed', guildId })
         }
-      } finally {
-        registering = false
       }
-    }
-    void registerCommands().catch((cause: unknown) => {
-      emitLog(ctx, 'warn', { event: 'discord_command_register_failed', cause: String(cause) })
-    })
+    }, { onThrew: cause => { emitLog(ctx, 'warn', { event: 'discord_command_register_failed', cause: String(cause) }) } })
+    registerCommands()
     // ── Live streaming: host follow/control fan-in → per-thread rendering ──
     // The queue snapshot cache (declared with the interaction router) is the
     // /queue surface's data source: the 0.1.6 `session/control` stream owns

@@ -22,11 +22,12 @@ export interface DiscordThreadPort {
     /** The source message anchors the thread (its durable first message). */
     sourceMessageId: string
   }): Promise<{ outcome: 'completed'; threadId: string } | { outcome: 'failed' } | { outcome: 'unknown' }>
-  /** Deterministic recovery: find the thread created for this source message. */
+  /** Deterministic recovery: find the thread created for this source message.
+   *  `unknown` means the listing was unobservable — an absence is NOT proven. */
   findThreadBySource(request: {
     guildId: string
     sourceMessageId: string
-  }): Promise<{ outcome: 'found'; threadId: string } | { outcome: 'not-found' }>
+  }): Promise<{ outcome: 'found'; threadId: string } | { outcome: 'not-found' } | { outcome: 'unknown' }>
   /**
    * Join the task author to the thread: Discord sidebars list only threads
    * the user has joined, so the anchored task thread stays invisible to its
@@ -107,6 +108,10 @@ export function createThreadCreationFlow(deps: ThreadCreationDeps): {
           await joinAuthor(request, found.threadId)
           return { outcome: 'recovered', threadId: found.threadId }
         }
+        // 'not-found' (definitive) and 'unknown' (unobservable) both stay
+        // conservative here — never re-create on a redelivery: at-most-once
+        // owns the anchor. The distinction rides the contract for callers
+        // that CAN act on it.
         return { outcome: 'failed' }
       }
 

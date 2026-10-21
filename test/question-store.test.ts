@@ -218,3 +218,23 @@ describe('question store drafts and ownership', () => {
     expect(questions.get('qrpc-1')?.actorUserId).toBe('user-owner')
   })
 })
+
+describe('question store retention', () => {
+  it('prunes terminal entries past retention and keeps unresolved ones', async () => {
+    // Terminal (resolved/expired) batches age out of the in-memory store;
+    // unresolved entries stay — they await explicit resolution, never a timer.
+    const store = createQuestionStore()
+    const now = Date.now()
+    const opened = store.open({
+      questionRpcId: 'qr-resolved', sessionId: 's', threadId: 't', requestId: 'r',
+      actorUserId: 'u', expiresAtMs: now - 10 * 60_000,
+      questions: [{ id: 'q1', question: 'Q', options: [{ label: 'A' }], multiSelect: false }],
+    })
+    expect(opened.ok).toBe(true)
+    await store.markResolved('qr-resolved', 'answered', 'user', now)
+
+    expect(store.pruneSettled(now, 5 * 60_000)).toBe(1)
+    expect(store.get('qr-resolved')).toBeUndefined()
+    expect(store.pruneSettled(now, 5 * 60_000)).toBe(0)
+  })
+})
