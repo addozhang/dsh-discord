@@ -578,6 +578,83 @@ describe('live render: delivery failure posture', () => {
     expect(lastEdit?.content).toContain('AB')
   })
 
+  it('drops per-thread render state on binding retire — a re-bound thread starts fresh', async () => {
+    // Runtimes are keyed by thread id with no session identity. When a
+    // binding retires (reconcile deletes it) and the thread later rebinds
+    // to a DIFFERENT session, the stale runtime's lastSeq must not leak
+    // into the new session's renderedSeq — that floor would suppress the
+    // new session's entire journal below it after a restart, the exact
+    // message-loss direction the watermark fence exists to prevent.
+    const calls: Array<{ kind: string; channelId?: string; messageId?: string; content?: string }> = []
+    const delivery: LiveDeliveryPort = {
+      send: (request) => {
+        calls.push({ kind: 'send', channelId: request.channelId, content: request.content })
+        return Promise.resolve({ outcome: 'completed' as const, messageId: `dm-${String(calls.length)}` })
+      },
+      edit: (request) => {
+        calls.push({ kind: 'edit', channelId: request.channelId, messageId: request.messageId, content: request.content })
+        return Promise.resolve({ outcome: 'completed' as const })
+      },
+      typing: () => Promise.resolve(),
+      renameThread: () => Promise.resolve({ outcome: 'completed' as const }),
+      delete: () => Promise.resolve({ outcome: 'completed' as const }),
+    }
+    const queue: LiveFrame[] = []
+    let notify: (() => void) | undefined
+    let drainedClosed = false
+    const sleep = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms) })
+    async function* source(): AsyncIterable<LiveFrame> {
+      while (!drainedClosed) {
+        if (queue.length === 0) {
+          await new Promise<void>(resolve => { notify = resolve })
+          continue
+        }
+        const frame = queue.shift()
+        if (frame === undefined) continue
+        yield frame
+        await sleep(5)
+      }
+    }
+    const ended: Array<{ sessionId: string; renderedSeq: number }> = []
+    const live = startLiveRender({
+      frames: source,
+      threadForSession: () => 'thread-1',
+      delivery,
+      updateIntervalMs: 0,
+      activityCoalesceMs: 0,
+      typingIntervalMs: 60_000,
+      onTurnEnded: (sessionId, info) => {
+        if (info !== undefined) ended.push({ sessionId, renderedSeq: info.renderedSeq })
+      },
+    })
+    const push = (frame: LiveFrame): void => { queue.push(frame); notify?.() }
+
+    // Session A's turn on thread-1 advances the render watermark to 100.
+    push(sessionEvent('sess-a', 'turn/start', { turn: 1 }))
+    await sleep(10)
+    push({ type: 'session/event', sessionId: 'sess-a', seq: 100, event: { type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'A answer' } } } })
+    await sleep(10)
+    push(sessionEvent('sess-a', 'turn/end', { turn: 1, reason: { kind: 'stop' } }))
+    await sleep(20)
+    expect(ended.at(-1)).toEqual({ sessionId: 'sess-a', renderedSeq: 100 })
+
+    // The binding retires (reconcile removed it) — the adapter drops the
+    // thread's render state, and session B later rebinds the same thread.
+    live.dropThread('thread-1')
+    push({ type: 'session/event', sessionId: 'sess-b', seq: 5, event: { type: 'turn/start', data: { turn: 1 } } })
+    await sleep(10)
+    push({ type: 'session/event', sessionId: 'sess-b', seq: 7, event: { type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'B answer' } } } })
+    await sleep(10)
+    push(sessionEvent('sess-b', 'turn/end', { turn: 1, reason: { kind: 'stop' } }))
+    await sleep(20)
+    drainedClosed = true
+    notify?.()
+    live.dispose()
+
+    // Session B's watermark is its own seq, not the stale floor of 100.
+    expect(ended.at(-1)).toEqual({ sessionId: 'sess-b', renderedSeq: 7 })
+  })
+
   it('completes the in-flight head send instead of duplicating the answer (16.39)', async () => {
     // The live race: the last coalesced flush's send is still in flight
     // (headMessageId unset) when the authoritative assistant/message

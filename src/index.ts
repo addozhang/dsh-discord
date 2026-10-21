@@ -743,6 +743,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             const key = threadKeyById.get(action.threadId)
             if (key === undefined) continue
             await threadTable.delete(key)
+            // The durable binding is gone: drop the thread's render state
+            // too, or a later rebind inherits the stale watermark (the
+            // message-loss direction the fence exists to prevent).
+            liveRef.current?.dropThread(action.threadId)
             rpcLog('discord_reconcile_thread_retired', { threadId: action.threadId, reason: action.reason })
           }
         }
@@ -858,7 +862,13 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         threadBindingKeys: [...threadTable.keys()],
       })
       for (const key of plan.channelKeys) await channelTable.delete(key)
-      for (const key of plan.threadKeys) await threadTable.delete(key)
+      for (const key of plan.threadKeys) {
+        await threadTable.delete(key)
+        // Same retire rule as reconcile: forgotten threads drop their
+        // render state so a future rebind starts fresh.
+        const scope = parseThreadBindingKey(key)
+        if (scope !== undefined) liveRef.current?.dropThread(scope.threadId)
+      }
       rpcLog('discord_guild_forget_deleted', { guildId, channels: plan.channelKeys.length, threads: plan.threadKeys.length })
     }
 

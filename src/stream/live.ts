@@ -267,6 +267,8 @@ function presentationTitle(frameView: unknown): string | undefined {
 
 export function startLiveRender(deps: LiveRenderDeps): {
   dispose(): void
+  /** Drop one thread's render state when its binding retires. */
+  dropThread(threadId: string): void
   /** Approval-wait steering for the ask patches (turn-progress spec). */
   setApprovalWait(threadId: string, waiting: boolean): void
 } {
@@ -333,7 +335,11 @@ export function startLiveRender(deps: LiveRenderDeps): {
       if (runtime.stepSeq !== stepSeq) return Promise.resolve()
       const payloadContent = interimHeadWindow(content)
       const flush = (async (): Promise<string | undefined> => {
-        if (runtime.headMessageId === undefined) {
+        // Branch on a local: the property can change across the await, so
+        // the post-await re-check must stay a real comparison for the
+        // compiler too.
+        const existingHead = runtime.headMessageId
+        if (existingHead === undefined) {
           // An earlier send whose application was unobservable must never be
           // blind-resent (rest.ts contract): the stream pauses here and the
           // finalizer's single fresh send carries the answer instead.
@@ -354,8 +360,8 @@ export function startLiveRender(deps: LiveRenderDeps): {
           }
           return undefined
         }
-        await deps.delivery.edit({ channelId: threadId, messageId: runtime.headMessageId, content: payloadContent })
-        return runtime.headMessageId
+        await deps.delivery.edit({ channelId: threadId, messageId: existingHead, content: payloadContent })
+        return existingHead
       })()
       runtime.headFlush = flush
       return flush.then(() => undefined)
@@ -460,7 +466,10 @@ export function startLiveRender(deps: LiveRenderDeps): {
         // Tool titles are Host-presented free text (terminal commands): they
         // go through the same outbound builder as every other message path.
         const payload = buildOutboundMessage({ kind: 'tool', content: renderActivityContent(runtime) })
-        if (runtime.activityMessageId === undefined) {
+        // Branch on a local (see flushAnswer): the property can change
+        // across the await, so the post-await re-check stays real.
+        const existingActivity = runtime.activityMessageId
+        if (existingActivity === undefined) {
           if (runtime.activityAttempted) return undefined
           const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
           if (sent.outcome === 'completed') {
@@ -478,7 +487,7 @@ export function startLiveRender(deps: LiveRenderDeps): {
           }
           return undefined
         }
-        await deps.delivery.edit({ channelId: threadId, messageId: runtime.activityMessageId, content: payload.content })
+        await deps.delivery.edit({ channelId: threadId, messageId: existingActivity, content: payload.content })
         return undefined
       })()
       runtime.activityFlush = flush
@@ -894,6 +903,23 @@ export function startLiveRender(deps: LiveRenderDeps): {
         runtime.typing.dispose()
       }
       runtimes.clear()
+    },
+    /**
+     * Drop one thread's render state when its binding retires (reconcile
+     * removed it, or the guild forgot it). Runtimes carry no session
+     * identity: without this, a thread that later rebinds to a different
+     * session would inherit the old lastSeq, and the stale floor would
+     * suppress the new session's journal below it after a restart — the
+     * message-loss direction the watermark fence exists to prevent.
+     */
+    dropThread(threadId: string): void {
+      if (state.disposed) return
+      const runtime = runtimes.get(threadId)
+      if (runtime === undefined) return
+      runtime.scheduler?.dispose()
+      runtime.activityScheduler?.dispose()
+      runtime.typing.dispose()
+      runtimes.delete(threadId)
     },
     /**
      * Approval-wait steering for the ask patches (turn-progress spec): a
