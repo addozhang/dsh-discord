@@ -20,6 +20,10 @@ export const REQUIRED_HOST_SERVICES = [
   // permission-preset catalog (both ship in dsh-base).
   'commands',
   'permissionPresets',
+  // The ask service patches (16.53) resolve this directly; without it the
+  // composition dies mid-apply on a bare TypeError instead of the
+  // actionable startup diagnostic (review E5).
+  'approval',
 ] as const
 
 export type HostServiceName = (typeof REQUIRED_HOST_SERVICES)[number]
@@ -37,13 +41,17 @@ const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
   sessionController: ['prompt', 'create', 'list', 'cancel', 'updateQueue', 'selectModel', 'modelCatalog', 'follow', 'control', 'resolveAgent'],
   workspaceController: ['follow'],
   sessionQuery: ['observeSession'],
-  webServer: [],
   credentials: ['resolve', 'describe', 'set', 'unset'],
   settings: ['describe', 'update'],
   storageDomain: ['open'],
-  connection: ['rpc'],
+  // requestRejection fences the adapter-status RPC before any handler
+  // runs; webServer.register is the supported registration path (the
+  // connection's own rpc.handle is scoped out of external plugins).
+  connection: ['rpc', 'requestRejection'],
+  webServer: ['register'],
   commands: ['execute'],
   permissionPresets: ['catalog'],
+  approval: ['request'],
 }
 
 /** Actionable remediation hint appended to every activation failure. */

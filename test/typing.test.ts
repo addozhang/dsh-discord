@@ -56,15 +56,23 @@ describe('typing lifecycle', () => {
     }
   })
 
-  it('is idempotent: double stop and start-after-stop are no-ops', async () => {
-    const { trigger, lifecycle } = setup()
-    lifecycle.start()
-    lifecycle.stop()
-    lifecycle.stop()
-    lifecycle.start()
-    const count = trigger.mock.calls.length
-    await vi.advanceTimersByTimeAsync(21_000)
-    expect(trigger).toHaveBeenCalledTimes(count)
+  it('stop is restartable; disposal is the only terminal state', () => {
+    const { trigger, lifecycle: typing } = setup()
+    typing.start()
+    trigger.mockClear()
+    typing.stop()
+    typing.stop()
+    expect(trigger).toHaveBeenCalledTimes(0)
+    // A stopped lifecycle starts again (queue admission does this on every
+    // prompt): the trigger fires anew.
+    typing.start()
+    expect(trigger).toHaveBeenCalledTimes(1)
+    // Disposal is terminal: nothing fires after it, ever.
+    typing.dispose()
+    trigger.mockClear()
+    typing.start()
+    typing.resume()
+    expect(trigger).toHaveBeenCalledTimes(0)
   })
 
   it('disposal is terminal', async () => {

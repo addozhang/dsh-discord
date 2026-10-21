@@ -312,13 +312,24 @@ export class DiscordCardForm {
     this.saving = true
     this.failed = false
     this.publish()
+    // Snapshot the staged entries this save will consume: each write is a
+    // host round trip, and a draft staged mid-flight belongs to the NEXT
+    // save — clearing the whole map would vanish it without a trace.
+    const plannedDrafts = new Map<DiscordCardField, unknown>()
+    for (const item of plan) plannedDrafts.set(item.field, this.staged.get(item.field))
     let landed = true
     for (const write of writes) {
       // A rejected write is one landed=false outcome among many, not a crash:
       // the remaining writes still run and every draft survives for retry.
       landed = await write().catch(() => false) && landed
     }
-    if (landed) this.staged.clear()
+    if (landed) {
+      // Consume exactly what was planned: an entry replaced mid-flight
+      // (edit() stages a fresh object) is the user's newer draft and stays.
+      for (const [field, snapshot] of plannedDrafts) {
+        if (this.staged.get(field) === snapshot) this.staged.delete(field)
+      }
+    }
     this.saving = false
     this.failed = !landed
     this.publish()

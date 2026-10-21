@@ -316,3 +316,41 @@ describe('DiscordCardForm store binding', () => {
     expect(first.getSnapshot().allowedGuildIds.text).toBe('123456789012345678')
   })
 })
+
+describe('DiscordCardForm in-flight save staging (F1)', () => {
+  it('keeps drafts staged while the save is in flight', async () => {
+    const host = fakeScope()
+    const originalSet = host.scope.set.bind(host.scope)
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    // First write hangs until the test releases it: a save in flight over
+    // a host round trip, with a NEW draft staged in the middle.
+    let firstWrite = true
+    ;(host.scope as unknown as { set: (field: string, value: unknown) => Promise<void> }).set = (field: string, value: unknown): Promise<void> => {
+      if (!firstWrite) return originalSet(field, value).then(() => undefined)
+      firstWrite = false
+      return gate.then(() => originalSet(field, value)).then(() => undefined)
+    }
+    const form = new DiscordCardForm(host.scope)
+    const store = form.bind()
+    const actions = form.actions()
+
+    actions.edit('allowedGuildIds', '123456789012345678')
+    actions.save()
+    // The user edits ANOTHER field while the first write is in flight.
+    actions.edit('memberUserIds', '223456789012345678')
+    release()
+    await vi.waitFor(() => { expect(store.getSnapshot().saving).toBe(false) })
+
+    // The saved field landed and its draft was consumed; the mid-flight
+    // draft survives (dirty), and a follow-up save lands it too.
+    expect(host.user.allowedGuildIds).toEqual(['123456789012345678'])
+    expect(store.getSnapshot().dirty).toBe(true)
+
+    actions.save()
+    await vi.waitFor(() => { expect(store.getSnapshot().saving).toBe(false) })
+    expect(host.user.memberUserIds).toEqual(['223456789012345678'])
+    expect(store.getSnapshot().dirty).toBe(false)
+    expect(store.getSnapshot().failed).toBe(false)
+  })
+})

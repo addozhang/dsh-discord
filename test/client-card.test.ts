@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
+import * as DiscordSettingsCardModule from '../src/client/DiscordSettingsCard.js'
 
 import type { Context } from '@deepseek-ai/cordis'
 
@@ -79,5 +80,22 @@ describe('client entry', () => {
     })
     expect(typeof options.inject).toBe('function')
     expect(ctx.effect).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('card stylesheet scoping (F2)', () => {
+  it('scopes every selector under the card root — no host rules leak', () => {
+    // The card injects a plain <style> into the document (no shadow root):
+    // any selector not scoped to [data-dsh-discord-card] restyles the Host
+    // settings page itself while the card is mounted.
+    const CARD_CSS = (DiscordSettingsCardModule as { CARD_CSS: string }).CARD_CSS
+    const selectors = CARD_CSS.split('}').map(block => block.split('{')[0]?.trim()).filter(selector => selector !== undefined && selector !== '')
+    expect(selectors.length).toBeGreaterThan(10)
+    // Scoping discipline: every selector's first compound is one of the
+    // card's namespaced [data-dsh-discord-…] attributes — a bare element
+    // or `button[aria…]` here would restyle the Host's own UI.
+    for (const selector of selectors) {
+      expect((selector ?? '').startsWith('[data-dsh-discord')).toBe(true)
+    }
   })
 })

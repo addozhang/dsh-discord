@@ -1073,3 +1073,22 @@ describe('live render: permission preset system line (16.62)', () => {
     expect(calls.filter(call => call.kind === 'send')).toHaveLength(0)
   })
 })
+
+describe('queue-admission typing restarts (F4)', () => {
+  it('types again when a second prompt is enqueued after the queue drained', async () => {
+    // Typing on queue admission wedged off after the first completed turn:
+    // stop() was terminal and the queue path's start() no-oped — the
+    // queue-wait/first-token indicator only ever fired for the first prompt.
+    // Admission-only cadence (no turn in between, e.g. a queued item was
+    // removed): enqueue → typing; queue drained → stop; a later enqueue
+    // must type AGAIN — a terminal stop() wedged the second admission off.
+    const calls = await drive([
+      { type: 'session/queue', sessionId: 'sess-1', items: [{ id: 'm-1', summary: 'first' }] } as unknown as LiveFrame,
+      { type: 'session/queue', sessionId: 'sess-1', items: [] } as unknown as LiveFrame,
+      { type: 'session/queue', sessionId: 'sess-1', items: [{ id: 'm-2', summary: 'second' }] } as unknown as LiveFrame,
+    ], { threadForSession: () => 'thread-1' })
+
+    const typingCount = calls.filter(call => call.kind === 'typing').length
+    expect(typingCount).toBeGreaterThanOrEqual(2)
+  })
+})

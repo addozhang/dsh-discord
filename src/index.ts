@@ -819,6 +819,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       // the approval store's retention); unresolved ones stay by design.
       const prunedQuestions = questionsStore.pruneSettled(Date.now(), 7 * 24 * 60 * 60_000)
       if (prunedQuestions > 0) rpcLog('discord_question_store_pruned', { pruned: prunedQuestions })
+      // Terminal approval rows age out of the process-local table too
+      // (review B4): the store's in-memory index prunes itself, but the
+      // row map held every id for the process lifetime.
+      const approvalCutoff = Date.now() - 7 * 24 * 60 * 60_000
+      for (const [approvalId, record] of [...approvalRows.entries()]) {
+        if (record.state === 'pending') continue
+        if (record.expiresAtMs > approvalCutoff) continue
+        approvalRows.delete(approvalId)
+      }
     }, 30_000)
     ctx.effect(() => () => { clearInterval(expiryTimer) }, 'discord interaction expiry sweep')
 
@@ -1250,10 +1259,20 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       // occupy.
       echoRedact: text => text,
       permissionLineCopy: () => ({ line: presetKey => copy.permissionSystemLine(permissionPresetLabel(presetKey, copy)) }),
-      onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
+      onQueueSnapshot: (sessionId, items) => {
+        // An empty snapshot means the queue drained: drop the cache entry
+        // instead of holding one map slot per session ever seen.
+        if (items.length === 0) queueSnapshots.delete(sessionId)
+        else queueSnapshots.set(sessionId, items)
+      },
       onTurnEnded: (sessionId, info) => {
         const turn = turnTracker.active(sessionId)
-        if (turn !== undefined) turnTracker.complete(turn.requestId)
+        if (turn !== undefined) {
+          turnTracker.complete(turn.requestId)
+          // The actor lookup's purpose ends with the turn (review B4):
+          // without this the map gained one entry per prompt, forever.
+          turnActors.delete(turn.requestId)
+        }
         rpcLog('discord_turn_ended', { sessionId, hadActiveTurn: turn !== undefined })
         if (info !== undefined) void persistRenderedSeq(sessionId, info.renderedSeq)
       },

@@ -94,11 +94,11 @@ describe('cordis-owned disposal', () => {
     const effects: { execute: () => unknown; label: string | undefined }[] = []
     const ctx = {
       get: (serviceName: string) => ({
-        sessionController: { prompt: () => {}, create: () => {}, list: () => {}, cancel: () => {}, updateQueue: () => {}, selectModel: () => {}, modelCatalog: () => {}, follow: () => {}, control: () => {}, resolveAgent: () => {} }, workspaceController: { follow: () => {} }, sessionQuery: { observeSession: () => {} }, webServer: {}, commands: { execute: () => {} }, permissionPresets: { catalog: () => {} },
+        sessionController: { prompt: () => {}, create: () => {}, list: () => {}, cancel: () => {}, updateQueue: () => {}, selectModel: () => {}, modelCatalog: () => {}, follow: () => {}, control: () => {}, resolveAgent: () => {} }, workspaceController: { follow: () => {} }, sessionQuery: { observeSession: () => {} }, webServer: { register: () => {} }, commands: { execute: () => {} }, permissionPresets: { catalog: () => {} }, approval: { request: () => {} },
         credentials: { resolve: () => {}, describe: () => {}, set: () => {}, unset: () => {} },
         settings: { describe: () => {}, update: () => {} },
         storageDomain: { open: () => {} },
-        connection: { rpc: { handle: () => () => {} } },
+        connection: { rpc: { handle: () => () => {} }, requestRejection: () => {} },
       })[serviceName],
       inject: vi.fn(),
       logger: { debug: vi.fn() },

@@ -620,7 +620,8 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           return
         }
         if (subName === 'select') {
-          // Host-operator authority by default: the switch reaches the
+          // Operator-only by configuration (modelSelectOperatorOnly, default OFF —
+          // decision 16.42): single-user deployments leave it open to members.
           // Host-wide default selection (design.md §7). A deployment may
           // relax it for single-user use (16.42).
           const requireOperator = deps.modelSelectOperatorOnly()
@@ -1188,8 +1189,27 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
     if (notice !== undefined) await deps.componentFollowUp(event.interactionId, interactionToken, notice)
   }
 
+  /**
+   * Redelivery fence (review C-4): Discord re-delivers component
+   * interactions across gateway resume/reconnect. The ask stores are
+   * claim-idempotent, but the one-shot flows (guild-forget, permission
+   * confirm, model cascade, bind commit) are not — a redelivery
+   * re-executed them (a duplicate /permission run carries its own audit
+   * pair). One execution per interaction id, bounded LRU, process-local.
+   */
+  const seenInteractions = new Set<string>()
+  const SEEN_INTERACTIONS_MAX = 512
+
   return {
     async route(event, interactionToken) {
+      if (event.interactionId !== '' && seenInteractions.has(event.interactionId)) return
+      if (event.interactionId !== '') {
+        seenInteractions.add(event.interactionId)
+        if (seenInteractions.size > SEEN_INTERACTIONS_MAX) {
+          const oldest = seenInteractions.values().next().value
+          if (oldest !== undefined) seenInteractions.delete(oldest)
+        }
+      }
       deps.log('discord_slash_dispatch', {
         interactionId: event.interactionId,
         commandName: event.commandName,

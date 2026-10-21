@@ -2,8 +2,10 @@
  * The typing keepalive lifecycle (design.md §8, task 11.9). Typing starts
  * when a Turn produces work and refreshes on an interval; an owning
  * interaction pauses it (the interaction owns attention); completion,
- * cancellation, and failure all stop it; disposal is terminal — no trigger
- * can fire after the plugin tears the surface down.
+ * cancellation, and failure all stop it — and a stopped lifecycle is
+ * restartable (idle), because the queue-admission path starts typing on
+ * every prompt. Disposal is terminal — no trigger can fire after the
+ * plugin tears the surface down.
  */
 
 export type TypingStopReason = 'completed' | 'cancelled' | 'failed' | 'disposed'
@@ -63,12 +65,18 @@ export function createTypingLifecycle(options: {
     },
     stop(reason = 'completed') {
       void reason
-      if (state === 'stopped') return
-      state = 'stopped'
+      // stop() returns the lifecycle to idle — restartable: the queue-
+      // admission path calls start() on every prompt, and a terminal stop
+      // here wedged typing off after the first completed turn (only
+      // beginTurn's fresh lifecycle revived it). Disposal is the one
+      // terminal transition (below).
+      if (state === 'idle') return
+      state = 'idle'
       clearTimer()
     },
     dispose() {
-      this.stop('disposed')
+      state = 'stopped'
+      clearTimer()
     },
   }
 }
