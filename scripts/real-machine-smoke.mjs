@@ -62,6 +62,16 @@ const withDmp = Array.isArray(cmds.body) ? cmds.body.filter(c => c.default_membe
 check('D1: default_member_permissions omitted on every command', withDmp.length === 0,
   withDmp.length === 0 ? '' : `offenders: ${withDmp.map(c => c.name).join(',')}`)
 
+// 2b. D1 permission math: with dmp null on every command, any member can
+// invoke iff @everyone retains USE_APPLICATION_COMMANDS — provable via
+// REST, no member account needed (UI visibility follows deterministically).
+const USE_APPLICATION_COMMANDS = 1n << 31n
+const everyoneRole = await rest('GET', `/guilds/${GUILD}/roles`)
+const everyone = Array.isArray(everyoneRole.body) ? everyoneRole.body.find(r => r.id === GUILD) : undefined
+const everyonePerms = BigInt(everyone?.permissions ?? '0')
+check('D1: @everyone may invoke commands (USE_APPLICATION_COMMANDS held)', (everyonePerms & USE_APPLICATION_COMMANDS) !== 0n,
+  `everyone perms=${everyone?.permissions ?? '?'}`)
+
 // 3. Channel reachable (view/read permissions of the invite).
 const ch = await rest('GET', `/channels/${CHANNEL}`)
 check('channel readable', ch.status === 200, ch.body?.name ?? String(ch.status))
@@ -98,4 +108,37 @@ MANUAL (CDP or by hand) — required once per release line:
       events during the above (this session's new warn events are probes)
   [ ] ack latency: slash commands answer well under 3s (C-7 budget)`)
 
+if (args.mode === 'watch') {
+  console.log('watching for a mention-created thread (send one now)…')
+  const deadline = Date.now() + 180_000
+  let threadId = ''
+  while (Date.now() < deadline && threadId === '') {
+    const active = await rest('GET', `/channels/${CHANNEL}/threads/active`)
+    const found = Array.isArray(active.body?.threads) ? active.body.threads.at(-1) : undefined
+    if (found !== undefined) {
+      const msgs = await rest('GET', `/channels/${found.id}/messages?limit=50`)
+      const botMsgs = Array.isArray(msgs.body) ? msgs.body.filter(m => m.author?.id === APP) : []
+      if (botMsgs.length >= 2) threadId = found.id
+    }
+    if (threadId === '') await new Promise(r => { setTimeout(r, 3_000) })
+  }
+  check('mention → thread with rendered head', threadId !== '', threadId)
+  if (threadId !== '') {
+    let prev = -1, stable = 0
+    while (stable < 3 && Date.now() < deadline) {
+      const msgs = await rest('GET', `/channels/${threadId}/messages?limit=50`)
+      const count = Array.isArray(msgs.body) ? msgs.body.filter(m => m.author?.id === APP).length : 0
+      stable = count === prev ? stable + 1 : 0
+      prev = count
+      await new Promise(r => { setTimeout(r, 4_000) })
+    }
+    check('finalize settles (rendered messages stabilize)', stable >= 3, `${String(prev)} bot messages`)
+  }
+  if (args.trace !== undefined) {
+    const { readFile } = await import('node:fs/promises')
+    const log = await readFile(args.trace, 'utf8')
+    const failures = log.split('\n').filter(l => l.includes('dsh-discord') && /_(failed|threw|blocked|unknown)\b/.test(l))
+    check('trace hygiene: zero failure-shaped events', failures.length === 0, failures.slice(0, 3).join(' | '))
+  }
+}
 process.exit(failed === 0 ? 0 : 1)
