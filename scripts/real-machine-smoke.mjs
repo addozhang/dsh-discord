@@ -88,9 +88,14 @@ const nonce = crypto.randomUUID().replaceAll('-', '').slice(0, 25)
 const probe = await rest('POST', `/channels/${CHANNEL}/messages`, {
   content: `dsh-smoke probe ${nonce.slice(0, 6)}`,
   flags: 4096,
+  nonce,
   allowed_mentions: { parse: [] },
 })
 check('probe send accepted (content ≤2000, nonce ≤25)', probe.status === 200)
+if (probe.status === 200 && probe.body?.nonce !== undefined) {
+  // Discord echoes the nonce on the created message — assert the round-trip (PR review).
+  check('probe nonce echoed unchanged', probe.body.nonce === nonce)
+}
 if (probe.status === 200) {
   const del = await rest('DELETE', `/channels/${CHANNEL}/messages/${probe.body.id}`)
   check('probe deleted', del.status === 204 || del.status === 200)

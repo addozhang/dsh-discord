@@ -16,6 +16,7 @@
 set -euo pipefail
 
 TARBALL="${1:?usage: verify-profile.sh <adapter-tarball> <guild-id> <user-id>}"
+TARBALL="$(cd "$(dirname "$TARBALL")" && pwd)/$(basename "$TARBALL")"
 GUILD="${2:?guild id}"
 OPERATOR="${3:?your discord user id}"
 PROFILE="web-test"
