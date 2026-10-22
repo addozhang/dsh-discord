@@ -1,53 +1,94 @@
 #!/usr/bin/env bash
-# Verification profile recipe (2026-10-21). Turns the web-021rc2 baseline
-# into one command per release line: isolated CLI profile with explicitly
-# pinned host bundles (the shared hoisted root resolves stale lines
-# otherwise), pre-approved build scripts, and cleanup.
+# Verification profile recipe (rev 2, 2026-10-22 — rewritten after the
+# first real-machine deployment taught three lessons the hard way):
 #
-# Usage: scripts/verify-profile.sh <dsh-version> [adapter-tarball]
-#   dsh-version     exact @deepseek-ai/dsh version, e.g. 0.2.1-rc.2
-#   adapter-tarball optional local tarball; default: npm <version-typed>
+#   1. NEVER pin dsh-base/dsh-web-app in profile dependencies: the nested
+#      duplicate copies of host-internal packages break the settings
+#      singleton ("The acknowledgement could not be saved"). The bundles
+#      LIST plus Node's upward resolution is enough.
+#   2. `dsh plugin rm` removes the row from the bundles LIST too — a fresh
+#      profile must have its package.json written in full, by hand.
+#   3. The adapter's settings live in the profile's cordis.patch.yml
+#      `config:` block (that is where card saves land) — pre-seeding it
+#      skips the whole settings-card dance.
+#
+# Usage: scripts/verify-profile.sh <adapter-tarball> <guild-id> <user-id>
 set -euo pipefail
 
-VERSION="${1:?usage: verify-profile.sh <dsh-version> [adapter-tarball]}"
-TARBALL="${2:-}"
-PROFILE="web-verify-${VERSION//./-}"
-BASE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/dsh-verify-${VERSION}-XXXXXX")"
+TARBALL="${1:?usage: verify-profile.sh <adapter-tarball> <guild-id> <user-id>}"
+GUILD="${2:?guild id}"
+OPERATOR="${3:?your discord user id}"
+PROFILE="web-test"
+DIR="$HOME/.dsh/profiles/${PROFILE}"
+PORT=3081
 
-echo "==> isolated CLI in ${BASE_DIR}"
-cd "${BASE_DIR}" && npm init -y >/dev/null
-npm install --no-fund --no-audit "@deepseek-ai/dsh@${VERSION}" >/dev/null
+if pgrep -f "profile ${PROFILE}" >/dev/null; then
+  echo "stopping the running ${PROFILE} host first (plugin rm/add races its lock)"
+  pkill -f "profile ${PROFILE}" || true
+  sleep 2
+fi
 
-echo "==> one-shot profile ${PROFILE} (explicit bundle pins)"
+mkdir -p "${DIR}"
+cd "${DIR}"
+
+cat > package.json <<JSON
+{
+  "name": "dsh-profile-${PROFILE}",
+  "private": true,
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "@addozhang/dsh-discord"
+      ]
+    }
+  },
+  "dependencies": {
+    "@addozhang/dsh-discord": "file:${TARBALL}"
+  }
+}
+JSON
+
+# Lesson from the pnpm 11 gates: placeholders block every install.
 cat > pnpm-workspace.yaml <<'YAML'
+packages:
+  - .
+nodeLinker: hoisted
+autoInstallPeers: false
 allowBuilds:
+  '@deepseek-ai/dsh-subprocess-local': true
+  '@google/genai': true
   koffi: true
   node-pty: true
   protobufjs: true
-  dsh-subprocess-local: true
-  "@google/genai": true
 YAML
-"${BASE_DIR}/node_modules/.bin/dsh" --profile "${PROFILE}" --no-open --port 0 --version >/dev/null 2>&1 || true
 
-# Pin the host bundles the profile resolves, so a shared hoisted root
-# cannot mix release lines (AGENTS.md 2026-10-20).
-DSH_BIN="${BASE_DIR}/node_modules/.bin/dsh"
-"${DSH_BIN}" plugin --profile "${PROFILE}" add "dsh-base@${VERSION}" >/dev/null 2>&1 || true
-"${DSH_BIN}" plugin --profile "${PROFILE}" add "dsh-web-app@${VERSION}" >/dev/null 2>&1 || true
+# Pre-seed the adapter config (same shape card saves produce). The
+# token stays in ~/.dsh/.credentials.yaml (DSH_DISCORD_BOT_TOKEN slot).
+cat > cordis.patch.yml <<YAML
+- id: dsh-discord
+  name: "@addozhang/dsh-discord"
+  config:
+    allowedGuildIds:
+      - "${GUILD}"
+    memberUserIds:
+      - "${OPERATOR}"
+    hostOperatorUserIds:
+      - "${OPERATOR}"
+    language: auto
+YAML
 
-echo "==> install adapter"
-if [ -n "${TARBALL}" ]; then
-  "${DSH_BIN}" plugin --profile "${PROFILE}" rm '@addozhang/dsh-discord' >/dev/null 2>&1 || true
-  "${DSH_BIN}" plugin --profile "${PROFILE}" add "file:${TARBALL}"
-else
-  echo "(no tarball given — add it yourself, exact version, then verify node_modules version field)"
-fi
+echo "==> installing adapter from ${TARBALL}"
+pnpm install --no-frozen-lockfile >/dev/null
+
+INSTALLED=$(node -e "console.log(require('./node_modules/@addozhang/dsh-discord/package.json').version)")
+echo "==> adapter ${INSTALLED} installed (verify it matches the tarball)"
 
 echo
-echo "Next:"
-echo "  DSH_DISCORD_TRACE=1 ${DSH_BIN} --profile ${PROFILE} --no-open --port <n>"
-echo "  Settings → Discord: token (portal DOM read, never chat-transcribed) + guild allowlist"
-echo "  node <repo>/scripts/real-machine-smoke.mjs --guild <id> --channel <id>"
+echo "Start (trace on):  DSH_DISCORD_TRACE=1 dsh --profile ${PROFILE} --no-open --port ${PORT} > /tmp/${PROFILE}-${PORT}.log 2>&1 &"
+echo "Smoke:             DISCORD_BOT_TOKEN=… node scripts/real-machine-smoke.mjs --guild ${GUILD} --channel <id>"
+echo "Mention E2E:       node scripts/devtools-cdp-mention.mjs 'task…' --trace /tmp/${PROFILE}-${PORT}.log"
 echo
-echo "Cleanup when done (single-host red line — no other host may run this plugin):"
-echo "  rm -rf ~/.dsh/profiles/${PROFILE} ${BASE_DIR}"
+echo "Cleanup when done (single-host red line):"
+echo "  pkill -f 'profile ${PROFILE}'; rm -rf ${DIR} /tmp/${PROFILE}-${PORT}.log"
