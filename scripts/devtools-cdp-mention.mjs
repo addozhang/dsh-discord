@@ -92,6 +92,10 @@ async function main() {
   await sleep(300)
   await key({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
   await key({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+  const preSendLastId = await evaluate(`(() => {
+    const items = document.querySelectorAll('[data-list-item-id]')
+    return items.length === 0 ? '' : (items[items.length - 1].getAttribute('data-list-item-id') ?? '')
+  })()`)
   console.log('mention sent — switching to REST verification')
   ws.close()
 
@@ -108,6 +112,9 @@ async function main() {
     const recent = await rest('GET', `/channels/${CHANNEL}/messages?limit=5`)
     if (Array.isArray(recent.body)) {
       for (const message of recent.body) {
+        // Tie discovery to THIS run (PR re-review): only messages newer
+        // than our pre-send last message can be this run's anchor.
+        if (preSendLastId !== '' && message.id <= preSendLastId) continue
         const probe = await rest('GET', `/channels/${message.id}`)
         // Public threads are channel type 11 (no `thread` flag exists).
       if (probe.status === 200 && probe.body?.type === 11 && probe.body?.parent_id === CHANNEL) { found = probe.body; break }

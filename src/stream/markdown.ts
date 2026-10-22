@@ -78,6 +78,16 @@ export function splitMarkdownAware(text: string, limit: number): string[] {
     const canShrink = base.length > 1 && limit - reserved >= 2 && limit - reserved < base.length
     if (canFit || !canShrink) {
       const rebalanced = rebalanceChunk(base, state)
+      // Degenerate passthrough (PR re-review): an unbreakable fence line
+      // longer than the limit still respects the wire limit — a hard cut
+      // beats a guaranteed 400 on the send. splitMessage's progress
+      // guarantee makes this finite.
+      if (rebalanced.length > limit) {
+        for (const piece of splitMessage(rebalanced, limit)) {
+          if (piece.trim() !== '') out.push(piece)
+        }
+        return
+      }
       if (rebalanced.trim() !== '') out.push(rebalanced)
       return
     }
