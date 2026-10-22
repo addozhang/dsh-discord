@@ -13,6 +13,7 @@
  * reply and report the ack latency (Discord's budget is 3s; C-7).
  */
 const COMMAND = process.argv[2] ?? '/model show'
+const EXPECT = (() => { const i = process.argv.indexOf('--expect'); return i > 0 ? process.argv[i + 1] : undefined })()
 const CDP_HTTP = 'http://127.0.0.1:9222'
 
 const sleep = (ms) => new Promise(r => { setTimeout(r, ms) })
@@ -113,10 +114,12 @@ async function main() {
     console.log(`FAIL: no new message within ${String(elapsed)}ms — the interaction may have failed ("did not respond"?)`)
     process.exit(1)
   }
-  const verdict = elapsed < 3_000 ? 'PASS (<3s budget)' : 'FAIL (over 3s budget)'
+  const correlated = EXPECT === undefined ? true : replyText.includes(EXPECT)
+  if (!correlated) console.log(`FAIL: reply lacked ${String(EXPECT)}`)
+  const verdict = elapsed < 3_000 && correlated ? 'PASS (<3s budget)' : 'FAIL (over budget or uncorrelated)'
   console.log(`ack latency: ${String(elapsed)}ms — ${verdict}`)
   console.log(`reply (first 200 chars): ${replyText}`)
-  process.exit(elapsed < 3_000 ? 0 : 1)
+  process.exit(elapsed < 3_000 && correlated ? 0 : 1)
 }
 
 main().catch(cause => { console.error(String(cause)); process.exit(2) })

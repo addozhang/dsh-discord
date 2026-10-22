@@ -15,8 +15,9 @@ import { readFile } from 'node:fs/promises'
 const TASK = process.argv[2] ?? '列出当前目录的文件名,一句话即可'
 const TRACE = (() => { const i = process.argv.indexOf('--trace'); return i > 0 ? process.argv[i + 1] : undefined })()
 const CDP_HTTP = 'http://127.0.0.1:9222'
+const GUILD = process.env.GUILD ?? '1562450757805146123'
 const CHANNEL = process.env.CHANNEL_ID ?? '1562604323509108830'
-const CHANNEL_URL = `https://discord.com/channels/1562450757805146123/${CHANNEL}`
+const CHANNEL_URL = `https://discord.com/channels/${GUILD}/${CHANNEL}`
 const TOKEN = process.env.DISCORD_BOT_TOKEN ?? ''
 const API = 'https://discord.com/api/v10'
 const sleep = (ms) => new Promise(r => { setTimeout(r, ms) })
@@ -108,12 +109,15 @@ async function main() {
     if (Array.isArray(recent.body)) {
       for (const message of recent.body) {
         const probe = await rest('GET', `/channels/${message.id}`)
-        if (probe.status === 200 && probe.body?.thread === true) { found = probe.body; break }
+        // Public threads are channel type 11 (no `thread` flag exists).
+      if (probe.status === 200 && probe.body?.type === 11 && probe.body?.parent_id === CHANNEL) { found = probe.body; break }
       }
     }
     if (found === undefined) {
-      const active = await rest('GET', `/channels/${CHANNEL}/threads/active`)
-      found = Array.isArray(active.body?.threads) ? active.body.threads.at(-1) : undefined
+      const active = await rest('GET', `/guilds/${GUILD}/threads/active`)
+      found = Array.isArray(active.body?.threads)
+        ? active.body.threads.filter(t => t.parent_id === CHANNEL).at(-1)
+        : undefined
     }
     if (found !== undefined) {
       const msgs = await rest('GET', `/channels/${found.id}/messages?limit=50`)
@@ -125,12 +129,14 @@ async function main() {
   check('mention → thread with rendered head', threadId !== '', threadId)
 
   if (threadId !== '') {
-    let prev = -1, stable = 0
+    // Count AND last-content fingerprint: streaming edits in place (PR review).
+    let prev = '', stable = 0
     while (stable < 3 && Date.now() < deadline) {
       const msgs = await rest('GET', `/channels/${threadId}/messages?limit=50`)
-      const count = Array.isArray(msgs.body) ? msgs.body.filter(m => m.author?.id === '1550676723773739048').length : 0
-      stable = count === prev ? stable + 1 : 0
-      prev = count
+      const bot = Array.isArray(msgs.body) ? msgs.body.filter(m => m.author?.id === '1550676723773739048') : []
+      const fp = `${String(bot.length)}:${(bot.at(-1)?.id ?? '')}:${String((bot.at(-1)?.content ?? '').length)}`
+      stable = fp === prev ? stable + 1 : 0
+      prev = fp
       await sleep(5_000)
     }
     check('finalize settles (messages stabilize)', stable >= 3, `${String(prev)} bot messages`)
@@ -142,8 +148,8 @@ async function main() {
   if (TRACE !== undefined) {
     // Window the scan to bytes appended since the run began — stale
     // warnings from earlier sessions are out of scope.
-    const log = await readFile(TRACE, 'utf8')
-    const windowed = log.slice(TRACE_OFFSET)
+    const raw = await readFile(TRACE)
+    const windowed = raw.subarray(TRACE_OFFSET).toString('utf8')
     const failures = windowed.split('\n').filter(l => l.includes('dsh-discord') && /_(failed|threw|blocked|unknown)\b/.test(l))
     check('trace hygiene: zero failure-shaped events', failures.length === 0, failures.slice(0, 3).join(' | '))
   }
