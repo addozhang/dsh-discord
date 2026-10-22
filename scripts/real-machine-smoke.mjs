@@ -132,9 +132,11 @@ if (args.mode === 'watch') {
     let prev = -1, stable = 0
     while (stable < 3 && Date.now() < deadline) {
       const msgs = await rest('GET', `/channels/${threadId}/messages?limit=50`)
-      const count = Array.isArray(msgs.body) ? msgs.body.filter(m => m.author?.id === APP).length : 0
-      stable = count === prev ? stable + 1 : 0
-      prev = count
+      // Full fingerprint (newest-first API; equal-length edits count).
+      const fp = (Array.isArray(msgs.body) ? msgs.body.filter(m => m.author?.id === APP) : [])
+        .map(m => `${m.id}:${m.content ?? ''}`).join('|')
+      stable = fp === prev ? stable + 1 : 0
+      prev = fp
       await new Promise(r => { setTimeout(r, 4_000) })
     }
     check('finalize settles (rendered messages stabilize)', stable >= 3, `${String(prev)} bot messages`)

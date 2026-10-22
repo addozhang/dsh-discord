@@ -141,7 +141,10 @@ async function main() {
     while (stable < 3 && Date.now() < deadline) {
       const msgs = await rest('GET', `/channels/${threadId}/messages?limit=50`)
       const bot = Array.isArray(msgs.body) ? msgs.body.filter(m => m.author?.id === '1550676723773739048') : []
-      const fp = `${String(bot.length)}:${(bot.at(-1)?.id ?? '')}:${String((bot.at(-1)?.content ?? '').length)}`
+      // Fingerprint EVERY bot message (id + full content): the API is
+      // newest-first so at(-1) watched the oldest row (PR re-review), and
+      // length-only misses equal-length edits.
+      const fp = bot.map(m => `${m.id}:${m.content ?? ''}`).join('|')
       stable = fp === prev ? stable + 1 : 0
       prev = fp
       await sleep(5_000)
