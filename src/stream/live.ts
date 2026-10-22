@@ -15,6 +15,8 @@ import { createTypingLifecycle, type TypingLifecycle } from './typing.js'
 import { createToolActivitySurface, type ToolActivitySurface, type ToolRow } from './tool-view.js'
 import { createAnswerFinalizer, type AnswerFinalizer } from './finalizer.js'
 import { buildOutboundMessage } from './outbound.js'
+import { splitMarkdownAware } from './markdown.js'
+import { DISCORD_MESSAGE_LIMIT, splitMessage } from './splitter.js'
 import { toolCategoryIcon } from './icons.js'
 import { shellCommandTitle } from './tool-view.js'
 import { discordChannelNameKey, safeTitle } from '../policy/disclosure.js'
@@ -96,6 +98,12 @@ export interface LiveRenderDeps {
    * Unset: user/message records never echo (the pre-feature behavior).
    */
   userEchoCopy?: () => { label: string; nonText: string; truncated: string }
+  /**
+   * Redaction seam for the user-input echo (review D4, decision A):
+   * identity in production until the policy lands; tests can inject a
+   * filter to pin that echoed text passes through it.
+   */
+  echoRedact?: (text: string) => string
   /**
    * Localized permission system-line copy, resolved live (language can
    * change). Unset: permission/preset records never render (16.62).
@@ -265,6 +273,8 @@ function presentationTitle(frameView: unknown): string | undefined {
 
 export function startLiveRender(deps: LiveRenderDeps): {
   dispose(): void
+  /** Drop one thread's render state when its binding retires. */
+  dropThread(threadId: string): void
   /** Approval-wait steering for the ask patches (turn-progress spec). */
   setApprovalWait(threadId: string, waiting: boolean): void
 } {
@@ -307,21 +317,47 @@ export function startLiveRender(deps: LiveRenderDeps): {
     return runtime
   }
 
+  /**
+   * The interim view of the accumulating answer, always within the wire
+   * limit: once the text outgrows one Discord message, the head shows the
+   * FIRST window — the same layout finalize lands on (head = chunk 0,
+   * overflow as continuations), so the transition is seamless and no
+   * interim edit can 400 on length while the stream is still running.
+   */
+  function interimHeadWindow(content: string): string {
+    const chunks = content.length > DISCORD_MESSAGE_LIMIT
+      ? splitMarkdownAware(content, DISCORD_MESSAGE_LIMIT)
+      : [content]
+    const first = chunks[0] ?? ''
+    const built = buildOutboundMessage({ kind: 'assistant', content: first }).content
+    if (built.length <= DISCORD_MESSAGE_LIMIT) return built
+    return splitMessage(built, DISCORD_MESSAGE_LIMIT)[0] ?? built
+  }
+
   /** Flush the current answer text: create the head once, then edit it. */
   function flushAnswer(threadId: string, runtime: ThreadRuntime): (content: string) => Promise<void> {
     const stepSeq = runtime.stepSeq
     return (content: string): Promise<void> => {
       if (runtime.stepSeq !== stepSeq) return Promise.resolve()
-      const payload = buildOutboundMessage({ kind: 'assistant', content })
+      const payloadContent = interimHeadWindow(content)
       const flush = (async (): Promise<string | undefined> => {
-        if (runtime.headMessageId === undefined) {
+        // Branch on a local: the property can change across the await, so
+        // the post-await re-check must stay a real comparison for the
+        // compiler too.
+        const existingHead = runtime.headMessageId
+        if (existingHead === undefined) {
           // An earlier send whose application was unobservable must never be
           // blind-resent (rest.ts contract): the stream pauses here and the
           // finalizer's single fresh send carries the answer instead.
           if (runtime.headAttempted) return undefined
-          const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+          const sent = await deps.delivery.send({ channelId: threadId, content: payloadContent })
           if (sent.outcome === 'completed') {
-            runtime.headMessageId = sent.messageId
+            // Fence the write-back (same rule as finalize): a send that
+            // lands after this step was superseded must not repoint the
+            // head — the newer step owns its own message.
+            if (runtime.stepSeq === stepSeq && runtime.headMessageId === undefined) {
+              runtime.headMessageId = sent.messageId
+            }
             return sent.messageId
           }
           if (sent.outcome === 'unknown') {
@@ -330,8 +366,8 @@ export function startLiveRender(deps: LiveRenderDeps): {
           }
           return undefined
         }
-        await deps.delivery.edit({ channelId: threadId, messageId: runtime.headMessageId, content: payload.content })
-        return runtime.headMessageId
+        await deps.delivery.edit({ channelId: threadId, messageId: existingHead, content: payloadContent })
+        return existingHead
       })()
       runtime.headFlush = flush
       return flush.then(() => undefined)
@@ -424,7 +460,11 @@ export function startLiveRender(deps: LiveRenderDeps): {
 
   /** Render the tool rows into one bounded activity message (create once, edit after). */
   function renderActivity(threadId: string, runtime: ThreadRuntime): () => Promise<void> {
+    // The activity surface is TURN-scoped (its scheduler is recreated per
+    // turn, not per step): fence on the turn epoch, not the step counter.
+    const turnId = runtime.turnId
     return async () => {
+      if (runtime.turnId !== turnId) return
       if (runtime.tools.render().length === 0 && progressPhaseLine(runtime) === undefined) return
       // The flush promise records the message id it created so turn/end's
       // cleanup can delete a send that is still in flight (orphan guard).
@@ -432,11 +472,19 @@ export function startLiveRender(deps: LiveRenderDeps): {
         // Tool titles are Host-presented free text (terminal commands): they
         // go through the same outbound builder as every other message path.
         const payload = buildOutboundMessage({ kind: 'tool', content: renderActivityContent(runtime) })
-        if (runtime.activityMessageId === undefined) {
+        // Branch on a local (see flushAnswer): the property can change
+        // across the await, so the post-await re-check stays real.
+        const existingActivity = runtime.activityMessageId
+        if (existingActivity === undefined) {
           if (runtime.activityAttempted) return undefined
           const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
           if (sent.outcome === 'completed') {
-            runtime.activityMessageId = sent.messageId
+            // Same write-back fence as the answer head: a send landing
+            // after this turn was superseded must not repoint the
+            // activity message.
+            if (runtime.turnId === turnId && runtime.activityMessageId === undefined) {
+              runtime.activityMessageId = sent.messageId
+            }
             return sent.messageId
           }
           if (sent.outcome === 'unknown') {
@@ -445,7 +493,7 @@ export function startLiveRender(deps: LiveRenderDeps): {
           }
           return undefined
         }
-        await deps.delivery.edit({ channelId: threadId, messageId: runtime.activityMessageId, content: payload.content })
+        await deps.delivery.edit({ channelId: threadId, messageId: existingActivity, content: payload.content })
         return undefined
       })()
       runtime.activityFlush = flush
@@ -477,7 +525,11 @@ export function startLiveRender(deps: LiveRenderDeps): {
     if (kind !== 'user') return
     const fromDiscord = typeof rpcId === 'string' && rpcId.startsWith('discord:')
     if (fromDiscord && (event.carrier === 'live' || runtime.caughtUp)) return
-    const text = userTextParts(data['content'])
+    // Redaction seam (review D4, decision A): the echo renders the user's
+    // ORIGINAL text, so a secret pasted into a web-UI prompt would persist
+    // into Discord channel history. The seam is identity today; when the
+    // redaction policy lands it has exactly one hook to occupy.
+    const text = deps.echoRedact !== undefined ? deps.echoRedact(userTextParts(data['content'])) : userTextParts(data['content'])
     const body = text === ''
       ? copy.nonText
       : text.length <= USER_ECHO_MAX
@@ -602,12 +654,14 @@ export function startLiveRender(deps: LiveRenderDeps): {
           const finalizedStepSeq = runtime.stepSeq
           const finalizer = createAnswerFinalizer({
             delivery: {
+              // The finalizer builds each piece's final outbound payload
+              // (table wrap + mention suppression + length fence); these
+              // adapters only carry it to the wire.
               editHead: async ({ messageId, content }) => {
-                const payload = buildOutboundMessage({ kind: 'assistant', content })
                 // No head exists (text arrived without flushed chunks): the
                 // first finalize send IS the head, recorded for continuations.
                 if (messageId === '') {
-                  const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+                  const sent = await deps.delivery.send({ channelId: threadId, content })
                   if (sent.outcome === 'completed') {
                     if (runtime.stepSeq === finalizedStepSeq && runtime.headMessageId === undefined) {
                       runtime.headMessageId = sent.messageId
@@ -616,19 +670,31 @@ export function startLiveRender(deps: LiveRenderDeps): {
                   }
                   return { outcome: 'failed' as const }
                 }
-                const edited = await deps.delivery.edit({ channelId: threadId, messageId, content: payload.content })
+                const edited = await deps.delivery.edit({ channelId: threadId, messageId, content })
                 return edited.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
               },
               sendContinuation: async ({ content }) => {
-                const payload = buildOutboundMessage({ kind: 'assistant', content })
-                const sent = await deps.delivery.send({ channelId: threadId, content: payload.content })
+                const sent = await deps.delivery.send({ channelId: threadId, content })
                 return sent.outcome === 'completed' ? { outcome: 'completed' } : { outcome: 'failed' }
               },
             },
             headMessageId: inFlightHead ?? runtime.headMessageId ?? '',
           })
-          const finalText = text + ANSWER_MARKER(interrupted, deps.interruptedMarker?.() ?? '*（已被中断）*')
+          // The fallback is the neutral English literal: production always
+          // wires the localized provider, and a Chinese-only fallback would
+          // leak into English threads (same rule as queueSummary above).
+          const finalText = text + ANSWER_MARKER(interrupted, deps.interruptedMarker?.() ?? '*(interrupted)*')
           return finalizer.finalize(finalText)
+        }).then(result => {
+          // A partial finalize means the answer tail was never delivered;
+          // surface it — silently dropping the suffix is the worst outcome.
+          if (result.outcome === 'partial') {
+            deps.log?.('discord_live_finalize_failed', {
+              threadId,
+              editedHead: result.editedHead,
+              continuations: result.continuations,
+            })
+          }
         }).catch((cause: unknown) => {
           deps.log?.('discord_live_finalize_threw', { threadId, cause: String(cause) })
         })
@@ -724,7 +790,7 @@ export function startLiveRender(deps: LiveRenderDeps): {
         .join(' '),
       120,
     )
-    return { id, summary: text === '' ? '（非文本消息）' : text }
+    return { id, summary: text === '' ? (deps.userEchoCopy?.().nonText ?? '(non-text message)') : text }
   }
 
   function handleFrame(raw: unknown): void {
@@ -829,7 +895,11 @@ export function startLiveRender(deps: LiveRenderDeps): {
         backoffMs = 1_000
       } catch (cause) {
         if (isDisposed()) return
-        deps.log?.('discord_live_stream_error', { cause: String(cause) })
+        // Failed-shaped name: the rpcLog escalation regex only lifts
+        // failed/threw/blocked/unknown to warn, and a dropped mux stream
+        // (the event that forces the backoff reopen) must be visible at
+        // the default level like every sibling failure.
+        deps.log?.('discord_live_stream_failed', { cause: String(cause) })
         trace('stream closed:', String(cause))
       }
       if (isDisposed()) return
@@ -850,6 +920,23 @@ export function startLiveRender(deps: LiveRenderDeps): {
         runtime.typing.dispose()
       }
       runtimes.clear()
+    },
+    /**
+     * Drop one thread's render state when its binding retires (reconcile
+     * removed it, or the guild forgot it). Runtimes carry no session
+     * identity: without this, a thread that later rebinds to a different
+     * session would inherit the old lastSeq, and the stale floor would
+     * suppress the new session's journal below it after a restart — the
+     * message-loss direction the watermark fence exists to prevent.
+     */
+    dropThread(threadId: string): void {
+      if (state.disposed) return
+      const runtime = runtimes.get(threadId)
+      if (runtime === undefined) return
+      runtime.scheduler?.dispose()
+      runtime.activityScheduler?.dispose()
+      runtime.typing.dispose()
+      runtimes.delete(threadId)
     },
     /**
      * Approval-wait steering for the ask patches (turn-progress spec): a

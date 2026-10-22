@@ -56,13 +56,46 @@ function rebalanceChunk(chunk: string, state: FenceState): string {
 /**
  * Split like the base splitter, then rebalance fences across chunks: each
  * chunk renders as well-formed Markdown on its own, and fence language
- * markers survive the boundary.
+ * markers survive the boundary. Rebalancing ADDS text (a reopened fence
+ * line, a closing fence), so a piece that would grow past `limit` is
+ * re-split at the reduced budget first — every returned chunk respects
+ * `limit` by construction, not by accident.
  */
 export function splitMarkdownAware(text: string, limit: number): string[] {
-  const base = splitMessage(text, limit)
   const state: FenceState = { open: '' }
-  const rebalanced = base.map(chunk => rebalanceChunk(chunk, state))
-  return rebalanced.filter(chunk => chunk.trim() !== '')
+  const out: string[] = []
+
+  // Worst-case rebalance growth for one piece: the carried-in fence line
+  // plus its separator when a fence is open, and a trailing "\n```" when
+  // the piece ends inside a fence (which it may open itself).
+  function emit(base: string): void {
+    const reserved = (state.open !== '' ? state.open.length + 1 : 0) + 4
+    const canFit = base.length + reserved <= limit
+    // Degenerate guard: a fence line longer than the limit can never fit;
+    // emit it rebalanced like before rather than recursing forever.
+    // Budget floor 2: a 1-char budget cannot make progress past a
+    // surrogate pair (PR review) — emit degenerate instead of looping.
+    const canShrink = base.length > 1 && limit - reserved >= 2 && limit - reserved < base.length
+    if (canFit || !canShrink) {
+      const rebalanced = rebalanceChunk(base, state)
+      // Degenerate passthrough (PR re-review): an unbreakable fence line
+      // longer than the limit still respects the wire limit — a hard cut
+      // beats a guaranteed 400 on the send. splitMessage's progress
+      // guarantee makes this finite.
+      if (rebalanced.length > limit) {
+        for (const piece of splitMessage(rebalanced, limit)) {
+          if (piece.trim() !== '') out.push(piece)
+        }
+        return
+      }
+      if (rebalanced.trim() !== '') out.push(rebalanced)
+      return
+    }
+    for (const piece of splitMessage(base, Math.max(1, limit - reserved))) emit(piece)
+  }
+
+  for (const chunk of splitMessage(text, limit)) emit(chunk)
+  return out
 }
 
 const TABLE_DELIMITER_ROW = /^\s*\|(\s*:?-{3,}:?\s*\|)+\s*$/u

@@ -10,7 +10,7 @@
  */
 
 import type { ComponentRegistry } from '../discord/components.js'
-import { CUSTOM_ANSWER_VALUE } from './question-view.js'
+import { CUSTOM_ANSWER_VALUE, hasDedicatedSubmitRow } from './question-view.js'
 import {
   MAX_CUSTOM_LENGTH,
   type DraftAnswerError,
@@ -117,6 +117,70 @@ function modalTitle(question: string): string {
   return title
 }
 
+/**
+ * Submit a complete batch to DSH: atomic claim, respond, settle. Shared by
+ * the Submit button path and the full-batch auto-submit below.
+ */
+async function submitBatch(
+  deps: QuestionRoutingDeps,
+  context: RegistryContext,
+): Promise<QuestionInteractionOutcome> {
+  const record = deps.store.get(context.questionRpcId)
+  if (record === undefined) return { outcome: 'unknown-control' }
+  const drafts = record.drafts()
+  const complete = record.questions.every(question => drafts.some(draft => draft.id === question.id))
+  if (!complete) return { outcome: 'incomplete' }
+
+  // Atomic claim: pending or an explicit retry after an unconfirmed submit.
+  const claim = await deps.store.claim(context.questionRpcId)
+  if (claim.outcome !== 'claimed') return { outcome: 'already-resolved' }
+
+  // A port that THROWS (distinct from an unknown outcome) is still an
+  // unconfirmed submit: park unresolved so the expiry sweeps and the
+  // user's own retry stay available — never leave the ask in submitting.
+  let submitted: Awaited<ReturnType<typeof deps.port.respond>>
+  try {
+    submitted = await deps.port.respond({
+      rpcId: record.questionRpcId,
+      sessionId: record.sessionId,
+      answer: deps.store.encodeSubmitted(context.questionRpcId),
+    })
+  } catch {
+    await deps.store.markUnresolved(context.questionRpcId, deps.nowMs())
+    return { outcome: 'unresolved' }
+  }
+  if (submitted.outcome === 'confirmed') {
+    await deps.store.markResolved(context.questionRpcId, 'answered', 'user', deps.nowMs())
+    // Terminal: retire the controls so stray clicks cannot follow.
+    // (disableControl never throws; the guard keeps the settled outcome.)
+    await deps.controls.disable(context.questionRpcId).catch(() => {})
+    return { outcome: 'submitted' }
+  }
+  await deps.store.markUnresolved(context.questionRpcId, deps.nowMs())
+  return { outcome: 'unresolved' }
+}
+
+/** Records a draft answer, auto-submitting a buttonless full batch. */
+function recordedOutcome(
+  deps: QuestionRoutingDeps,
+  context: RegistryContext,
+  verdict: { ok: true; complete: boolean } | { ok: false; error: DraftAnswerError },
+): Promise<QuestionInteractionOutcome> | QuestionInteractionOutcome {
+  if (!verdict.ok) return { outcome: 'invalid-answer', reason: verdict.error }
+  if (verdict.complete && !hasDedicatedSubmitRow(questionCountOf(deps, context))) {
+    // Five selects fill Discord's action-row cap, so the batch rendered
+    // without a Submit button: the last answer landing submits the ask
+    // itself — otherwise it would strand until the expiry sweep cancels
+    // the owning turn.
+    return submitBatch(deps, context)
+  }
+  return { outcome: 'recorded', complete: verdict.complete }
+}
+
+function questionCountOf(deps: QuestionRoutingDeps, context: RegistryContext): number {
+  return deps.store.get(context.questionRpcId)?.questions.length ?? 0
+}
+
 export async function handleSelectInput(
   deps: QuestionRoutingDeps,
   input: QuestionInteractionInput & { values: string[] },
@@ -131,37 +195,7 @@ export async function handleSelectInput(
   }
 
   if (context.action === 'submit') {
-    const drafts = record.drafts()
-    const complete = record.questions.every(question => drafts.some(draft => draft.id === question.id))
-    if (!complete) return { outcome: 'incomplete' }
-
-    // Atomic claim: pending or an explicit retry after an unconfirmed submit.
-    const claim = await deps.store.claim(context.questionRpcId)
-    if (claim.outcome !== 'claimed') return { outcome: 'already-resolved' }
-
-    // A port that THROWS (distinct from an unknown outcome) is still an
-    // unconfirmed submit: park unresolved so the expiry sweeps and the
-    // user's own retry stay available — never leave the ask in submitting.
-    let submitted: Awaited<ReturnType<typeof deps.port.respond>>
-    try {
-      submitted = await deps.port.respond({
-        rpcId: record.questionRpcId,
-        sessionId: record.sessionId,
-        answer: deps.store.encodeSubmitted(context.questionRpcId),
-      })
-    } catch {
-      await deps.store.markUnresolved(context.questionRpcId, deps.nowMs())
-      return { outcome: 'unresolved' }
-    }
-    if (submitted.outcome === 'confirmed') {
-      await deps.store.markResolved(context.questionRpcId, 'answered', 'user', deps.nowMs())
-      // Terminal: retire the controls so stray clicks cannot follow.
-      // (disableControl never throws; the guard keeps the settled outcome.)
-      await deps.controls.disable(context.questionRpcId).catch(() => {})
-      return { outcome: 'submitted' }
-    }
-    await deps.store.markUnresolved(context.questionRpcId, deps.nowMs())
-    return { outcome: 'unresolved' }
+    return submitBatch(deps, context)
   }
 
   if (context.action !== 'select' || context.questionId === undefined) return { outcome: 'unknown-control' }
@@ -197,14 +231,13 @@ export async function handleSelectInput(
     id: context.questionId,
     selected: input.values,
   })
-  if (!verdict.ok) return { outcome: 'invalid-answer', reason: verdict.error }
-  return { outcome: 'recorded', complete: verdict.complete }
+  return recordedOutcome(deps, context, verdict)
 }
 
-export function handleModalSubmit(
+export async function handleModalSubmit(
   deps: QuestionRoutingDeps,
   input: QuestionInteractionInput & { text: string },
-): QuestionInteractionOutcome {
+): Promise<QuestionInteractionOutcome> {
   const resolved = resolveContext(deps, input.customId)
   if ('outcome' in resolved) return resolved
   const { context, record } = resolved
@@ -223,8 +256,7 @@ export function handleModalSubmit(
     selected: [],
     custom: input.text,
   })
-  if (!verdict.ok) return { outcome: 'invalid-answer', reason: verdict.error }
-  return { outcome: 'recorded', complete: verdict.complete }
+  return recordedOutcome(deps, context, verdict)
 }
 
 /**

@@ -1,11 +1,12 @@
 /**
  * At-most-once prompt submission (design.md §5, §10, task 8.4). Every prompt
  * carries a stable request id claimed before the DSH call. A same-id/same-
- * hash delivery never resubmits; a different hash conflicts. A rejection ends
- * that intent — an explicit user retry mints a NEW intent. An unknown
- * admission is recorded as `unknown` and NEVER retried automatically; the
- * reconciler checks DSH history/queue evidence, and an explicit retry (new
- * intent) is the user's deliberate act.
+ * hash delivery never resubmits, and the replay answer is HONEST about the
+ * record's state: succeeded proves admission (already-submitted), failed
+ * disproves it (rejected), and claimed/unknown — a crash between claim and
+ * settle, or an unconfirmed admission — prove nothing (unconfirmed). A
+ * different hash conflicts. An explicit user retry mints a NEW intent with
+ * a fresh request id; nothing is ever resubmitted automatically.
  */
 
 import { hashPayload, type IntentStore } from '../state/intents.js'
@@ -43,6 +44,7 @@ export type PromptSubmissionResult =
   | { outcome: 'rejected' }
   | { outcome: 'unknown' }
   | { outcome: 'already-submitted' }
+  | { outcome: 'unconfirmed' }
   | { outcome: 'conflict' }
 
 export interface PromptRequest {
@@ -72,7 +74,17 @@ export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
 
     if (claim.outcome === 'conflict') return { outcome: 'conflict' }
     if (claim.outcome === 'duplicate') {
-      return { outcome: 'already-submitted' }
+      // A duplicate is only "already submitted" when the record PROVES the
+      // prompt was admitted. A crash between claim and settle parks the
+      // record as claimed forever; an uncertain admission parks it as
+      // unknown; a definitive rejection parks it as failed. Reporting
+      // already-submitted for any of those silently drops the user's
+      // prompt while claiming success — the replay must be honest about
+      // what the record does and does not prove.
+      const state = claim.record.state
+      if (state === 'succeeded') return { outcome: 'already-submitted' }
+      if (state === 'failed') return { outcome: 'rejected' }
+      return { outcome: 'unconfirmed' }
     }
 
     const submitted = await deps.prompts.submit({

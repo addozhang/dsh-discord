@@ -25,6 +25,7 @@ import { createAskWiring } from './features/ask-wiring.js'
 import { sweepExpiredApprovals } from './features/approval-expiry.js'
 import { sweepExpiredQuestions, type DshTurnCancelPort } from './features/question-expiry.js'
 import { createQuestionStore } from './features/question-store.js'
+import { createTrailingSingleFlight } from './features/single-flight.js'
 import { handleSelectInput, handleModalSubmit, type QuestionRoutingDeps } from './features/question-routing.js'
 import { createCopy, permissionPresetLabel, type CopyTable } from './i18n.js'
 import type { DshApprovalRespondPort } from './features/approval-routing.js'
@@ -32,6 +33,7 @@ import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
 import { planBindingReconciliation } from './features/reconcile-bindings.js'
 import { guildKeysToForget, sweepExpired } from './state/retention.js'
+import { staleUncertainIntents } from './features/reconcile-intents.js'
 import { createHostEventRouter, type TrackSeedOptions } from './dsh/host-events.js'
 import { listSessionIds, listSessionSummaries } from './dsh/host-face.js'
 import { installAskServicePatches } from './dsh/host-asks.js'
@@ -119,8 +121,8 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     get: (_target, key) => createCopy(resolveLanguage())[key as keyof CopyTable],
   })
   // Reassigned once the async composition has built the real registrar.
-  let registerCommands: () => Promise<void> = async () => {}
-  const onGuildsChanged = (): void => { void registerCommands() }
+  let registerCommands: () => void = () => {}
+  const onGuildsChanged = (): void => { registerCommands() }
   const settingsSource = bindDiscordSettings(ctx, config as unknown as Readonly<Record<string, unknown>>, (next) => {
     const guildsChanged = next.allowedGuildIds.join(',') !== current.allowedGuildIds.join(',')
     current = next
@@ -742,6 +744,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             const key = threadKeyById.get(action.threadId)
             if (key === undefined) continue
             await threadTable.delete(key)
+            // The durable binding is gone: drop the thread's render state
+            // too, or a later rebind inherits the stale watermark (the
+            // message-loss direction the fence exists to prevent).
+            liveRef.current?.dropThread(action.threadId)
             rpcLog('discord_reconcile_thread_retired', { threadId: action.threadId, reason: action.reason })
           }
         }
@@ -771,6 +777,19 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       for (const key of plan.intentKeys) {
         void intentTable.delete(key).then(() => {
           rpcLog('discord_retention_intent_expired', { key })
+        }).catch((cause: unknown) => {
+          rpcLog('discord_retention_intent_delete_failed', { key, cause: String(cause) })
+        })
+      }
+      // Crash-parked (claimed) or unconfirmed (unknown) intents never age
+      // out by design — surface the ones past the submission window so a
+      // silently dropped prompt is diagnosable at warn level.
+      const stale = staleUncertainIntents([...intentTable.entries()], Date.now(), 10 * 60_000)
+      if (stale.length > 0) {
+        rpcLog('discord_intent_stale_unknown', {
+          count: stale.length,
+          oldest: stale.reduce((max, item) => Math.max(max, item.ageMs), 0),
+          messages: stale.slice(0, 10).map(item => `${item.messageId}:${item.state}`),
         })
       }
     }, 6 * 60 * 60_000)
@@ -778,6 +797,12 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     // Approval/question expiry: 30s sweep — approvals auto-reject before
     // their controls expire; question expiry cancels the owning turn.
     const expiryTimer = setInterval(() => {
+      // Component-registry hygiene rides the same cadence: lazy expiry
+      // only fires when a stale custom_id is re-resolved, so never-clicked
+      // controls (one ask registers 2-6 entries) would otherwise stay in
+      // the registry for the process lifetime.
+      const purged = sharedRegistry.purgeExpired(Date.now())
+      if (purged > 0) rpcLog('discord_registry_purged', { purged })
       void sweepExpiredApprovals({
         store: approvalsStore,
         port: approvalRespondPort,
@@ -790,6 +815,19 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         controls: { disable: key => askWiring.disableControl(key) },
         nowMs: () => Date.now(),
       }).catch((cause: unknown) => { rpcLog('discord_question_expiry_threw', String(cause)) })
+      // Settled question batches age out of the in-memory store (mirrors
+      // the approval store's retention); unresolved ones stay by design.
+      const prunedQuestions = questionsStore.pruneSettled(Date.now(), 7 * 24 * 60 * 60_000)
+      if (prunedQuestions > 0) rpcLog('discord_question_store_pruned', { pruned: prunedQuestions })
+      // Terminal approval rows age out of the process-local table too
+      // (review B4): the store's in-memory index prunes itself, but the
+      // row map held every id for the process lifetime.
+      const approvalCutoff = Date.now() - 7 * 24 * 60 * 60_000
+      for (const [approvalId, record] of [...approvalRows.entries()]) {
+        if (record.state === 'pending') continue
+        if (record.expiresAtMs > approvalCutoff) continue
+        approvalRows.delete(approvalId)
+      }
     }, 30_000)
     ctx.effect(() => () => { clearInterval(expiryTimer) }, 'discord interaction expiry sweep')
 
@@ -844,7 +882,13 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         threadBindingKeys: [...threadTable.keys()],
       })
       for (const key of plan.channelKeys) await channelTable.delete(key)
-      for (const key of plan.threadKeys) await threadTable.delete(key)
+      for (const key of plan.threadKeys) {
+        await threadTable.delete(key)
+        // Same retire rule as reconcile: forgotten threads drop their
+        // render state so a future rebind starts fresh.
+        const scope = parseThreadBindingKey(key)
+        if (scope !== undefined) liveRef.current?.dropThread(scope.threadId)
+      }
       rpcLog('discord_guild_forget_deleted', { guildId, channels: plan.channelKeys.length, threads: plan.threadKeys.length })
     }
 
@@ -862,6 +906,13 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       nowMs: () => Date.now(),
       controls: { disable: key => askWiring.disableControl(key) },
     }
+    // Per-session resume serialization (review C-1): the flow is
+    // check-then-create across seconds of REST round trips, so two
+    // concurrent resumes of one session could both pass the pre-check
+    // and bind two threads to one session — violating binding-equals-
+    // ownership. The chain serializes them; the loser then sees the
+    // winner's binding in the pre-check.
+    const resumeChains = new Map<string, Promise<unknown>>()
     const interactionRouter = createInteractionRouter({
       policy,
       applicationId: () => applicationIdRef.current,
@@ -910,7 +961,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         },
         copy,
       }),
-      resumeSession: async ({ sessionId, workspaceId, guildId, parentChannelId, actorId }) => {
+      resumeSession: ({ sessionId, workspaceId, guildId, parentChannelId, actorId }) => {
+        const run = async (): Promise<
+          | { outcome: 'started'; threadId: string }
+          | { outcome: 'already-bound'; threadId: string }
+          | { outcome: 'refused-control-channel' }
+          | { outcome: 'refused-subagent' }
+          | { outcome: 'refused-archived' }
+          | { outcome: 'failed' }
+        > => {
         const rest = await sharedRest()
         if (rest === undefined) return { outcome: 'failed' }
         // threadBindings is the Discord-ownership record: a session with a
@@ -971,15 +1030,35 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           rpcLog('discord_session_resume_thread_unknown', { sessionId })
           return { outcome: 'failed' }
         }
-        await threadBindingStore.bind(threadBindingKey({ applicationId: applicationIdRef.current, guildId, threadId: thread.body.id }), {
+        const bound = await threadBindingStore.bind(threadBindingKey({ applicationId: applicationIdRef.current, guildId, threadId: thread.body.id }), {
           sessionId,
           workspaceId,
           createdBy: actorId,
           createdAtMs: Date.now(),
         })
+        // The bind is the ownership claim — a lost race (session bound by a
+        // concurrent resume) surfaces here instead of silently double-
+        // binding; the losing thread is left unbound for reconcile to judge.
+        if (!bound.ok) {
+          rpcLog('discord_session_resume_bind_failed', { sessionId, threadId: thread.body.id, error: bound.error })
+          return { outcome: 'failed' }
+        }
         rpcLog('discord_session_resumed', { sessionId, threadId: thread.body.id, title })
         hostEvents.track(sessionId)
         return { outcome: 'started', threadId: thread.body.id }
+        }
+        const tail = resumeChains.get(sessionId) ?? Promise.resolve()
+        const next = tail.then(run, run)
+        // Identity-guarded self-clean (PR review): an earlier resume's
+        // cleanup must never delete a LATER resume's queued chain — that
+        // re-opened the race this map exists to close. The settled marker
+        // also absorbs rejections so nothing escapes unhandled.
+        const marker = next.then(() => undefined, () => undefined)
+        resumeChains.set(sessionId, marker)
+        void marker.then(() => {
+          if (resumeChains.get(sessionId) === marker) resumeChains.delete(sessionId)
+        })
+        return next
       },
       log: rpcLog,
       warn: (event, detail) => {
@@ -1015,6 +1094,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         if (rest === undefined) throw new TypeError('discord bot token unavailable')
         const me = await rest.request<{ id: string }>('GET', '/users/@me')
         if (me.outcome !== 'completed') throw new TypeError('cannot resolve bot identity')
+        // Backfill the application id here too: gateway dispatches can
+        // arrive before the REST command registration resolves its
+        // identity, and every binding-key lookup before then would use
+        // the placeholder and misroute bound-channel mentions.
+        applicationIdRef.current = me.body.id
         return me.body.id
       },
       intents: GATEWAY_INTENTS,
@@ -1059,31 +1143,27 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     // Register the Milestone 1 command set per allowed Guild (instant
     // propagation, unlike global commands) once the bot identity is known.
     // Re-runs whenever the allowlist changes — apply-time settings may still
-    // be loading, so the first non-empty list wins.
-    let registering = false
-    registerCommands = async (): Promise<void> => {
-      if (registering || current.allowedGuildIds.length === 0) return
-      registering = true
-      try {
-        const rest = await sharedRest()
-        if (rest === undefined) return
-        const me = await rest.request<{ id: string }>('GET', '/users/@me')
-        if (me.outcome !== 'completed') return
-        applicationIdRef.current = me.body.id
-        const registrations = buildCommandRegistrations()
-        for (const guildId of current.allowedGuildIds) {
-          const result = await rest.request('PUT', `/applications/${me.body.id}/guilds/${guildId}/commands`, registrations)
-          if (result.outcome !== 'completed') {
-            emitLog(ctx, 'warn', { event: 'discord_command_register_failed', guildId })
-          }
+    // be loading, so the first non-empty list wins. Trailing-edge single
+    // flight (review C-2): a trigger landing mid-pass carries NEW guild
+    // state — dropping it silently skipped registering an added guild (or
+    // left a removed guild's stale commands until reload); the flight
+    // re-runs once after the pass, concurrent triggers coalesce.
+    registerCommands = createTrailingSingleFlight(async (): Promise<void> => {
+      if (current.allowedGuildIds.length === 0) return
+      const rest = await sharedRest()
+      if (rest === undefined) return
+      const me = await rest.request<{ id: string }>('GET', '/users/@me')
+      if (me.outcome !== 'completed') return
+      applicationIdRef.current = me.body.id
+      const registrations = buildCommandRegistrations()
+      for (const guildId of current.allowedGuildIds) {
+        const result = await rest.request('PUT', `/applications/${me.body.id}/guilds/${guildId}/commands`, registrations)
+        if (result.outcome !== 'completed') {
+          emitLog(ctx, 'warn', { event: 'discord_command_register_failed', guildId })
         }
-      } finally {
-        registering = false
       }
-    }
-    void registerCommands().catch((cause: unknown) => {
-      emitLog(ctx, 'warn', { event: 'discord_command_register_failed', cause: String(cause) })
-    })
+    }, { onThrew: cause => { emitLog(ctx, 'warn', { event: 'discord_command_register_failed', cause: String(cause) }) } })
+    registerCommands()
     // ── Live streaming: host follow/control fan-in → per-thread rendering ──
     // The queue snapshot cache (declared with the interaction router) is the
     // /queue surface's data source: the 0.1.6 `session/control` stream owns
@@ -1178,11 +1258,25 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         nonText: copy.userInputNonText,
         truncated: copy.userInputTruncated,
       }),
+      // Echo-redaction seam (review D4, decision A): identity until the
+      // redaction policy lands — the hook is the single place it will
+      // occupy.
+      echoRedact: text => text,
       permissionLineCopy: () => ({ line: presetKey => copy.permissionSystemLine(permissionPresetLabel(presetKey, copy)) }),
-      onQueueSnapshot: (sessionId, items) => { queueSnapshots.set(sessionId, items) },
+      onQueueSnapshot: (sessionId, items) => {
+        // An empty snapshot means the queue drained: drop the cache entry
+        // instead of holding one map slot per session ever seen.
+        if (items.length === 0) queueSnapshots.delete(sessionId)
+        else queueSnapshots.set(sessionId, items)
+      },
       onTurnEnded: (sessionId, info) => {
         const turn = turnTracker.active(sessionId)
-        if (turn !== undefined) turnTracker.complete(turn.requestId)
+        if (turn !== undefined) {
+          turnTracker.complete(turn.requestId)
+          // The actor lookup's purpose ends with the turn (review B4):
+          // without this the map gained one entry per prompt, forever.
+          turnActors.delete(turn.requestId)
+        }
         rpcLog('discord_turn_ended', { sessionId, hadActiveTurn: turn !== undefined })
         if (info !== undefined) void persistRenderedSeq(sessionId, info.renderedSeq)
       },
@@ -1191,6 +1285,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
     liveProgressRef.current = liveRef.current
     ctx.effect(() => () => { liveRef.current?.dispose() }, 'dsh-discord live render')
     ctx.effect(() => () => { runtimeRef.current?.dispose() }, 'dsh-discord composed runtime')
+    // The router's follow loops and re-arm timers survive nothing else's
+    // teardown: without this, plugin removal leaves zombie subscriptions.
+    ctx.effect(() => () => { hostEvents.dispose() }, 'dsh-discord host event router')
 
   })().catch((cause: unknown) => {
     console.error('[dsh-discord] composition failed:', cause)

@@ -2,9 +2,14 @@
  * The typed Discord REST adapter. Every request resolves to exactly one of
  * three outcomes — `completed`, `rejected`, or `unknown` — because cross-system
  * delivery is never provably once: a refused request (4xx, exhausted 429) is
- * definitive, while an unobservable outcome (network failure, abort,
- * exhausted 5xx) may or may not have been applied and must be reconciled,
- * never blindly retried by callers.
+ * definitive, while an unobservable outcome (network failure, abort, 5xx)
+ * may or may not have been applied and must be reconciled, never blindly
+ * retried by callers. That holds inside the adapter too: transient failures
+ * are auto-retried only for idempotent methods (GET/PUT/DELETE/PATCH); a
+ * POST that hits 5xx or the network fails returns `unknown` on the first
+ * failure — the retry decision belongs to the caller's nonce
+ * reconciliation, because a re-sent POST whose first attempt landed would
+ * double-deliver with no error to show for it.
  */
 
 import { randomUUID } from 'node:crypto'
@@ -47,15 +52,39 @@ export interface RestClientOptions {
   backoffBaseMs?: number
   /** Cap for any single wait, so a hostile Retry-After cannot stall the adapter. */
   maxDelayMs?: number
+  /**
+   * Ack budget applied automatically to `/interactions/` callback paths:
+   * Discord grants one callback per interaction inside a 3-second deadline,
+   * so a request parked behind a Retry-After sleep (or a 5xx backoff)
+   * would deliver an ack that can no longer matter — the budget aborts it
+   * to unknown early instead. 0 disables the budget.
+   */
+  interactionAckBudgetMs?: number
 }
 
 const DEFAULT_API_BASE = 'https://discord.com/api/v10'
 const DEFAULT_MAX_RETRIES = 3
 const DEFAULT_BACKOFF_BASE_MS = 1_000
 const DEFAULT_MAX_DELAY_MS = 30_000
+/** Discord's interaction ack deadline is 3s; leave margin for the call itself. */
+const DEFAULT_INTERACTION_ACK_BUDGET_MS = 2_500
 
 const sleep = (ms: number): Promise<void> => {
   return new Promise(resolve => { setTimeout(resolve, ms) })
+}
+
+/** sleep() that also wakes when the signal aborts, so a deadline can cut a pending Retry-After wait. */
+function sleepAbortable(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal === undefined) return sleep(ms)
+  return new Promise<void>(resolve => {
+    const done = (): void => {
+      signal.removeEventListener('abort', done)
+      clearTimeout(timer)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    signal.addEventListener('abort', done, { once: true })
+  })
 }
 
 function parseDelayMs(response: Response, fallbackMs: number, capMs: number): number {
@@ -88,6 +117,7 @@ export function createRestClient(
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES
   const backoffBaseMs = options.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS
   const maxDelayMs = options.maxDelayMs ?? DEFAULT_MAX_DELAY_MS
+  const interactionAckBudgetMs = options.interactionAckBudgetMs ?? DEFAULT_INTERACTION_ACK_BUDGET_MS
   const doFetch: FetchLike = fetchLike ?? (async (request) => {
     const init: RequestInit = { method: request.method, headers: request.headers }
     if (request.body !== undefined) init.body = request.body
@@ -137,8 +167,17 @@ export function createRestClient(
     body?: unknown,
     init?: { signal?: AbortSignal },
   ): Promise<RestResult<T>> {
+    // Interaction callbacks are deadline-bound: fold the ack budget into
+    // the effective signal so the retry loop's checks, the in-flight
+    // fetch, AND the Retry-After sleeps all honor it.
+    let signal = init?.signal
+    if (interactionAckBudgetMs > 0 && path.startsWith('/interactions/')) {
+      signal = signal === undefined
+        ? AbortSignal.timeout(interactionAckBudgetMs)
+        : AbortSignal.any([signal, AbortSignal.timeout(interactionAckBudgetMs)])
+    }
     for (let attemptNo = 0; attemptNo <= maxRetries; attemptNo += 1) {
-      if (init?.signal?.aborted === true) {
+      if (signal?.aborted === true) {
         return { outcome: 'unknown', reason: 'aborted' }
       }
       const fetchRequest: FetchRequest = {
@@ -150,7 +189,7 @@ export function createRestClient(
           ...(body === undefined ? {} : { 'content-type': 'application/json' }),
         },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        ...(init?.signal === undefined ? {} : { signal: init.signal }),
+        ...(signal === undefined ? {} : { signal }),
       }
       const outcome = await attempt<T>(fetchRequest)
       if ('retry' in outcome) {
@@ -161,13 +200,21 @@ export function createRestClient(
           if (isFinalAttempt) {
             return { outcome: 'rejected', status: 429, error: { code: 'rate-limited', message: 'rate limit retries exhausted' } }
           }
-          await sleep(outcome.delayMs)
+          await sleepAbortable(outcome.delayMs, signal)
           continue
+        }
+        // A 5xx or network failure may mean the request was already applied
+        // upstream. Auto-retrying a non-idempotent POST could then deliver
+        // the message twice and the retry's 200 would mask it — so POST
+        // surfaces unknown immediately and the caller's nonce reconciliation
+        // decides; only idempotent methods ride the bounded retry loop.
+        if (method !== 'GET' && method !== 'PUT' && method !== 'DELETE' && method !== 'PATCH') {
+          return { outcome: 'unknown', reason: 'network-unreachable' }
         }
         if (isFinalAttempt) {
           return { outcome: 'unknown', reason: 'network-unreachable' }
         }
-        await sleep(Math.min(backoffBaseMs * 2 ** attemptNo, maxDelayMs))
+        await sleepAbortable(Math.min(backoffBaseMs * 2 ** attemptNo, maxDelayMs), signal)
         continue
       }
       return outcome

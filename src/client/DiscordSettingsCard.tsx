@@ -33,14 +33,14 @@ const STATUS_DOT_COLOR: Readonly<Record<string, string>> = {
 
 /** Scoped stylesheet, injected once per card mount. Neutral translucent
  * tones keep the controls readable on both the Host's dark and light themes. */
-const CARD_CSS = `
+export const CARD_CSS = `
 [data-dsh-discord-card] { display: flex; flex-direction: column; gap: 24px; padding: 4px 2px 0; }
 [data-dsh-discord-card-head] { display: flex; flex-direction: column; gap: 2px; text-align: left; }
 [data-dsh-discord-card-title] { font-size: 14px; font-weight: 600; display: inline-flex; align-items: center; gap: 8px; }
 [data-dsh-discord-card-title] svg { opacity: .85; }
 [data-dsh-discord-card-description] { font-size: 12px; opacity: .55; }
-button[aria-expanded] { all: unset; cursor: pointer; display: block; width: 100%; box-sizing: border-box; }
-button[aria-expanded]:focus-visible { outline: 2px solid rgba(88, 101, 242, .8); border-radius: 8px; }
+[data-dsh-discord-card] button[aria-expanded] { all: unset; cursor: pointer; display: block; width: 100%; box-sizing: border-box; }
+[data-dsh-discord-card] button[aria-expanded]:focus-visible { outline: 2px solid rgba(88, 101, 242, .8); border-radius: 8px; }
 [data-dsh-discord-badge] { display: inline-block; font-size: 11px; line-height: 18px; padding: 0 8px; border-radius: 999px; }
 [data-dsh-discord-badge="unsaved"] { background: rgba(250, 204, 21, .16); color: #facc15; }
 [data-dsh-discord-status] { display: flex; align-items: center; gap: 8px; font-size: 13px; }

@@ -88,4 +88,33 @@ describe('splitMarkdownAware', () => {
       }
     }
   })
+
+  it('never emits a chunk over the limit after fence rebalancing', () => {
+    // Rebalancing adds text (a reopened fence line, a closing fence); long
+    // unbreakable fenced content used to come back over the limit.
+    const fencedBlob = '```ts\n' + 'y'.repeat(4_300) + '\n```'
+    const languageBlob = ['```python', ...Array.from({ length: 60 }, () => 'z'.repeat(120)), '```'].join('\n')
+    for (const text of [fencedBlob, languageBlob]) {
+      for (const chunk of splitMarkdownAware(text, 2_000)) {
+        expect(chunk.length).toBeLessThanOrEqual(2_000)
+      }
+    }
+    // The property holds at any limit, not just Discord's.
+    for (const chunk of splitMarkdownAware(languageBlob, 500)) {
+      expect(chunk.length).toBeLessThanOrEqual(500)
+    }
+  })
+
+  it('terminates on a pathological fence language longer than the budget', () => {
+    // PR review repro: a fence opener with a near-limit language tag plus
+    // a surrogate pair drove the re-split budget to 1 and looped forever.
+    // Run under a wall clock: the assertion is that it RETURNS at all.
+    const hostile = '```' + 'a'.repeat(120) + '\n\u{1F600}'.repeat(4)
+    // Note: a synchronous hang cannot be caught by Promise.race or test
+    // timers (the blocked loop starves both) — the splitter's progress
+    // guarantee is what this pins, by returning at all.
+    const chunks = splitMarkdownAware(hostile, 100)
+    expect(chunks.length).toBeGreaterThan(0)
+    for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(100)
+  })
 })

@@ -87,6 +87,11 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
 
   let disposed = false
   let generation = 0
+  /** The generation whose close has already been handled: the terminate
+   *  fallback and a late onclose describe the SAME disconnect, and a second
+   *  handleClose would double-count the backoff and replace the scheduled
+   *  reconnect with a longer one. */
+  let closeHandledGeneration = -1
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined
   let terminateFallbackTimer: ReturnType<typeof setTimeout> | undefined
@@ -112,7 +117,15 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
   }
 
   function send(socket: GatewaySocket, op: number, d: unknown): void {
-    socket.send(JSON.stringify({ op, d }))
+    try {
+      socket.send(JSON.stringify({ op, d }))
+    } catch {
+      // The socket can be mid-teardown (close frame received, onclose not
+      // yet dispatched) and ws.send throws InvalidStateError from inside
+      // timer callbacks — an uncaught throw there kills the host process.
+      // The missed frame is covered by the reconnect machinery: the
+      // heartbeat-ack timeout terminates and onclose reschedules.
+    }
   }
 
   function connect(): void {
@@ -216,6 +229,12 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
           if (typeof id === 'string') sessionId = id
           backoffAttempt = 0
         }
+        if (type === 'RESUMED') {
+          // A resumed session proves the link (and the session) healthy:
+          // the next blip starts from the base delay instead of the
+          // escalated ladder left over from the blip that caused the resume.
+          backoffAttempt = 0
+        }
         options.onDispatch({
           t: typeof type === 'string' ? type : '',
           s: typeof seq === 'number' ? seq : null,
@@ -244,6 +263,11 @@ export function startGateway(options: GatewayOptions): GatewayHandle {
   }
 
   function handleClose(code: number): void {
+    // Idempotent per generation: a generation sees exactly one disconnect —
+    // the fallback timer's synthetic close and the socket adapter's late
+    // onclose (if it ever arrives) are the same event.
+    if (closeHandledGeneration === generation) return
+    closeHandledGeneration = generation
     console.error('[dsh-discord] gateway close:', code)
     clearTimers()
     if (disposed) return

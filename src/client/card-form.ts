@@ -150,6 +150,8 @@ export class DiscordCardForm {
   private saving = false
   private failed = false
   private status: AdapterStatusPresentation | undefined = undefined
+  /** The one bound store every face shares (lazily created). */
+  private bound: SnapshotStore<DiscordCardState> | undefined
 
   constructor(private readonly scope: ConfigForm<DiscordSettings>) {
     this.scope.subscribe(() => { this.publish() })
@@ -166,9 +168,18 @@ export class DiscordCardForm {
 
   /** Publish the card state the renderer reads through its bound selector. */
   bind(): SnapshotStore<DiscordCardState> {
-    const store = createLocalSnapshotStore(this.project())
-    this.listeners.add(() => { store.set(this.project()) })
-    return store
+    // ONE store for the form's lifetime: the slot's inject factory calls
+    // face() on every settings-dialog mount, and a fresh bind() per call
+    // used to leak a permanent publish listener plus a live store each
+    // time. The store is a pure projection pump — every face shares it.
+    if (this.bound === undefined) {
+      this.bound = createLocalSnapshotStore(this.project())
+      // The single subscription lives with the store: publish() pumps the
+      // shared instance directly, so there is no listener to leak and
+      // nothing to tear down per face.
+      this.listeners.add(() => { this.bound?.set(this.project()) })
+    }
+    return this.bound
   }
 
   /** Build the edit, reset, save, and discard actions bound to this form. */
@@ -301,13 +312,24 @@ export class DiscordCardForm {
     this.saving = true
     this.failed = false
     this.publish()
+    // Snapshot the staged entries this save will consume: each write is a
+    // host round trip, and a draft staged mid-flight belongs to the NEXT
+    // save — clearing the whole map would vanish it without a trace.
+    const plannedDrafts = new Map<DiscordCardField, unknown>()
+    for (const item of plan) plannedDrafts.set(item.field, this.staged.get(item.field))
     let landed = true
     for (const write of writes) {
       // A rejected write is one landed=false outcome among many, not a crash:
       // the remaining writes still run and every draft survives for retry.
       landed = await write().catch(() => false) && landed
     }
-    if (landed) this.staged.clear()
+    if (landed) {
+      // Consume exactly what was planned: an entry replaced mid-flight
+      // (edit() stages a fresh object) is the user's newer draft and stays.
+      for (const [field, snapshot] of plannedDrafts) {
+        if (this.staged.get(field) === snapshot) this.staged.delete(field)
+      }
+    }
     this.saving = false
     this.failed = !landed
     this.publish()

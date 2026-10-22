@@ -109,6 +109,7 @@ function mapSubmission(result: PromptSubmissionResult): ContinuationMainlineResu
   if (result.outcome === 'accepted') return { outcome: 'queued' }
   if (result.outcome === 'already-submitted') return { outcome: 'already-submitted' }
   if (result.outcome === 'conflict') return { outcome: 'conflict' }
+  if (result.outcome === 'unconfirmed') return { outcome: 'unknown' }
   return result.outcome === 'rejected' ? { outcome: 'rejected' } : { outcome: 'unknown' }
 }
 
@@ -180,9 +181,16 @@ export function createSessionMainline(deps: SessionMainlineDeps): {
         return { outcome: 'admitted', threadId, sessionId }
       }
       // A replay lands here with `already-submitted`: the binding and thread
-      // still exist, so the visible state is identical to the first admit.
+      // still exist, and the intent record PROVES the prompt was admitted,
+      // so the visible state is identical to the first admit.
       if (submitted.outcome === 'already-submitted') {
         return { outcome: 'admitted', threadId, sessionId }
+      }
+      // A crash-parked (claimed) or unconfirmed (unknown) intent proves
+      // nothing — the redelivery must not claim admission it cannot
+      // evidence, or the user's prompt vanishes behind a success story.
+      if (submitted.outcome === 'unconfirmed') {
+        return { outcome: 'prompt-unknown' }
       }
       if (submitted.outcome === 'conflict') return { outcome: 'thread-conflict' }
       return submitted.outcome === 'rejected' ? { outcome: 'prompt-rejected' } : { outcome: 'prompt-unknown' }

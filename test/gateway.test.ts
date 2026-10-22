@@ -110,6 +110,28 @@ describe('gateway state machine', () => {
     gateway.dispose()
   })
 
+  it('does not crash when the heartbeat send races a closing socket', async () => {
+    const h = createHarness()
+    const { startGateway } = await import('../src/gateway/gateway.js')
+    const gateway = startGateway(h.options)
+    await h.flush()
+    h.openAndHello(100)
+    h.ready()
+
+    // The peer already sent its close frame: readyState is CLOSING and a
+    // real ws.send throws InvalidStateError until onclose dispatches. The
+    // heartbeat tick must not take the process down with it.
+    const socket = h.currentSocket()
+    socket.send = () => { throw new Error('InvalidStateError: WebSocket is already in CLOSING state') }
+    await vi.advanceTimersByTimeAsync(100)
+
+    // The machine is intact: the eventual onclose still arms the reconnect.
+    socket.onclose?.(1006)
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(h.sockets.length).toBeGreaterThanOrEqual(2)
+    gateway.dispose()
+  })
+
   it('reconnects with resume after a recoverable close and bounded backoff', async () => {
     const h = createHarness()
     const { startGateway } = await import('../src/gateway/gateway.js')
@@ -162,6 +184,56 @@ describe('gateway state machine', () => {
     h.currentSocket().onclose?.(4000)
     expect(h.backoffs.at(-1)).toEqual({ attempt: 1, delayMs: 1_000 })
     expect(h.sockets.length).toBeGreaterThanOrEqual(4)
+    gateway.dispose()
+  })
+
+  it('resets backoff after RESUMED, not only after READY', async () => {
+    const h = createHarness()
+    const { startGateway } = await import('../src/gateway/gateway.js')
+    const gateway = startGateway(h.options)
+    await h.flush()
+
+    h.openAndHello()
+    h.ready('session-1')
+    h.currentSocket().onclose?.(4000)
+    expect(h.backoffs[0]).toEqual({ attempt: 1, delayMs: 1_000 })
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await h.flush()
+    h.openAndHello()
+    // The common 1006/4000 path: the session RESUMES — connectivity is
+    // proven, so the next blip starts from the base delay again instead
+    // of escalating as if the link were still sick.
+    h.currentSocket().onmessage?.(JSON.stringify({ t: 'RESUMED', s: 10, op: 0, d: {} }))
+    h.currentSocket().onclose?.(4000)
+    expect(h.backoffs[1]).toEqual({ attempt: 1, delayMs: 1_000 })
+    gateway.dispose()
+  })
+
+  it('treats a late onclose after the terminate fallback as the same close', async () => {
+    const h = createHarness()
+    const { startGateway } = await import('../src/gateway/gateway.js')
+    const gateway = startGateway(h.options)
+    await h.flush()
+
+    h.openAndHello(100)
+    h.ready('session-1')
+    // Two heartbeat intervals without an ack: the miss path terminates and
+    // arms the 5s fallback.
+    await vi.advanceTimersByTimeAsync(250)
+    expect(h.currentSocket().terminated).toBe(true)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(h.backoffs).toEqual([{ attempt: 1, delayMs: 1_000 }])
+
+    // The socket adapter may STILL deliver its onclose afterwards: that is
+    // the same disconnect, not a second one — it must not double-count the
+    // backoff or replace the already-scheduled reconnect with a longer one.
+    h.currentSocket().onclose?.(1006)
+    expect(h.backoffs).toEqual([{ attempt: 1, delayMs: 1_000 }])
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    await h.flush()
+    expect(h.sockets).toHaveLength(2)
     gateway.dispose()
   })
 

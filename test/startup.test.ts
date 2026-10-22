@@ -27,11 +27,11 @@ function validServices(): Record<string, unknown> {
     sessionController: controllerMembers(),
     workspaceController: { follow: () => {} },
     sessionQuery: { observeSession: () => {} },
-    webServer: {},
+    webServer: { register: () => {} },
     credentials: { resolve: () => {}, describe: () => {}, set: () => {}, unset: () => {} },
     settings: { describe: () => {}, update: () => {} },
     storageDomain: { open: () => {} },
-    connection: { rpc: { handle: () => () => {} } },
+    connection: { rpc: { handle: () => () => {} }, requestRejection: () => {} },
     commands: { execute: () => {} },
     permissionPresets: { catalog: () => {} },
   }

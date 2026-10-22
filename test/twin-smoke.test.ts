@@ -245,6 +245,8 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
   const resumeSeed: Array<{ label: string; value: string; description?: string }> = []
   const resumeBindings = new Map<string, string>()
   const rowMap = new Map<string, ChannelBinding>()
+  /** Mutated by the D2 test: the forget-flow policy reads this live. */
+  const hostOperators: string[] = [USER]
   let turnTracker: ReturnType<typeof createTurnTracker>
 
   beforeAll(async () => {
@@ -287,7 +289,7 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
         administratorRoleIds: [],
         deniedUserIds: [],
         deniedRoleIds: [],
-        hostOperatorUserIds: [USER],
+        hostOperatorUserIds: [...hostOperators],
       }),
       applicationId: () => BOT,
       registry: sharedRegistry,
@@ -545,6 +547,42 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
     })
     expect(done.content).toContain('DSH 工作区与 Session 未受影响')
     expect(rowMap.has(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }))).toBe(false)
+  }, 20_000)
+
+  it('refuses the forget confirm click when operator status was revoked mid-flow', async () => {
+    // Review D2 (decision: re-verify at click, aligned with permission-
+    // confirm): the 15-minute control window outlives an operator
+    // revocation, and forget mutates adapter-owned state for the whole
+    // guild — the click must re-check operator authority, not just owner
+    // identity.
+    rowMap.set(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }), {
+      workspaceId: 'ws-keep', revision: 1, boundBy: USER, boundAtMs: 1,
+    })
+    // Freshness filter: earlier tests already posted the same copy shapes
+    // into this channel (twin waitForMessage scans full history).
+    const seenIds = new Set((await discord.channel(channelId).getMessages()).map(message => message.id))
+
+    const interaction = await discord.simulateSlashCommand({
+      channelId, userId: USER, name: 'guild', options: [{ name: 'forget', type: 1 }],
+    })
+    await discord.channel(channelId).waitForInteractionAck({ interactionId: interaction.id })
+    const plan = await discord.channel(channelId).waitForMessage({
+      predicate: message => !seenIds.has(message.id) && message.content.includes('将删除本 Guild 的全部适配器记录'),
+    })
+    const row = (plan.components?.[0] as { components?: Array<{ custom_id?: string }> } | undefined)?.components ?? []
+    const confirmId = row[0]?.custom_id
+    expect(typeof confirmId).toBe('string')
+
+    // The operator is revoked INSIDE the confirm window, then clicks.
+    hostOperators.length = 0
+    const click = await discord.simulateButtonClick({ channelId, userId: USER, messageId: plan.id, customId: confirmId ?? '' })
+    await discord.channel(channelId).waitForInteractionAck({ interactionId: click.id })
+    await new Promise(resolve => { setTimeout(resolve, 500) })
+
+    // Refused: the guild's records survive the revoked operator's click.
+    expect(rowMap.has(channelBindingKey({ applicationId: BOT, guildId: GUILD, channelId: CHANNEL }))).toBe(true)
+    // Restore the operator for the tests that follow.
+    hostOperators.push(USER)
   }, 20_000)
 
   it('/permission show reports the current preset from the permissions projection', async () => {
@@ -1565,6 +1603,49 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     expect(sent[0]).toMatchObject({
       kind: 'question',
       answer: { answers: [{ id: 'q1', selected: ['Retry with approval (Recommended)'] }] },
+    })
+  }, 20_000)
+
+  it('auto-submits a five-question batch when its last answer lands', async () => {
+    // Five selects fill Discord's five-action-row cap, so the batch renders
+    // WITHOUT a Submit button: the last answer landing must submit the ask
+    // by itself, or the turn hangs until the expiry sweep cancels it.
+    askSink.onQuestionRequested({
+      sessionId: 'sess-1', threadId, rpcId: 'ask-five', expiresAtMs: Date.now() + 600_000,
+      questions: Array.from({ length: 5 }, (_, index) => ({
+        id: `f${String(index + 1)}`,
+        question: `Five-batch probe ${String(index + 1)}`,
+        options: [{ label: `Opt ${String(index + 1)}A` }, { label: `Opt ${String(index + 1)}B` }],
+      })),
+    })
+
+    const scope = discord.channel(threadId)
+    const control = await scope.waitForMessage({
+      predicate: message => message.content.includes('5 questions need answers'),
+    })
+    const rows = control.components as Array<{ components: Array<{ custom_id?: string }> }>
+    // Five select rows, no submit row to click.
+    expect(rows).toHaveLength(5)
+
+    for (let index = 0; index < 5; index += 1) {
+      const selectId = rows[index]?.components[0]?.custom_id
+      if (typeof selectId !== 'string') throw new TypeError(`select ${String(index)} missing custom_id`)
+      await discord.simulateSelectMenu({
+        channelId: threadId, userId: USER, messageId: control.id, customId: selectId,
+        values: [`Opt ${String(index + 1)}A`],
+      })
+      await new Promise(resolve => { setTimeout(resolve, 200) })
+    }
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+
+    const sent = settleRecords.filter(record => record.key === 'ask-five')
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      kind: 'question',
+      answer: { answers: Array.from({ length: 5 }, (_, index) => ({
+        id: `f${String(index + 1)}`,
+        selected: [`Opt ${String(index + 1)}A`],
+      })) },
     })
   }, 20_000)
 

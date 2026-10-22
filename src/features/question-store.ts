@@ -153,6 +153,12 @@ export interface QuestionStore {
   listPendingExpired(atMs: number): QuestionRecord[]
   /** Record the expiry: the owning turn's cancellation outcome, controls gone. */
   markExpired(questionRpcId: string, cancel: 'accepted' | 'rejected' | 'unknown', atMs: number): Promise<void>
+  /**
+   * Drop terminal entries (resolved/expired) whose batch expired more than
+   * `retentionMs` ago; returns the pruned count. Unresolved entries stay —
+   * like claimed intents, they await explicit resolution, never a timer.
+   */
+  pruneSettled(nowMs: number, retentionMs: number): number
 }
 
 interface StoreEntry {
@@ -286,6 +292,16 @@ export function createQuestionStore(): QuestionStore {
         found.state = 'expired'
         found.expiredCancel = cancel
       })
+    },
+    pruneSettled(nowMs, retentionMs) {
+      let pruned = 0
+      for (const [rpcId, entry] of [...entries.entries()]) {
+        if (entry.state !== 'resolved' && entry.state !== 'expired') continue
+        if (nowMs - entry.batch.expiresAtMs < retentionMs) continue
+        entries.delete(rpcId)
+        pruned += 1
+      }
+      return pruned
     },
   }
 }

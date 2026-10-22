@@ -9,6 +9,8 @@
  * submission flow promises.
  */
 
+import type { InboundIntentRecord } from '../state/intents.js'
+
 export interface IntentEvidenceInput {
   messageId: string
   sessionId: string
@@ -33,6 +35,35 @@ export interface IntentReconcileInput {
 export interface IntentReconcileResult {
   proven: string[]
   unresolved: string[]
+}
+
+export interface StaleIntent {
+  messageId: string
+  state: 'claimed' | 'unknown'
+  ageMs: number
+}
+
+/**
+ * Intents whose state proves nothing — a crash-parked claim (the adapter
+ * died between claim and settle) or an unconfirmed admission — and whose
+ * age exceeds the threshold. The retention sweep logs them so a silently
+ * parked prompt is diagnosable at the default level instead of accruing
+ * invisibly; resolution still belongs to evidence reconciliation or the
+ * user's explicit retry, never to automatic resubmission.
+ */
+export function staleUncertainIntents(
+  entries: ReadonlyArray<readonly [messageId: string, record: InboundIntentRecord]>,
+  nowMs: number,
+  thresholdMs: number,
+): StaleIntent[] {
+  const stale: StaleIntent[] = []
+  for (const [messageId, record] of entries) {
+    if (record.state !== 'claimed' && record.state !== 'unknown') continue
+    const ageMs = nowMs - record.claimedAtMs
+    if (ageMs < thresholdMs) continue
+    stale.push({ messageId, state: record.state, ageMs })
+  }
+  return stale
 }
 
 export async function reconcileIntents(deps: IntentReconcileDeps, input: IntentReconcileInput): Promise<IntentReconcileResult> {

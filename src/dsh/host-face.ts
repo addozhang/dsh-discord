@@ -802,7 +802,14 @@ async function readSessionSelection(
     const dispose = (observation as { [Symbol.asyncDispose]?: () => unknown } | undefined)?.[Symbol.asyncDispose]
       ?? (observation as { dispose?: () => unknown } | undefined)?.dispose
     if (typeof dispose === 'function') {
-      try { void dispose.call(observation) } catch (cause) { log?.('discord_session_selection_dispose_threw', { cause: String(cause) }) }
+      // The asyncDispose convention returns a promise: a rejection there
+      // must be caught, or it escapes as an unhandled rejection that kills
+      // the host process.
+      try {
+        Promise.resolve(dispose.call(observation)).catch((cause: unknown) => {
+          log?.('discord_session_selection_dispose_threw', { cause: String(cause) })
+        })
+      } catch (cause) { log?.('discord_session_selection_dispose_threw', { cause: String(cause) }) }
     }
   }
 }
@@ -1001,7 +1008,13 @@ async function readSessionPermission(
     const dispose = (observation as { [Symbol.asyncDispose]?: () => unknown } | undefined)?.[Symbol.asyncDispose]
       ?? (observation as { dispose?: () => unknown } | undefined)?.dispose
     if (typeof dispose === 'function') {
-      try { void dispose.call(observation) } catch (cause) { log?.('discord_session_permission_dispose_threw', { cause: String(cause) }) }
+      // See readSessionSelection: the disposal promise's rejection is
+      // caught, never unhandled.
+      try {
+        Promise.resolve(dispose.call(observation)).catch((cause: unknown) => {
+          log?.('discord_session_permission_dispose_threw', { cause: String(cause) })
+        })
+      } catch (cause) { log?.('discord_session_permission_dispose_threw', { cause: String(cause) }) }
     }
   }
 }

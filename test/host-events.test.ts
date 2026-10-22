@@ -11,9 +11,9 @@
  *   streaming.
  */
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { createHostEventRouter, type HostSessionFollowFace, type TrackSeedOptions } from '../src/dsh/host-events.js'
+import { createFrameQueue, createHostEventRouter, type HostSessionFollowFace, type TrackSeedOptions } from '../src/dsh/host-events.js'
 
 interface Harness {
   followRequests: Array<Record<string, unknown>>
@@ -220,5 +220,131 @@ describe('host event router: replay fence (replay-fence-and-user-input)', () => 
     ])
     const frames = (await collecting).filter(f => (f as { type?: string }).type === 'session/event') as Array<{ seq?: number }>
     expect(frames.map(f => f.seq)).toEqual([12])
+  })
+})
+
+describe('host event router: lifecycle and queue hygiene', () => {
+  it('does not accumulate abort listeners across queue wakeups', async () => {
+    // Every buffered-wait registered an abort listener and never removed
+    // it on the wake path: a streaming session drained the queue hundreds
+    // of times an hour, each drain leaking one listener on the consumer
+    // signal until Node's MaxListenersExceededWarning fired.
+    const queue = createFrameQueue()
+    const controller = new AbortController()
+    const { signal } = controller
+    let liveListeners = 0
+    const originalAdd = signal.addEventListener.bind(signal)
+    const originalRemove = signal.removeEventListener.bind(signal)
+    signal.addEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions) => {
+      liveListeners += 1
+      originalAdd(type, listener, options)
+    }) as typeof signal.addEventListener
+    signal.removeEventListener = ((type: string, listener: EventListenerOrEventListenerObject, options?: boolean | EventListenerOptions) => {
+      liveListeners -= 1
+      originalRemove(type, listener, options)
+    }) as typeof signal.removeEventListener
+    const iterator = queue.iterate(signal)[Symbol.asyncIterator]()
+
+    for (let round = 0; round < 12; round += 1) {
+      // Park the iterator (registers the wait), then wake it with a frame.
+      const pending = iterator.next()
+      queue.push({ round })
+      await pending
+    }
+    expect(liveListeners).toBeLessThanOrEqual(1)
+    queue.close()
+  })
+
+  it('dispose aborts tracked follow loops', async () => {
+    const followRequests: Array<Record<string, unknown>> = []
+    const abortedSignals: boolean[] = []
+    const face: HostSessionFollowFace = {
+      follow(request, signal) {
+        followRequests.push(request)
+        return {
+          [Symbol.asyncIterator]() {
+            return {
+              async next() {
+                // Hang until aborted: proves dispose aborts the loop.
+                await new Promise<void>(resolve => {
+                  signal.addEventListener('abort', () => { resolve() }, { once: true })
+                })
+                abortedSignals.push(signal.aborted)
+                return { value: undefined, done: true as const }
+              },
+            }
+          },
+        }
+      },
+      control() {
+        return {
+          [Symbol.asyncIterator]() {
+            return { next: () => Promise.resolve({ value: undefined, done: true as const }) }
+          },
+        }
+      },
+    }
+    const router = createHostEventRouter(face)
+    const consumer = new AbortController()
+    void (async () => {
+      try {
+        for await (const _frame of router.stream(consumer.signal)) void _frame
+      } catch { /* aborted */ }
+    })()
+    await Promise.resolve()
+    router.track('sess-1')
+    await Promise.resolve()
+    expect(followRequests).toHaveLength(1)
+
+    router.dispose()
+    await Promise.resolve()
+    expect(abortedSignals).toEqual([true])
+    consumer.abort()
+  })
+
+  it('dispose cancels pending re-arms and blocks later tracks', async () => {
+    vi.useFakeTimers()
+    try {
+      const followRequests: Array<Record<string, unknown>> = []
+      const face: HostSessionFollowFace = {
+        follow(request) {
+          // Each follow ends normally right away: the finally block then
+          // schedules a re-arm, which dispose must cancel.
+          followRequests.push(request)
+          return {
+            [Symbol.asyncIterator]() {
+              return { next: () => Promise.resolve({ value: undefined, done: true as const }) }
+            },
+          }
+        },
+        control() {
+          return {
+            [Symbol.asyncIterator]() {
+              return { next: () => Promise.resolve({ value: undefined, done: true as const }) }
+            },
+          }
+        },
+      }
+      const router = createHostEventRouter(face)
+      const consumer = new AbortController()
+      void (async () => {
+        try {
+          for await (const _frame of router.stream(consumer.signal)) void _frame
+        } catch { /* aborted */ }
+      })()
+      await vi.advanceTimersByTimeAsync(0)
+      router.track('sess-1')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(followRequests).toHaveLength(1)
+
+      router.dispose()
+      router.track('sess-2')
+      await vi.advanceTimersByTimeAsync(60_000)
+      // No re-arm fired and the post-dispose track never subscribed.
+      expect(followRequests).toHaveLength(1)
+      consumer.abort()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

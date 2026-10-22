@@ -88,6 +88,8 @@ async function drive(frames: LiveFrame[], options: {
   /** Test-controlled delivery for interleaving races (16.39). */
   delivery?: LiveDeliveryPort
   /** Progress-phase copy provider (production always supplies one). */
+  /** Redaction seam for the user-input echo (D4). */
+  echoRedact?: (text: string) => string
   progressCopy?: () => { thinking: string; thinkingStep: (step: number) => string; writing: string; approvalWait: string; turnSummary: (total: number, failed: number, breakdown: string) => string }
   /** User-echo copy provider (production always supplies one). */
   userEchoCopy?: () => { label: string; nonText: string; truncated: string }
@@ -119,6 +121,7 @@ async function drive(frames: LiveFrame[], options: {
     ...(options.threadName === undefined ? {} : { threadName: options.threadName }),
     ...(options.progressCopy === undefined ? {} : { progressCopy: options.progressCopy }),
     ...(options.userEchoCopy === undefined ? {} : { userEchoCopy: options.userEchoCopy }),
+    ...(options.echoRedact === undefined ? {} : { echoRedact: options.echoRedact }),
     ...(options.permissionLineCopy === undefined ? {} : { permissionLineCopy: options.permissionLineCopy }),
   })
   await gate
@@ -126,6 +129,21 @@ async function drive(frames: LiveFrame[], options: {
   live.dispose()
   return calls
 }
+
+describe('user-input echo redaction seam (D4)', () => {
+  it('passes the echoed original text through the seam', async () => {
+    const calls = await drive([
+      userMessage('deploy with token sk-secret123 now', { carrier: 'snapshot', seq: 8 }),
+    ], {
+      threadForSession: () => 'thread-1',
+      userEchoCopy: () => ({ label: '💬 Input', nonText: '(non-text message)', truncated: '(truncated)' }),
+      echoRedact: text => text.replaceAll('sk-secret123', 'sk-***'),
+    })
+    const echo = calls.find(call => call.kind === 'send' && call.content?.includes('💬 Input'))
+    expect(echo?.content).toContain('sk-***')
+    expect(echo?.content).not.toContain('sk-secret123')
+  })
+})
 
 describe('live render', () => {
   it('streams one head answer message and edits it with the latest accumulated text', async () => {
@@ -167,6 +185,27 @@ describe('live render', () => {
     // A late second finalize (duplicate assistant/message) must not re-send.
     const editCount = calls.filter(call => call.kind === 'edit').length
     expect(editCount).toBeGreaterThanOrEqual(0)
+  })
+
+  it('never sends an interim flush over the wire limit — the head shows the first window', async () => {
+    // Once the accumulated answer outgrows one Discord message, every
+    // interim edit of the whole text is a guaranteed 400: the visible
+    // stream freezes and warn churn accumulates per chunk. The interim
+    // head must stay within the limit (showing the first window — the
+    // same layout finalize lands on) until the finalizer delivers the
+    // full answer with continuations.
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }),
+      sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'y'.repeat(3_400) } }),
+      sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: ' tail' } }),
+    ], { threadForSession: () => 'thread-1' })
+
+    const answerTraffic = calls.filter(call => (call.kind === 'send' || call.kind === 'edit') && call.channelId === 'thread-1')
+    expect(answerTraffic.length).toBeGreaterThanOrEqual(1)
+    for (const call of answerTraffic) {
+      expect(call.content?.length ?? 0).toBeLessThanOrEqual(2_000)
+    }
   })
 
   it('stops typing on turn end and notifies the owner', async () => {
@@ -472,6 +511,202 @@ describe('live render: delivery failure posture', () => {
     const lastEdit = calls.filter(call => call.kind === 'edit').at(-1)
     expect(lastEdit?.messageId).toBe('dm-2')
     expect(lastEdit?.content).toContain('AB')
+  })
+
+  it('a superseded step\'s in-flight head send never re-points the live head', async () => {
+    // The flush-path twin of the finalize fence: step-1's INTERIM head
+    // send is still in REST when step 2 opens and posts its own head.
+    // The late step-1 write-back must not repoint the head — step-2's
+    // message stays the edit target, or step 2's edits land on step 1's
+    // completed message and its own stalls at the prefix.
+    const calls: Array<{ kind: string; channelId?: string; messageId?: string; content?: string }> = []
+    let releaseHeadSend!: () => void
+    const headSendGate = new Promise<void>((resolve) => { releaseHeadSend = resolve })
+    const { delivery } = (() => {
+      let n = 0
+      const delivery: LiveDeliveryPort = {
+        send: (request) => {
+          calls.push({ kind: 'send', channelId: request.channelId, content: request.content })
+          n += 1
+          const id = `dm-${String(n)}`
+          if (request.content.includes('step-one-live')) {
+            return headSendGate.then(() => ({ outcome: 'completed' as const, messageId: id }))
+          }
+          return Promise.resolve({ outcome: 'completed' as const, messageId: id })
+        },
+        edit: (request) => {
+          calls.push({ kind: 'edit', channelId: request.channelId, messageId: request.messageId, content: request.content })
+          return Promise.resolve({ outcome: 'completed' as const })
+        },
+        typing: () => Promise.resolve(),
+        renameThread: () => Promise.resolve({ outcome: 'completed' as const }),
+        delete: () => Promise.resolve({ outcome: 'completed' as const }),
+      }
+      return { delivery }
+    })()
+
+    const queue: LiveFrame[] = []
+    let notify: (() => void) | undefined
+    let drainedClosed = false
+    const sleep = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms) })
+    async function* source(): AsyncIterable<LiveFrame> {
+      while (!drainedClosed) {
+        if (queue.length === 0) {
+          await new Promise<void>(resolve => { notify = resolve })
+          continue
+        }
+        const frame = queue.shift()
+        if (frame === undefined) continue
+        yield frame
+        await sleep(5)
+      }
+    }
+    const live = startLiveRender({
+      frames: source,
+      threadForSession: () => 'thread-1',
+      delivery,
+      updateIntervalMs: 0,
+      activityCoalesceMs: 0,
+      typingIntervalMs: 60_000,
+    })
+    const push = (frame: LiveFrame): void => { queue.push(frame); notify?.() }
+
+    push(sessionEvent('sess-1', 'turn/start', { turn: 1 }))
+    await sleep(10)
+    push(sessionEvent('sess-1', 'step/start', { turn: 1, step: 1 }))
+    await sleep(10)
+    // Step-1's interim flush posts the head — gated in flight.
+    push(sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'step-one-live' } }))
+    await sleep(20)
+    // Step 2 opens its own head while step-1's send is still in REST.
+    push(sessionEvent('sess-1', 'step/start', { turn: 1, step: 2 }))
+    await sleep(10)
+    push(sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 2, chunk: { type: 'text-delta', index: 0, text: 'A' } }))
+    await sleep(20)
+    releaseHeadSend()
+    await sleep(20)
+    push(sessionEvent('sess-1', 'assistant/chunk', { turn: 1, step: 2, chunk: { type: 'text-delta', index: 0, text: 'B' } }))
+    await sleep(20)
+    drainedClosed = true
+    notify?.()
+    live.dispose()
+
+    const lastEdit = calls.filter(call => call.kind === 'edit').at(-1)
+    expect(lastEdit?.messageId).toBe('dm-2')
+    expect(lastEdit?.content).toContain('AB')
+  })
+
+  it('drops per-thread render state on binding retire — a re-bound thread starts fresh', async () => {
+    // Runtimes are keyed by thread id with no session identity. When a
+    // binding retires (reconcile deletes it) and the thread later rebinds
+    // to a DIFFERENT session, the stale runtime's lastSeq must not leak
+    // into the new session's renderedSeq — that floor would suppress the
+    // new session's entire journal below it after a restart, the exact
+    // message-loss direction the watermark fence exists to prevent.
+    const calls: Array<{ kind: string; channelId?: string; messageId?: string; content?: string }> = []
+    const delivery: LiveDeliveryPort = {
+      send: (request) => {
+        calls.push({ kind: 'send', channelId: request.channelId, content: request.content })
+        return Promise.resolve({ outcome: 'completed' as const, messageId: `dm-${String(calls.length)}` })
+      },
+      edit: (request) => {
+        calls.push({ kind: 'edit', channelId: request.channelId, messageId: request.messageId, content: request.content })
+        return Promise.resolve({ outcome: 'completed' as const })
+      },
+      typing: () => Promise.resolve(),
+      renameThread: () => Promise.resolve({ outcome: 'completed' as const }),
+      delete: () => Promise.resolve({ outcome: 'completed' as const }),
+    }
+    const queue: LiveFrame[] = []
+    let notify: (() => void) | undefined
+    let drainedClosed = false
+    const sleep = (ms: number) => new Promise(resolve => { setTimeout(resolve, ms) })
+    async function* source(): AsyncIterable<LiveFrame> {
+      while (!drainedClosed) {
+        if (queue.length === 0) {
+          await new Promise<void>(resolve => { notify = resolve })
+          continue
+        }
+        const frame = queue.shift()
+        if (frame === undefined) continue
+        yield frame
+        await sleep(5)
+      }
+    }
+    const ended: Array<{ sessionId: string; renderedSeq: number }> = []
+    const live = startLiveRender({
+      frames: source,
+      threadForSession: () => 'thread-1',
+      delivery,
+      updateIntervalMs: 0,
+      activityCoalesceMs: 0,
+      typingIntervalMs: 60_000,
+      onTurnEnded: (sessionId, info) => {
+        if (info !== undefined) ended.push({ sessionId, renderedSeq: info.renderedSeq })
+      },
+    })
+    const push = (frame: LiveFrame): void => { queue.push(frame); notify?.() }
+
+    // Session A's turn on thread-1 advances the render watermark to 100.
+    push(sessionEvent('sess-a', 'turn/start', { turn: 1 }))
+    await sleep(10)
+    push({ type: 'session/event', sessionId: 'sess-a', seq: 100, event: { type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'A answer' } } } })
+    await sleep(10)
+    push(sessionEvent('sess-a', 'turn/end', { turn: 1, reason: { kind: 'stop' } }))
+    await sleep(20)
+    expect(ended.at(-1)).toEqual({ sessionId: 'sess-a', renderedSeq: 100 })
+
+    // The binding retires (reconcile removed it) — the adapter drops the
+    // thread's render state, and session B later rebinds the same thread.
+    live.dropThread('thread-1')
+    push({ type: 'session/event', sessionId: 'sess-b', seq: 5, event: { type: 'turn/start', data: { turn: 1 } } })
+    await sleep(10)
+    push({ type: 'session/event', sessionId: 'sess-b', seq: 7, event: { type: 'assistant/chunk', data: { turn: 1, step: 1, chunk: { type: 'text-delta', index: 0, text: 'B answer' } } } })
+    await sleep(10)
+    push(sessionEvent('sess-b', 'turn/end', { turn: 1, reason: { kind: 'stop' } }))
+    await sleep(20)
+    drainedClosed = true
+    notify?.()
+    live.dispose()
+
+    // Session B's watermark is its own seq, not the stale floor of 100.
+    expect(ended.at(-1)).toEqual({ sessionId: 'sess-b', renderedSeq: 7 })
+  })
+
+  it('renders the queue non-text placeholder through the copy provider', async () => {
+    // The /queue summary's non-text placeholder is Discord-visible copy:
+    // it must ride the localized copy provider, not a hardcoded Chinese
+    // literal that English locales would render verbatim.
+    const snapshots: Array<Array<{ id: string; summary: string }>> = []
+    await drive([
+      { type: 'session/queue', sessionId: 'sess-1', items: [
+        { id: 'm-img', message: { content: [{ type: 'image', url: 'https://cdn.example/a.png' }] } },
+      ] } as unknown as LiveFrame,
+    ], {
+      threadForSession: () => 'thread-1',
+      onQueueSnapshot: (_sessionId, items) => { snapshots.push(items.map(item => ({ id: item.id, summary: item.summary }))) },
+      userEchoCopy: () => ({ label: '💬 Input', nonText: '(non-text message)', truncated: '(truncated)' }),
+    })
+
+    expect(snapshots.at(-1)?.[0]).toEqual({ id: 'm-img', summary: '(non-text message)' })
+  })
+
+  it('uses the neutral fallback interrupted marker when no provider is wired', async () => {
+    const calls = await drive([
+      sessionEvent('sess-1', 'turn/start', { turn: 1 }),
+      sessionEvent('sess-1', 'assistant/message', {
+        turn: 1,
+        step: 1,
+        interrupted: true,
+        message: { role: 'assistant', content: [{ type: 'text', text: 'partial answer' }] },
+      }),
+      sessionEvent('sess-1', 'turn/end', { turn: 1, reason: { kind: 'stop' } }),
+    ], { threadForSession: () => 'thread-1' })
+
+    const sent = calls.filter(call => call.kind === 'send' || call.kind === 'edit').map(call => call.content ?? '').join('\n')
+    expect(sent).toContain('partial answer')
+    expect(sent).toContain('*(interrupted)*')
+    expect(sent).not.toContain('已被中断')
   })
 
   it('completes the in-flight head send instead of duplicating the answer (16.39)', async () => {
@@ -836,5 +1071,24 @@ describe('live render: permission preset system line (16.62)', () => {
     ], { threadForSession: () => 'thread-1', permissionLineCopy: copy })
 
     expect(calls.filter(call => call.kind === 'send')).toHaveLength(0)
+  })
+})
+
+describe('queue-admission typing restarts (F4)', () => {
+  it('types again when a second prompt is enqueued after the queue drained', async () => {
+    // Typing on queue admission wedged off after the first completed turn:
+    // stop() was terminal and the queue path's start() no-oped — the
+    // queue-wait/first-token indicator only ever fired for the first prompt.
+    // Admission-only cadence (no turn in between, e.g. a queued item was
+    // removed): enqueue → typing; queue drained → stop; a later enqueue
+    // must type AGAIN — a terminal stop() wedged the second admission off.
+    const calls = await drive([
+      { type: 'session/queue', sessionId: 'sess-1', items: [{ id: 'm-1', summary: 'first' }] } as unknown as LiveFrame,
+      { type: 'session/queue', sessionId: 'sess-1', items: [] } as unknown as LiveFrame,
+      { type: 'session/queue', sessionId: 'sess-1', items: [{ id: 'm-2', summary: 'second' }] } as unknown as LiveFrame,
+    ], { threadForSession: () => 'thread-1' })
+
+    const typingCount = calls.filter(call => call.kind === 'typing').length
+    expect(typingCount).toBeGreaterThanOrEqual(2)
   })
 })

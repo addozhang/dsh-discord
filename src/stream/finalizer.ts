@@ -9,6 +9,7 @@
  */
 
 import { splitMarkdownAware } from './markdown.js'
+import { buildOutboundMessage } from './outbound.js'
 import { DISCORD_MESSAGE_LIMIT } from './splitter.js'
 
 export interface AnswerDeliveryPort {
@@ -47,10 +48,24 @@ export function createAnswerFinalizer(deps: {
 
       // Fence-aware: a long answer never splits a ``` code block across
       // messages; each continuation renders as well-formed Markdown alone.
+      // The outbound transforms (GFM table wrapping, mention suppression)
+      // can grow a piece past the wire limit AFTER the split, so the final
+      // payload is built here and the rare overflow is hard re-split —
+      // nothing handed to the port can ever 400 on length.
       const chunks = splitMarkdownAware(fullText, DISCORD_MESSAGE_LIMIT)
       if (chunks.length === 0) {
         finalized = true
         return { outcome: 'finalized', editedHead: false, continuations: 0 }
+      }
+      const pieces: string[] = []
+      for (const chunk of chunks) {
+        const built = buildOutboundMessage({ kind: 'assistant', content: chunk }).content
+        // Fence-aware fallback (PR review): the plain splitter could cut
+        // an outbound-wrapped table mid-fence; re-split the BUILT payload
+        // with the fence balancer so every piece still renders whole.
+        pieces.push(...(built.length > DISCORD_MESSAGE_LIMIT
+          ? splitMarkdownAware(built, DISCORD_MESSAGE_LIMIT)
+          : [built]))
       }
 
       // Head: edit until the port completes; a rate-limited port backs off
@@ -58,7 +73,7 @@ export function createAnswerFinalizer(deps: {
       let editedHead = false
       let rateLimitedAttempts = 0
       for (;;) {
-        const edited = await deps.delivery.editHead({ messageId: deps.headMessageId, content: chunks[0] ?? '' })
+        const edited = await deps.delivery.editHead({ messageId: deps.headMessageId, content: pieces[0] ?? '' })
         if (edited.outcome === 'completed') {
           editedHead = true
           break
@@ -79,8 +94,8 @@ export function createAnswerFinalizer(deps: {
 
       // Continuations: ordered, exactly once, halting at the first failure.
       let sent = 0
-      for (let index = 1; index < chunks.length; index += 1) {
-        const content = chunks[index]
+      for (let index = 1; index < pieces.length; index += 1) {
+        const content = pieces[index]
         if (content === undefined) break
         const sentOutcome = await deps.delivery.sendContinuation({ index, content })
         if (sentOutcome.outcome !== 'completed') {

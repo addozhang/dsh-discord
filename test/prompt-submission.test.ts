@@ -10,7 +10,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { createKvTableStub } from './helpers/kv-table.js'
-import { createIntentStore } from '../src/state/intents.js'
+import { createIntentStore, hashPayload } from '../src/state/intents.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from '../src/features/prompt-submission.js'
 
 function setup(submit: DshPromptPort['submit']) {
@@ -57,8 +57,10 @@ describe('prompt submission', () => {
     expect(rejected).toEqual({ outcome: 'rejected' })
     expect(submitFn).toHaveBeenCalledTimes(1)
 
-    // The SAME intent is never resubmitted…
-    expect(await flow.submitOnce(REQUEST)).toEqual({ outcome: 'already-submitted' })
+    // The SAME intent is never resubmitted — and the record proves the
+    // prompt was NOT admitted, so the replay says rejected, not
+    // already-submitted.
+    expect(await flow.submitOnce(REQUEST)).toEqual({ outcome: 'rejected' })
     expect(submitFn).toHaveBeenCalledTimes(1)
 
     // …but an explicit retry creates a fresh intent and lands.
@@ -73,13 +75,27 @@ describe('prompt submission', () => {
     expect(unknown).toEqual({ outcome: 'unknown' })
     expect(submitFn).toHaveBeenCalledTimes(1)
 
-    // No automatic resubmission of the uncertain intent.
-    expect(await flow.submitOnce(REQUEST)).toEqual({ outcome: 'already-submitted' })
+    // No automatic resubmission of the uncertain intent — and the replay
+    // is honest about it: unknown is not proof of admission.
+    expect(await flow.submitOnce(REQUEST)).toEqual({ outcome: 'unconfirmed' })
     expect(submitFn).toHaveBeenCalledTimes(1)
 
     const retry = await flow.retry(REQUEST, { newRequestId: 'req-2' })
     expect(retry).toEqual({ outcome: 'unknown' })
     expect(submitFn).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports a replay against a crash-parked claimed intent as unconfirmed', async () => {
+    const { flow, submitFn, intents } = setup(() => Promise.resolve({ outcome: 'accepted' }))
+    // Crash window: the first delivery claimed the intent but never
+    // settled it (the adapter died between claim and settle). The record
+    // stays claimed forever; a gateway redelivery must not report
+    // already-submitted — nothing proves DSH ever saw the prompt.
+    const contentHash = await hashPayload({ sessionId: REQUEST.sessionId, prompt: REQUEST.prompt })
+    await intents.claim({ messageId: REQUEST.requestId, contentHash, claimedAtMs: 1_000 })
+
+    expect(await flow.submitOnce(REQUEST)).toEqual({ outcome: 'unconfirmed' })
+    expect(submitFn).not.toHaveBeenCalled()
   })
 })
 

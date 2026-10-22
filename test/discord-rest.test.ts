@@ -108,25 +108,60 @@ describe('discord rest client', () => {
     expect(h.calls).toHaveLength(2)
   })
 
-  it('reports unknown outcome when 5xx retries are exhausted', async () => {
+  it('does not auto-retry a 5xx on a non-idempotent POST — the failure is unknown immediately', async () => {
+    const h = createHarness()
+    h.script({ status: 502, body: { code: 0, message: 'bad gateway' } }, { status: 200, body: { id: '3' } })
+    const pending = h.client.request('POST', '/channels/1/messages', { content: 'x' })
+    const result = await vi.runAllTimersAsync().then(() => pending)
+    // The 502 may mean the write was applied upstream; a blind retry could
+    // double-deliver, so the single failure surfaces as unknown for nonce
+    // reconciliation — the scripted 200 must never be fetched.
+    expect(result).toEqual({ outcome: 'unknown', reason: 'network-unreachable' })
+    expect(h.calls).toHaveLength(1)
+  })
+
+  it('does not auto-retry a network failure on a non-idempotent POST', async () => {
+    const h = createHarness()
+    h.script('network-error', { status: 200, body: { id: '3' } })
+    const pending = h.client.request('POST', '/channels/1/messages', { content: 'x' })
+    const result = await vi.runAllTimersAsync().then(() => pending)
+    expect(result).toEqual({ outcome: 'unknown', reason: 'network-unreachable' })
+    expect(h.calls).toHaveLength(1)
+  })
+
+  it('still retries exhausted 5xx for idempotent methods to unknown', async () => {
     const h = createHarness({ maxRetries: 1 })
     h.script(
       { status: 500, body: { code: 0, message: 'oops' } },
       { status: 500, body: { code: 0, message: 'oops' } },
     )
-    const pending = h.client.request('POST', '/channels/1/messages', {})
+    const pending = h.client.request('GET', '/users/@me')
     const result = await vi.runAllTimersAsync().then(() => pending)
     expect(result).toEqual({ outcome: 'unknown', reason: 'network-unreachable' })
     expect(h.calls).toHaveLength(2)
   })
 
-  it('reports unknown outcome on network failure', async () => {
-    const h = createHarness({ maxRetries: 1 })
-    h.script('network-error', 'network-error')
-    const pending = h.client.request('POST', '/channels/1/messages', {})
-    const result = await vi.runAllTimersAsync().then(() => pending)
-    expect(result).toEqual({ outcome: 'unknown', reason: 'network-unreachable' })
-    expect(h.calls).toHaveLength(2)
+  it('aborts an interaction callback parked behind a long Retry-After within the ack budget', async () => {
+    // Discord grants one callback per interaction inside a 3-second ack
+    // deadline: a request parked behind a Retry-After sleep (or a 5xx
+    // backoff) delivers an ack that can no longer matter. The client
+    // enforces the budget for /interactions/ paths itself.
+    vi.useRealTimers()
+    try {
+      const h = createHarness({ interactionAckBudgetMs: 50 })
+      h.script(
+        { status: 429, headers: { 'retry-after': '2' }, body: { code: 0, message: 'rate limited' } },
+        { status: 429, headers: { 'retry-after': '2' }, body: { code: 0, message: 'rate limited' } },
+      )
+      const startedAt = Date.now()
+      const pending = h.client.request('POST', '/interactions/i-1/tok/callback', { type: 6 })
+      const result = await pending
+      expect(result).toEqual({ outcome: 'unknown', reason: 'aborted' })
+      expect(h.calls).toHaveLength(1)
+      expect(Date.now() - startedAt).toBeLessThan(1_500)
+    } finally {
+      vi.useFakeTimers()
+    }
   })
 
   it('reports aborted as an unknown outcome and stops retrying', async () => {
