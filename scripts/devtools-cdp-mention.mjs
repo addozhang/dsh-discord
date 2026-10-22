@@ -100,8 +100,21 @@ async function main() {
   const deadline = Date.now() + 240_000
   let threadId = ''
   while (Date.now() < deadline && threadId === '') {
-    const active = await rest('GET', `/channels/${CHANNEL}/threads/active`)
-    const found = Array.isArray(active.body?.threads) ? active.body.threads.at(-1) : undefined
+    // Thread discovery: threads/active can lag; the adapter's anchored
+    // threads carry id == anchor message id, so probe the channel's recent
+    // message ids directly as thread ids too.
+    let found
+    const recent = await rest('GET', `/channels/${CHANNEL}/messages?limit=5`)
+    if (Array.isArray(recent.body)) {
+      for (const message of recent.body) {
+        const probe = await rest('GET', `/channels/${message.id}`)
+        if (probe.status === 200 && probe.body?.thread === true) { found = probe.body; break }
+      }
+    }
+    if (found === undefined) {
+      const active = await rest('GET', `/channels/${CHANNEL}/threads/active`)
+      found = Array.isArray(active.body?.threads) ? active.body.threads.at(-1) : undefined
+    }
     if (found !== undefined) {
       const msgs = await rest('GET', `/channels/${found.id}/messages?limit=50`)
       const botMsgs = Array.isArray(msgs.body) ? msgs.body.filter(m => m.author?.id === '1550676723773739048') : []
