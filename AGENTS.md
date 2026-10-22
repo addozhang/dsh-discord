@@ -54,13 +54,17 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
 - **默认静默日志**：流程事件走 Host logger 的 debug，失败形态（…failed/…threw/
   …blocked/…unknown）升 warn；wire 级排错用 `DSH_DISCORD_TRACE=1`
 - **deny-first 授权**：guild 白名单是外层边界；级别 member < workspace-admin <
-  host-operator；模型切换默认限 Host 操作员（`modelSelectOperatorOnly` 可放开）
+  host-operator；`/permission set` 默认限 Host 操作员（`permissionSelectOperatorOnly: true`，可放开），`/model select` 默认对授权成员开放（`modelSelectOperatorOnly: false`，16.42 可收紧；2026-10-21 修订——旧文误记为默认 operator-only）
 - **双语**：所有 Discord 可见文案 zh/en 双份；卡片 locale 键在
   `slot-contract.ts`（类型）+ `client/index.ts`（字典）+ 渲染引用，三处同步
 - **opaque custom_id**：DSH 标识符（session/approval id 等）不上 Discord wire，
   组件 id 走 registry 不透明键
 - **绑定即所有权**：thread/channel 绑定是 Discord 占用的权威记录；已占用会话
   不再收养，被删除的绑定频道按用户意图 retire 映射
+- **turn 控制 = 线程共享面（2026-10-21 决策，addo）**：/stop /steer /queue remove
+  按线程绑定授权（线程内任意 member 可操作当前 turn）——单人/小团队场景的
+  共享驾驶舱模型，有意与 ask 流的 asker-or-thread-owner 不对称；多人 guild
+  需要收紧时再改
 - **控制频道（类目下 general）**不承载会话，也不参与 /session resume
 
 ## Host 面事实（0.2.0-rc.2 线；2026-10-06 真机核实；0.1.7-rc.1 判例一并保留）
@@ -301,8 +305,10 @@ CDP 驱动真机（rc 级验证要求）：
   工具链（node/pnpm/python，boot 时装进 `~/.dsh/dsh-runtimes/dsh-primary-runtime`）。
   `desktop-host` 直接 `import { runProfile } from '@deepseek-ai/dsh/profile-boot'`——
   **与 CLI 完全同一条 profile-boot 管线**，固定启 `~/.dsh/profiles/desktop`
-- **App 版本号 == 内嵌 dsh 核心版本**（monorepo 同 tag 发版；本机 0.1.7-rc.2 =
-  核心 0.1.7-rc.2）→ 兼容性判断直接按 desktop 版本对照适配器矩阵，无需拆包
+- **App 版本号 == 内嵌 dsh 核心版本**（monorepo 同 tag 发版；2026-10-21 本机实测
+  0.2.1-rc.2 = 核心 0.2.1-rc.2——App 已从 10-06 的 0.1.7-rc.2 静默 auto-update 过，
+  印证"更新会静默换核心线"；desktop profile 已装适配器 0.6.1-rc.1 且 patch 里
+  `enabled: true`）→ 兼容性判断直接按 desktop 版本对照适配器矩阵，无需拆包
 - 不走 npm（`@deepseek-ai/dsh-desktop` E404）；分发 = electron-updater generic
   feed（`https://download.deepseek.com/dsh-desk/feeds/<plat>/`，channel nightly）
   + 下载页。**auto-update 会静默换核心线**——desktop 用户可能在 App 更新后
