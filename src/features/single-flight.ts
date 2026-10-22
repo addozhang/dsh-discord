@@ -26,12 +26,16 @@ export function createTrailingSingleFlight(
       } catch (cause: unknown) {
         options.onThrew?.(cause)
       } finally {
-        running = false
         if (dirty) {
           dirty = false
-          // Next microtask: never re-enter the caller's finally chain
-          // synchronously.
-          void Promise.resolve().then(() => { start() })
+          // Re-arm SYNCHRONOUSLY: start() sets running=true before any
+          // await, so a trigger landing in a microtask gap after this
+          // finally still sees running and coalesces (PR review: a gap
+          // let a second pass start beside the queued one).
+          running = true
+          start()
+        } else {
+          running = false
         }
       }
     })()

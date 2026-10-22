@@ -52,6 +52,10 @@ export function splitMessage(text: string, limit: number = DISCORD_MESSAGE_LIMIT
     const hi = rest.charCodeAt(advance - 1)
     const lo = rest.charCodeAt(advance)
     if (hi >= 0xD800 && hi <= 0xDBFF && lo >= 0xDC00 && lo <= 0xDFFF) advance -= 1
+    // Progress guarantee (PR review): a pulled-back boundary at a 1-char
+    // budget would otherwise loop forever — splitting a surrogate pair is
+    // the lesser evil versus hanging the host event loop.
+    if (advance <= 0) advance = 1
     rest = rest.slice(advance)
   }
   const tail = rest.trim()

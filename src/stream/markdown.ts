@@ -73,7 +73,9 @@ export function splitMarkdownAware(text: string, limit: number): string[] {
     const canFit = base.length + reserved <= limit
     // Degenerate guard: a fence line longer than the limit can never fit;
     // emit it rebalanced like before rather than recursing forever.
-    const canShrink = base.length > 1 && Math.max(1, limit - reserved) < base.length
+    // Budget floor 2: a 1-char budget cannot make progress past a
+    // surrogate pair (PR review) — emit degenerate instead of looping.
+    const canShrink = base.length > 1 && limit - reserved >= 2 && limit - reserved < base.length
     if (canFit || !canShrink) {
       const rebalanced = rebalanceChunk(base, state)
       if (rebalanced.trim() !== '') out.push(rebalanced)

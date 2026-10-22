@@ -67,8 +67,10 @@ describe('typing lifecycle', () => {
     // prompt): the trigger fires anew.
     typing.start()
     expect(trigger).toHaveBeenCalledTimes(1)
-    // Disposal is terminal: nothing fires after it, ever.
+    // Disposal is terminal: nothing fires after it, ever — and stop()
+    // must not revive the disposed lifecycle (PR review).
     typing.dispose()
+    typing.stop()
     trigger.mockClear()
     typing.start()
     typing.resume()

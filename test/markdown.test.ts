@@ -104,4 +104,19 @@ describe('splitMarkdownAware', () => {
       expect(chunk.length).toBeLessThanOrEqual(500)
     }
   })
+
+  it('terminates on a pathological fence language longer than the budget', async () => {
+    // PR review repro: a fence opener with a near-limit language tag plus
+    // a surrogate pair drove the re-split budget to 1 and looped forever.
+    // Run under a wall clock: the assertion is that it RETURNS at all.
+    const hostile = '```' + 'a'.repeat(120) + '\n\u{1F600}'.repeat(4)
+    const chunks = await Promise.race([
+      Promise.resolve(splitMarkdownAware(hostile, 100)),
+      new Promise((_, reject) => { setTimeout(() => { reject(new Error('splitter hung')) }, 2_000) }),
+    ]) as string[]
+    // Termination is the assertion: a pathological unbreakable opener
+    // may pass through oversized (degenerate guard) but never hang.
+    expect(chunks.length).toBeGreaterThan(0)
+    for (const chunk of chunks) expect(chunk.length).toBeLessThanOrEqual(200)
+  })
 })

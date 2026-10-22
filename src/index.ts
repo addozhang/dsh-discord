@@ -1049,10 +1049,14 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         }
         const tail = resumeChains.get(sessionId) ?? Promise.resolve()
         const next = tail.then(run, run)
-        resumeChains.set(sessionId, next.then(() => undefined, () => undefined))
-        void next.then(() => {
-          // Self-clean: the map holds only in-flight chains.
-          if (resumeChains.get(sessionId) !== undefined) resumeChains.delete(sessionId)
+        // Identity-guarded self-clean (PR review): an earlier resume's
+        // cleanup must never delete a LATER resume's queued chain — that
+        // re-opened the race this map exists to close. The settled marker
+        // also absorbs rejections so nothing escapes unhandled.
+        const marker = next.then(() => undefined, () => undefined)
+        resumeChains.set(sessionId, marker)
+        void marker.then(() => {
+          if (resumeChains.get(sessionId) === marker) resumeChains.delete(sessionId)
         })
         return next
       },

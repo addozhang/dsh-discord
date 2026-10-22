@@ -70,7 +70,9 @@ export function createTypingLifecycle(options: {
       // here wedged typing off after the first completed turn (only
       // beginTurn's fresh lifecycle revived it). Disposal is the one
       // terminal transition (below).
-      if (state === 'idle') return
+      // Disposal stays terminal (PR review): stop() must not revive a
+      // disposed lifecycle back to idle.
+      if (state === 'idle' || state === 'stopped') return
       state = 'idle'
       clearTimer()
     },

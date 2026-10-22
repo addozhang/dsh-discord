@@ -10,7 +10,7 @@
 
 import { splitMarkdownAware } from './markdown.js'
 import { buildOutboundMessage } from './outbound.js'
-import { DISCORD_MESSAGE_LIMIT, splitMessage } from './splitter.js'
+import { DISCORD_MESSAGE_LIMIT } from './splitter.js'
 
 export interface AnswerDeliveryPort {
   editHead(request: { messageId: string; content: string }): Promise<
@@ -60,8 +60,11 @@ export function createAnswerFinalizer(deps: {
       const pieces: string[] = []
       for (const chunk of chunks) {
         const built = buildOutboundMessage({ kind: 'assistant', content: chunk }).content
+        // Fence-aware fallback (PR review): the plain splitter could cut
+        // an outbound-wrapped table mid-fence; re-split the BUILT payload
+        // with the fence balancer so every piece still renders whole.
         pieces.push(...(built.length > DISCORD_MESSAGE_LIMIT
-          ? splitMessage(built, DISCORD_MESSAGE_LIMIT)
+          ? splitMarkdownAware(built, DISCORD_MESSAGE_LIMIT)
           : [built]))
       }
 
