@@ -1,4 +1,11 @@
-import { credentialRef } from '@deepseek-ai/dsh-credentials'
+/** Branded ref, inlined from @deepseek-ai/dsh-credentials (runtime value
+ * is the plain string — the brand is compile-time only; see domain.ts). */
+export type DiscordCredentialRef = string & { readonly __brand: 'DiscordCredentialRef' }
+
+function credentialRef(value: string): DiscordCredentialRef {
+  if (!/^[A-Z][A-Z0-9_]*$/.test(value)) throw new TypeError(`credential ref "${value}" must be an uppercase identifier`)
+  return value as DiscordCredentialRef
+}
 
 export const DISCORD_BOT_TOKEN_REF = credentialRef('DSH_DISCORD_BOT_TOKEN')
 
