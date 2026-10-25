@@ -7,7 +7,7 @@
  * misconfiguration.
  */
 
-import type { ZodType } from 'zod'
+import { defineDomain, domainTable } from '@deepseek-ai/dsh-storage-domain'
 import type { ChannelBinding, ThreadBinding } from './records.js'
 import { ChannelBindingRecord, InboundIntentRecordSchema, ThreadBindingRecord } from './records.js'
 
@@ -19,33 +19,6 @@ import { ChannelBindingRecord, InboundIntentRecordSchema, ThreadBindingRecord } 
  */
 export const DISCORD_DOMAIN_NAME = 'dsh_discord'
 export const DISCORD_DOMAIN_VERSION = 1
-
-/**
- * The two spec helpers, inlined from @deepseek-ai/dsh-storage-domain
- * (dependency-decoupling, 2026-10-25): the packages' runtime surface for
- * us was exactly these two functions, while every real behavior —
- * storage, validation at open — lives in the HOST's storageDomain
- * service, reached via inject. Inlining keeps the adapter free of the
- * version matrix the host's exact-version gate polices; a spec-shape
- * drift in a future host fails loud at open(), the same fail-closed
- * boundary as before (lib was byte-identical across 0.2.1-rc.2/rc.3).
- */
-const UNIT_NAME_RE = /^[a-z][a-z0-9_]*$/
-
-function domainTable<V>(schema: ZodType<V>) {
-  return { valueSchema: schema }
-}
-
-function defineDomain<S extends { name: string; version: number; tables: Record<string, unknown> }>(spec: S): S {
-  if (!UNIT_NAME_RE.test(spec.name)) throw new Error(`domain name '${spec.name}' must match ${String(UNIT_NAME_RE)}`)
-  if (!Number.isInteger(spec.version) || spec.version < 0) {
-    throw new Error(`domain '${spec.name}' version must be a non-negative integer, got ${String(spec.version)}`)
-  }
-  for (const table of Object.keys(spec.tables)) {
-    if (!UNIT_NAME_RE.test(table)) throw new Error(`domain '${spec.name}' table name '${table}' must match ${String(UNIT_NAME_RE)}`)
-  }
-  return spec
-}
 
 export const CHANNEL_BINDINGS_TABLE = 'channel_bindings'
 export const THREAD_BINDINGS_TABLE = 'thread_bindings'
@@ -118,9 +91,9 @@ export const discordDomainSpec = defineDomain({
   name: DISCORD_DOMAIN_NAME,
   version: DISCORD_DOMAIN_VERSION,
   tables: {
-    [CHANNEL_BINDINGS_TABLE]: domainTable<ChannelBinding>(ChannelBindingRecord),
-    [THREAD_BINDINGS_TABLE]: domainTable<ThreadBinding>(ThreadBindingRecord),
-    [INTENTS_TABLE]: domainTable<InboundIntentRecordSchema>(InboundIntentRecordSchema),
+    [CHANNEL_BINDINGS_TABLE]: domainTable<'channel', ChannelBinding>(ChannelBindingRecord),
+    [THREAD_BINDINGS_TABLE]: domainTable<'thread', ThreadBinding>(ThreadBindingRecord),
+    [INTENTS_TABLE]: domainTable<'intent', InboundIntentRecordSchema>(InboundIntentRecordSchema),
   },
 })
 

@@ -78,6 +78,7 @@
     "vitest": "4.1.11"
   },
   "dependencies": {
+    "@deepseek-ai/dsh-storage-domain": "0.2.1-rc.2",
     "@deepseek-ai/schemastery": "3.18.5",
     "zod": "^4.4.3"
   },
