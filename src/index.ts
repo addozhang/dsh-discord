@@ -33,6 +33,10 @@ import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
 import { planBindingReconciliation } from './features/reconcile-bindings.js'
 import { guildKeysToForget, sweepExpired } from './state/retention.js'
+// Type-only: loads dsh-storage-domain's Context augmentation (storageDomain)
+// at compile time — zero runtime footprint; the runtime service arrives via
+// inject from the HOST's own tree (dependency decoupling, 2026-10-25).
+import type {} from '@deepseek-ai/dsh-storage-domain'
 import { staleUncertainIntents } from './features/reconcile-intents.js'
 import { createHostEventRouter, type TrackSeedOptions } from './dsh/host-events.js'
 import { listSessionIds, listSessionSummaries } from './dsh/host-face.js'
