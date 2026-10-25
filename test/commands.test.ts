@@ -13,14 +13,14 @@ import { describe, expect, it } from 'vitest'
 import { MILESTONE_ONE_COMMANDS, buildCommandRegistrations } from '../src/discord/commands.js'
 
 describe('milestone one command set', () => {
-  it('declares exactly the eight live commands', () => {
+  it('declares exactly the nine live commands', () => {
     // Only routed commands are registered: `/preset`, `/skill`, and `/host`
     // are deregistered until the router wires them (task 16.32); `/session
     // new` is dropped (the @mention is the new-session path) and `/session
     // resume` is wired with autocomplete (16.44). `/permission` joins with
     // its router branches in the same change (16.61).
     expect(MILESTONE_ONE_COMMANDS.map(command => command.name)).toEqual([
-      'project', 'queue', 'steer', 'stop', 'model', 'session', 'guild', 'permission',
+      'project', 'queue', 'info', 'steer', 'stop', 'model', 'session', 'guild', 'permission',
     ])
   })
 

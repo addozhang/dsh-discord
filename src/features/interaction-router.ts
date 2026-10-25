@@ -68,6 +68,10 @@ export interface InteractionRouterDeps {
   }) => Promise<{ channelId: string; created: boolean } | undefined>
   /** Delete every adapter-owned record for one guild (DSH untouched). */
   forgetGuild: (guildId: string) => Promise<void>
+  /** The adapter's own package version (from package.json at load). */
+  adapterVersion: () => string
+  /** One-word connection condition for /info. */
+  adapterStatus: () => string
   /** Ephemeral failure/guidance followup on a component interaction. */
   componentFollowUp: (interactionId: string, interactionToken: string, content: string) => Promise<void>
   /** Retire a rendered control (remove its components on the source message). */
@@ -608,6 +612,10 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           type: 1,
           components: [{ type: 2, style: 4, label: deps.copy.forgetConfirmButton, custom_id: confirmId }],
         }])
+        return
+      }
+      if (event.commandName === 'info') {
+        await followUp(deps.copy.infoLine(deps.adapterVersion(), deps.adapterStatus()))
         return
       }
       if (event.commandName === 'model') {

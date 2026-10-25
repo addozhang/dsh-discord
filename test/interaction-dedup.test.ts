@@ -56,12 +56,16 @@ function createHarness() {
     registry,
     copy: createCopy('zh'),
     forgetGuild,
+    adapterVersion: () => "test",
+    adapterStatus: () => "connected",
     componentFollowUp: vi.fn(async () => {}),
     disableControl: vi.fn(async () => {}),
     rest: () => Promise.resolve(rest),
     log: () => {},
   } as unknown as Parameters<typeof createInteractionRouter>[0]
-  return { registry, forgetGuild, router: createInteractionRouter(deps) }
+  return { registry, forgetGuild,
+    adapterVersion: () => "test",
+    adapterStatus: () => "connected", router: createInteractionRouter(deps) }
 }
 
 describe('interaction redelivery dedup', () => {
