@@ -160,10 +160,7 @@ function TokenSetup(props: {
       <p data-dsh-discord-field-help="">{props.tokenConfigured ? t('discordTokenReconnectHint') : t('discordTokenHelp')}</p>
       {error !== '' && <p data-dsh-discord-token-error="">{error}</p>}
     
-      <p data-dsh-discord-card-footer-link="" style={{ margin: '8px 0 0', fontSize: 12, opacity: 0.6 }}>
-        <a href="https://github.com/addozhang/dsh-discord" target="_blank" rel="noopener noreferrer">⭐ Feedback & docs</a>
-      </p>
-</div>
+    </div>
   )
 }
 
@@ -187,6 +184,7 @@ export function DiscordSettingsCard(props: DiscordSettingsCardProps) {
     ...LANGUAGE_CHOICES,
   ]
   return (
+    <>
     <PluginCard
       copy={copy}
       icon={DiscordMark({})}
@@ -258,6 +256,10 @@ export function DiscordSettingsCard(props: DiscordSettingsCardProps) {
         onEdit={(text) => { props.edit(LANGUAGE_FIELD, text) }}
         onReset={() => { props.resetField(LANGUAGE_FIELD) }}
       />
+      <p data-dsh-discord-card-footer-link="" style={{ margin: '6px 2px 0', fontSize: 12, opacity: 0.6 }}>
+        <a href="https://github.com/addozhang/dsh-discord" target="_blank" rel="noopener noreferrer">⭐ Feedback & docs</a>
+      </p>
     </PluginCard>
+    </>
   )
 }
