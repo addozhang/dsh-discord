@@ -32,7 +32,7 @@ import { createCopy, permissionPresetLabel, type CopyTable } from './i18n.js'
 import type { DshApprovalRespondPort } from './features/approval-routing.js'
 import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
-import { planBindingReconciliation } from './features/reconcile-bindings.js'
+import { planBindingReconciliation, refineUnlistedThreadFacts } from './features/reconcile-bindings.js'
 import { guildKeysToForget, sweepExpired } from './state/retention.js'
 import { staleUncertainIntents } from './features/reconcile-intents.js'
 import { createHostEventRouter, type TrackSeedOptions } from './dsh/host-events.js'
@@ -694,6 +694,26 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           if (listed) {
             for (const channelId of channelKeyById.keys()) {
               if (facts[channelId] === undefined) facts[channelId] = 'missing'
+            }
+            // The active-thread listing drops Discord-archived threads too,
+            // so an unlisted thread binding is *absent evidence*, not
+            // deletion — one direct channel probe each settles it (16.104):
+            // 404 retires the orphan (deleting a bound channel kills every
+            // thread under it), 200 keeps it (archived threads are still the
+            // binding's live surface), anything else stays unverified.
+            const unlistedThreads = [...threadKeyById.keys()].filter(threadId => facts[threadId] === undefined)
+            if (unlistedThreads.length > 0) {
+              const refined = await refineUnlistedThreadFacts(unlistedThreads, async threadId => {
+                const probed = await rest.request<unknown>('GET', `/channels/${threadId}`)
+                rpcLog('discord_reconcile_thread_probe', {
+                  threadId,
+                  outcome: probed.outcome === 'rejected' ? `http-${String(probed.status)}` : probed.outcome,
+                })
+                if (probed.outcome === 'completed') return { outcome: 'completed' as const }
+                if (probed.outcome === 'rejected') return { outcome: 'rejected' as const, status: probed.status }
+                return { outcome: 'unknown' as const }
+              })
+              Object.assign(facts, refined)
             }
           }
 

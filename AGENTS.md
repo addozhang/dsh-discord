@@ -60,7 +60,10 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
 - **opaque custom_id**：DSH 标识符（session/approval id 等）不上 Discord wire，
   组件 id 走 registry 不透明键
 - **绑定即所有权**：thread/channel 绑定是 Discord 占用的权威记录；已占用会话
-  不再收养，被删除的绑定频道按用户意图 retire 映射
+  不再收养，被删除的绑定频道按用户意图 retire 映射。判例（16.104，2026-10-25）：
+  删频道连片杀线程后，`/threads/active` 缺席不构成删除证据（归档线程同样缺席）——
+  reconcile 对 facts 缺席的线程绑定逐个 `GET /channels/{id}` 精判，404→retire、
+  200（含 Discord 归档）→keep、其余→keep-blocked；探针集合随退休单调收缩
 - **turn 控制 = 线程共享面（2026-10-21 决策，addo）**：/stop /steer /queue remove
   按线程绑定授权（线程内任意 member 可操作当前 turn）——单人/小团队场景的
   共享驾驶舱模型，有意与 ask 流的 asker-or-thread-owner 不对称；多人 guild

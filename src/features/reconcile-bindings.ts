@@ -98,3 +98,43 @@ export function planBindingReconciliation(input: BindingReconciliationInput): Bi
 
   return { channelActions, threadActions }
 }
+
+/**
+ * One direct channel probe for a thread binding the guild's active-thread
+ * listing did not account for (16.104). The shapes mirror the REST client's
+ * outcome vocabulary; `completed` needs no body — existence is the verdict.
+ */
+export type ThreadChannelProbeOutcome =
+  | { outcome: 'completed' }
+  | { outcome: 'rejected'; status: number }
+  | { outcome: 'unknown' }
+
+export type ThreadChannelProbe = (threadId: string) => Promise<ThreadChannelProbeOutcome>
+
+/**
+ * Refine facts for thread bindings absent from `/guilds/{id}/threads/active`.
+ * That listing drops both deleted threads and Discord-archived ones, so
+ * absence alone proves nothing (the pre-16.104 planner kept such threads
+ * forever — deleting a bound channel orphans every thread binding under it,
+ * permanently excluding those sessions from `/session resume`). One
+ * `GET /channels/{threadId}` each settles it: 200 → `ok` (alive, including
+ * Discord-archived — the thread remains the binding's live surface and a
+ * post un-archives it), 404 → `missing` (verified deletion → retire),
+ * anything else → `unknown` (keep-blocked, exactly the inconclusive
+ * posture the reconciliation spec mandates). Probes run sequentially; a
+ * retired binding leaves the table, so the probe set only ever shrinks to
+ * the genuinely alive or persistently unreachable.
+ */
+export async function refineUnlistedThreadFacts(
+  threadIds: readonly string[],
+  probe: ThreadChannelProbe,
+): Promise<Record<string, 'ok' | 'missing' | 'unknown'>> {
+  const facts: Record<string, 'ok' | 'missing' | 'unknown'> = {}
+  for (const threadId of threadIds) {
+    const probed = await probe(threadId)
+    if (probed.outcome === 'completed') facts[threadId] = 'ok'
+    else if (probed.outcome === 'rejected' && probed.status === 404) facts[threadId] = 'missing'
+    else facts[threadId] = 'unknown'
+  }
+  return facts
+}

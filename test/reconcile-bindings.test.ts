@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest"
 import type { ChannelBinding, ThreadBinding } from '../src/state/records.js'
 import {
   planBindingReconciliation,
+  refineUnlistedThreadFacts,
   type DshBaseline,
   type DiscordChannelFacts,
 } from '../src/features/reconcile-bindings.js'
@@ -165,5 +166,54 @@ describe('confirmed versus unverifiable Discord state (15.2)', () => {
       action: 'keep-blocked',
       reason: 'discord-unverified',
     }])
+  })
+})
+
+describe('unlisted thread probe refinement (16.104)', () => {
+  it('maps a 200 probe to ok and a 404 probe to missing', async () => {
+    const probed: string[] = []
+    const facts = await refineUnlistedThreadFacts(['thread-live', 'thread-gone'], threadId => {
+      probed.push(threadId)
+      return Promise.resolve(threadId === 'thread-gone'
+        ? { outcome: 'rejected' as const, status: 404 }
+        : { outcome: 'completed' as const })
+    })
+
+    expect(facts).toEqual({ 'thread-live': 'ok', 'thread-gone': 'missing' })
+    expect(probed).toEqual(['thread-live', 'thread-gone'])
+  })
+
+  it('marks a forbidden or unreachable probe unknown, never missing', async () => {
+    const facts = await refineUnlistedThreadFacts(['thread-403', 'thread-net'], threadId =>
+      Promise.resolve(threadId === 'thread-403'
+        ? { outcome: 'rejected' as const, status: 403 }
+        : { outcome: 'unknown' as const }))
+
+    expect(facts).toEqual({ 'thread-403': 'unknown', 'thread-net': 'unknown' })
+  })
+
+  it('feeds the planner: probe-verified deletion retires, probe-verified life keeps, inconclusive keeps blocked', async () => {
+    const facts = await refineUnlistedThreadFacts(['thread-gone', 'thread-live', 'thread-flaky'], threadId => {
+      if (threadId === 'thread-gone') return Promise.resolve({ outcome: 'rejected' as const, status: 404 })
+      if (threadId === 'thread-live') return Promise.resolve({ outcome: 'completed' as const })
+      return Promise.resolve({ outcome: 'unknown' as const })
+    })
+
+    const plan = planBindingReconciliation({
+      channelBindings: [],
+      threadBindings: [
+        threadBinding({ threadId: 'thread-gone' }),
+        threadBinding({ threadId: 'thread-live' }),
+        threadBinding({ threadId: 'thread-flaky' }),
+      ],
+      baseline: baseline(),
+      discord: { channels: facts },
+    })
+
+    expect(plan.threadActions).toEqual([
+      { threadId: 'thread-gone', action: 'retire', reason: 'discord-deleted' },
+      { threadId: 'thread-live', action: 'keep' },
+      { threadId: 'thread-flaky', action: 'keep-blocked', reason: 'discord-unverified' },
+    ])
   })
 })
