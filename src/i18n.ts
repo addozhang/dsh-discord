@@ -38,7 +38,7 @@ const zh = {
   infoUnavailable: '⚠️ 无法读取工作区目录，请稍后重试。',
   infoRevision: (revision: string, binder: string) => `修订 ${revision}（由 <@${binder}> 绑定）`,
   infoPath: (path: string) => `路径：\`${path}\``,
-  unknownSubcommand: '💡 未知子命令。',
+  unknownSubcommand: '💡 未知子命令。反馈与文档: https://github.com/addozhang/dsh-discord',
 
   // ── /stop /steer /queue ──────────────────────────────────────────────
   stopNotSessionThread: '⚠️ 此频道不是适配器拥有的会话线程。',
@@ -70,6 +70,8 @@ const zh = {
   forgetConfirmPrompt: '⚠️ 将删除本 Guild 的全部适配器记录（绑定/意图；DSH 工作区与 Session 不受影响）。确认？',
   forgetConfirmButton: '确认忘记',
   forgetDone: '💡 已忘记本 Guild：适配器记录（绑定/意图）已删除；DSH 工作区与 Session 未受影响。',
+  infoLine: (version: string, connection: string) =>
+    `📡 dsh-discord v${version} · ${connection}\n⭐ 反馈与文档: https://github.com/addozhang/dsh-discord`,
 
   // ── interaction failures / denials ───────────────────────────────────
   commandFailed: '⚠️ 命令处理失败，请稍后重试。',
@@ -214,7 +216,7 @@ const en: CopyTable = {
   infoUnavailable: '⚠️ The workspace directory is temporarily unavailable; try again later.',
   infoRevision: (revision, binder) => `Revision ${revision} (bound by <@${binder}>)`,
   infoPath: path => `Path: \`${path}\``,
-  unknownSubcommand: '💡 Unknown subcommand.',
+  unknownSubcommand: '💡 Unknown subcommand. Feedback & docs: https://github.com/addozhang/dsh-discord',
 
   stopNotSessionThread: '⚠️ This channel is not an adapter-owned session thread.',
   stopNothingRunning: 'This thread has no running task to stop.',
@@ -244,6 +246,8 @@ const en: CopyTable = {
   forgetConfirmPrompt: '⚠️ This deletes every adapter-owned record for this Guild (bindings/intents; DSH workspaces and sessions are untouched). Continue?',
   forgetConfirmButton: 'Confirm forget',
   forgetDone: '💡 Guild forgotten: adapter records (bindings/intents) are deleted; DSH workspaces and sessions are untouched.',
+  infoLine: (version: string, connection: string) =>
+    `📡 dsh-discord v${version} · ${connection}\n⭐ Feedback & docs: https://github.com/addozhang/dsh-discord`,
 
   commandFailed: '⚠️ Command handling failed; try again later.',
   confirmNotOwner: '⚠️ This confirmation is not yours.',

@@ -26,6 +26,7 @@ import { sweepExpiredApprovals } from './features/approval-expiry.js'
 import { sweepExpiredQuestions, type DshTurnCancelPort } from './features/question-expiry.js'
 import { createQuestionStore } from './features/question-store.js'
 import { createTrailingSingleFlight } from './features/single-flight.js'
+import { ADAPTER_VERSION } from './version.js'
 import { handleSelectInput, handleModalSubmit, type QuestionRoutingDeps } from './features/question-routing.js'
 import { createCopy, permissionPresetLabel, type CopyTable } from './i18n.js'
 import type { DshApprovalRespondPort } from './features/approval-routing.js'
@@ -923,6 +924,11 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       turnTracker,
       queueSnapshots,
       forgetGuild,
+      adapterVersion: () => ADAPTER_VERSION,
+      adapterStatus: () => {
+        const g = statusTracker.project().connection
+        return g === 'connected' ? 'connected' : g === 'connecting' ? 'connecting' : 'disconnected'
+      },
       componentFollowUp,
       disableControl: key => askWiring.disableControl(key),
       handleQuestionComponent: input => handleSelectInput(questionRoutingDeps, input),

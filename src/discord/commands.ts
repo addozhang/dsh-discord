@@ -60,6 +60,7 @@ export const MILESTONE_ONE_COMMANDS: readonly AdapterCommand[] = [
     { name: 'list' },
     { name: 'remove', options: [{ name: 'item', required: true }] },
   ]),
+  leaf('info', 'Show the adapter version, connection state, and project links'),
   leaf('steer', 'Steer the running turn of this thread', [{ name: 'prompt', required: true }]),
   leaf('stop', 'Cancel the running turn of this thread'),
   grouped('model', 'Show or select the session model', [

@@ -159,7 +159,11 @@ function TokenSetup(props: {
       </div>
       <p data-dsh-discord-field-help="">{props.tokenConfigured ? t('discordTokenReconnectHint') : t('discordTokenHelp')}</p>
       {error !== '' && <p data-dsh-discord-token-error="">{error}</p>}
-    </div>
+    
+      <p data-dsh-discord-card-footer-link="" style={{ margin: '8px 0 0', fontSize: 12, opacity: 0.6 }}>
+        <a href="https://github.com/addozhang/dsh-discord" target="_blank" rel="noopener noreferrer">⭐ Feedback & docs</a>
+      </p>
+</div>
   )
 }
 

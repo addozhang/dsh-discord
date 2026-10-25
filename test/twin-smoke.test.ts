@@ -297,6 +297,8 @@ describe('twin smoke: interaction surface (bind / stop / steer)', () => {
       approvalRespondPort: { respond: () => Promise.resolve({ outcome: 'confirmed' as const }) },
       turnTracker,
       queueSnapshots: queueSnapshotsHandle,
+      adapterVersion: () => 'test',
+      adapterStatus: () => 'connected',
       forgetGuild: (guildId: string) => {
         for (const [key] of [...rowMap.entries()]) {
           const scope = parseChannelBindingKey(key)
@@ -1336,6 +1338,8 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
       turnTracker,
       queueSnapshots: new Map(),
       forgetGuild: () => Promise.resolve(),
+      adapterVersion: () => "test",
+      adapterStatus: () => "connected",
       componentFollowUp: async (_interactionId: string, interactionToken: string, content: string) => {
         await componentFollowUp(interactionToken, content)
       },
@@ -1832,6 +1836,8 @@ describe('twin smoke: isolation matrix (15.11)', () => {
       turnTracker: createTurnTracker(),
       queueSnapshots: new Map(),
       forgetGuild: () => Promise.resolve(),
+      adapterVersion: () => "test",
+      adapterStatus: () => "connected",
       componentFollowUp: (_interactionId, _interactionToken, content) => {
         followups.push({ channelId: '', content })
         return Promise.resolve()
@@ -2065,6 +2071,8 @@ describe('twin smoke: English copy path (16.25)', () => {
       turnTracker: createTurnTracker(),
       queueSnapshots: new Map(),
       forgetGuild: () => Promise.resolve(),
+      adapterVersion: () => "test",
+      adapterStatus: () => "connected",
       componentFollowUp: () => Promise.resolve(),
       disableControl: () => Promise.resolve(),
       handleQuestionComponent: input => handleSelectInput({
