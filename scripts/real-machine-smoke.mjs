@@ -49,14 +49,26 @@ async function rest(method, path, body) {
 const me = await rest('GET', '/users/@me')
 check('bot identity resolves', me.status === 200, `id=${me.body?.id ?? '?'} bot=${me.body?.bot === true}`)
 
-// 2. Command registrations: all 8 commands present for the guild, and the
-//    D1 wire contract holds — default_member_permissions OMITTED ('0' hid
+// 2. Command registrations: the whole command set is present for the guild, and
+//    the D1 wire contract holds — default_member_permissions OMITTED ('0' hid
 //    commands from ordinary members; the adapter authorizes at interaction
 //    time instead).
+//    Compared as a SET rather than a count: a bare length check said "8" while
+//    `steer` had already been added, so every run failed on a stale number.
+//    Mirrors MILESTONE_ONE_COMMANDS in src/discord/commands.ts.
+const EXPECTED_COMMANDS = ['guild', 'info', 'model', 'permission', 'project', 'queue', 'session', 'steer', 'stop']
 const APP = me.body?.id ?? ''
 const cmds = await rest('GET', `/applications/${APP}/guilds/${GUILD}/commands`)
 const names = Array.isArray(cmds.body) ? cmds.body.map(c => c.name).sort() : []
-check('8 commands registered', names.length === 8, names.join(','))
+const missingCommands = EXPECTED_COMMANDS.filter(n => !names.includes(n))
+const unexpectedCommands = names.filter(n => !EXPECTED_COMMANDS.includes(n))
+check(
+  `${EXPECTED_COMMANDS.length} commands registered`,
+  missingCommands.length === 0 && unexpectedCommands.length === 0,
+  missingCommands.length === 0 && unexpectedCommands.length === 0
+    ? names.join(',')
+    : `missing=[${missingCommands.join(',')}] unexpected=[${unexpectedCommands.join(',')}] got=[${names.join(',')}]`,
+)
 // Discord returns the field as null when unset — only a non-null value is a violation.
 const withDmp = Array.isArray(cmds.body) ? cmds.body.filter(c => c.default_member_permissions != null) : []
 check('D1: default_member_permissions omitted on every command', withDmp.length === 0,
@@ -76,11 +88,28 @@ check('D1: @everyone may invoke commands (USE_APPLICATION_COMMANDS held)', (ever
 const ch = await rest('GET', `/channels/${CHANNEL}`)
 check('channel readable', ch.status === 200, ch.body?.name ?? String(ch.status))
 
-// 4. Adapter presence: recent bot-authored messages exist in the channel
-//    (post-deployment reconcile leaves the workspace channel structure).
+// 4. Adapter presence: the adapter owns content in this channel — bot-authored
+//    messages either in the channel itself or inside its threads. The mention
+//    flow puts every answer in a thread, so a workspace channel legitimately
+//    holds ONLY user-authored thread starters; checking the channel alone
+//    reports "0 recent bot messages" on a perfectly healthy deployment.
 const tail = await rest('GET', `/channels/${CHANNEL}/messages?limit=10`)
 const botMessages = Array.isArray(tail.body) ? tail.body.filter(m => m.author?.id === APP) : []
-check('adapter has spoken in the channel', botMessages.length > 0, `${String(botMessages.length)} recent bot messages`)
+let botInThreads = 0
+if (botMessages.length === 0) {
+  // There is no per-channel threads/active endpoint (it 404s); the guild-wide
+  // one is the only listing, so filter by parent_id.
+  const active = await rest('GET', `/guilds/${GUILD}/threads/active`)
+  const threads = Array.isArray(active.body?.threads)
+    ? active.body.threads.filter(t => t.parent_id === CHANNEL).slice(0, 3)
+    : []
+  for (const thread of threads) {
+    const inThread = await rest('GET', `/channels/${thread.id}/messages?limit=10`)
+    if (Array.isArray(inThread.body)) botInThreads += inThread.body.filter(m => m.author?.id === APP).length
+  }
+}
+check('adapter has spoken in the channel or its threads', botMessages.length + botInThreads > 0,
+  `${String(botMessages.length)} in channel, ${String(botInThreads)} in threads`)
 
 // 5. Send + nonce round-trip: one suppressed-notification probe message the
 //    smoke deletes afterwards (leave-no-trace).

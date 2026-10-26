@@ -90,12 +90,21 @@ async function main() {
   await sleep(500)
   for (const char of ` ${TASK}`) await typeChar(char)
   await sleep(300)
+  // Capture the anchor BEFORE sending, and as a bare snowflake. This used to
+  // read the raw `data-list-item-id` attribute
+  // ("chat-messages___chat-messages-<channel>-<id>") AFTER the Enter, so the
+  // string comparison below (`message.id <= preSendLastId`) was comparing an id
+  // against a DOM key — every real message looked "older" and discovery fell
+  // through to the stale-thread fallback.
+  const preSendLastId = await evaluate(`(() => {
+    const items = [...document.querySelectorAll('[data-list-item-id]')]
+      .filter(node => /^chat-messages___chat-messages-\\d+-\\d+$/.test(node.getAttribute('data-list-item-id') ?? ''))
+    if (items.length === 0) return ''
+    const parts = (items[items.length - 1].getAttribute('data-list-item-id') ?? '').split('-')
+    return parts[parts.length - 1]
+  })()`)
   await key({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
   await key({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
-  const preSendLastId = await evaluate(`(() => {
-    const items = document.querySelectorAll('[data-list-item-id]')
-    return items.length === 0 ? '' : (items[items.length - 1].getAttribute('data-list-item-id') ?? '')
-  })()`)
   console.log('mention sent — switching to REST verification')
   ws.close()
 
@@ -121,10 +130,17 @@ async function main() {
       }
     }
     if (found === undefined) {
+      // Fallback: guild-wide active threads, still tied to THIS run. A thread's
+      // id equals its anchor message id, so anything at or below preSendLastId
+      // predates the mention we just sent. Taking `.at(-1)` here re-verified the
+      // OLDEST thread in the channel and reported a stale conversation as a
+      // pass — pick the newest qualifying thread instead.
       const active = await rest('GET', `/guilds/${GUILD}/threads/active`)
-      found = Array.isArray(active.body?.threads)
-        ? active.body.threads.filter(t => t.parent_id === CHANNEL).at(-1)
-        : undefined
+      const candidates = Array.isArray(active.body?.threads)
+        ? active.body.threads.filter(t => t.parent_id === CHANNEL && (preSendLastId === '' || t.id > preSendLastId))
+        : []
+      candidates.sort((a, b) => (BigInt(b.id) > BigInt(a.id) ? 1 : -1))
+      found = candidates[0]
     }
     if (found !== undefined) {
       const msgs = await rest('GET', `/channels/${found.id}/messages?limit=50`)
