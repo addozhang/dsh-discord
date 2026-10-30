@@ -167,9 +167,15 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   locale 读 = `settings.describe()` 找 `ns==='locale'` 的 `value.preference`；
   volatile mode 使字段 default 类型变 `Volatile<T>`——schema 常量不能标
   `z<DiscordSettings>` 注解
-- **判例：宿主内部包（settings/config-editor/app-boot 等）绝不进插件
-  dependencies**（会装出双副本破坏宿主单例假设）；仅 type-import 的放
-  devDependencies；真运行时依赖（dsh-credentials、dsh-storage-domain）可保留
+- **判例（16.106 修订，2026-10-31）：宿主内部包（settings/config-editor/
+  app-boot/storage-domain/credentials 等 `@deepseek-ai/dsh-*`）绝不进插件
+  dependencies——没有例外**。旧判例"真运行时依赖可保留"作废：0.2.1-rc.5 宿主把
+  精确版本兼容门扩展到了 profile 树的插件行，任何被携带的 dsh 内部包副本都会在
+  宿主升级后立即禁用自身（见下方 16.106）。运行时值就地内联（先例：
+  `credential.ts` 的 branded ref、`state/domain.ts` 的 `defineDomain`/
+  `domainTable` 镜像），类型走 devDependencies 的 `import type`；
+  `test/packaging.test.ts` 双守卫（dependencies 无 `@deepseek-ai/dsh-*` +
+  src 对其只允许 type import）防回归
 
 ### 全局态与多 profile（2026-09-24 实测）
 
@@ -180,12 +186,20 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   竞争风险。**单宿主假设**：起验证实例前先确认其它宿主没有 Discord 插件在跑
 - 无效 token 的失败相位：REST 阶段（命令注册）失败时卡片只显示无 hint 的
   disconnected——invalid-token 判定依赖 gateway close 4004（UX 缺口）
-- rc.1+ 宿主有**插件精确版本兼容门**：插件 peerDeps 钉 dsh 内部包版本不匹配即
-  禁用 row。0.2.0 判例（2026-10-06）：本插件 dependencies 自带的
-  `dsh-storage-domain@0.1.7-rc.1` 在 0.2.0-rc.2 宿主上被门禁 → `storageDomain`
-  服务缺失 → workspace/sessionController 级联 pending，插件永不激活（startError
-  不会出现——是依赖行先死）。**适配器依赖线必须与宿主线同版矩阵**；0.6.1+ 钉
-  0.2.1 线，0.6.0 钉 0.2.0-rc.2，0.5.x 钉 0.1.7-rc.1，反向混搭同样被禁
+- rc.1+ 宿主有**插件精确版本兼容门**。0.2.0 判例（2026-10-06）：本插件
+  dependencies 自带的 `dsh-storage-domain@0.1.7-rc.1` 在 0.2.0-rc.2 宿主上被门禁 →
+  `storageDomain` 服务缺失 → workspace/sessionController 级联 pending，插件永不激活
+  （startError 不会出现——是依赖行先死）。**0.2.1-rc.5 起门禁同样适用于 profile
+  树的插件行本身**（`disabling profile plugin row … is incompatible with dsh …`），
+  且宿主提供应急豁免：`dsh plugin --profile <p> allow-version <pkg>@<ver>
+  --dsh-version <runtime> --accept-risk`（`version-exemptions` 子命令可列出）。
+  **16.106（2026-10-31）：适配器 0.6.5+ 不再携带任何 dsh 内部包依赖——门禁从
+  结构上无法再被本插件触发**；0.6.1–0.6.4 恰钉 `0.2.1-rc.3`（rc.5+ 宿主上必死，
+  升级适配器即修复）；0.6.0 钉 0.2.0-rc.2，0.5.x 钉 0.1.7-rc.1，反向混搭同样被禁。
+  **陷阱：手工往 profile `package.json` dependencies 里钉
+  `@deepseek-ai/dsh-storage-domain` 做缓解的，修复上线后必须摘除——下一次宿主
+  升级它会自己撞门禁**（profile 模板只装 dsh-base+dsh-web-app，storage-domain
+  服务由运行时自带，profile 树本不需要这份直接依赖）
 - storage-domain 依赖 schemastery `~3.18.4`（0.2.1 线起 `~3.18.5`）——插件 pin
   必须对齐（.pnpm 出现两实例 → 声明发射 TS2742）；0.1.7→0.2.0 的 storage-domain 与
   dsh-credentials **lib 代码逐字节相同**，唯一差异是 peer pin——跨线 bump 是零

@@ -36,17 +36,19 @@
 
 ## 版本支持
 
-两条通道并行发布，各自钉在经过真机验证的 dsh 宿主面上。适配器与 dsh CLI 请取同一行：
+两条通道并行发布，各自跟随经过真机验证的 dsh 宿主面。适配器与 dsh CLI 请取同一行：
 
 | 通道 | 适配器 | dsh CLI | 安装命令 |
 |---|---|---|---|
-| **stable（0.2.1 线）** | `0.6.4` — npm `latest` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
-| **next（0.2.1 线）** | `>=0.6.1-rc.1` — npm `next` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
+| **stable（0.2.1 线）** | `0.6.5` — npm `latest` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
+| **next（0.2.1 线）** | `>=0.6.5-rc.1` — npm `next` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
 | 旧线（0.1.7） | `0.5.0` — 精确版本号 | `0.1.7-rc.1` — 精确版本号 | `dsh plugin --profile web add @addozhang/dsh-discord@0.5.0` |
 
-- **两行不可混搭。** 适配器 `0.6.1+` 携带的运行时依赖（`dsh-storage-domain`/`dsh-credentials`）钉在 dsh `0.2.1` 线——装到其它宿主线会被宿主的精确版本兼容门禁用（storageDomain 服务缺失，插件保持未激活）；适配器 `0.6.0-rc.1` 是 `0.2.0-rc.2` 的配对（dist-tags 已移到 0.2.1，两侧都只能精确版本号安装），适配器 `0.5.0` 同理反向钉在 `0.1.7` 线。适配器 `>=0.5.0-rc.4`（含 `0.5.0`）使用 0.1.7 的 profile-backed settings forms 与控制器服务，在更旧的宿主上无法加载（startup 探针会给出一条可操作的诊断后拒绝激活）；`0.5.0-rc.1`–`rc.3` 对应 dsh `0.1.6-alpha`；适配器 `0.4.x` 使用旧版 `apiProxy` 宿主面（该面已在 `0.1.6-alpha` 中移除）——它仍是 dsh `0.1.5` stable 线的配对，可用精确版本号安装（如 `@addozhang/dsh-discord@0.4.0`）。错配会在启动时失败。
-- 切换 dsh CLI 通道：`npm install -g @deepseek-ai/dsh@latest`（0.2.1-rc.x，配适配器 0.6.1+）或 `npm install -g @deepseek-ai/dsh@0.1.7-rc.1`（配适配器 0.5.0）。
-- `next` 刚发版后，`@next` 规格可能解析到过期的缓存版本。若装到的版本偏旧，请改用精确版本号安装（如 `@addozhang/dsh-discord@0.5.0-rc.4`），并核对 profile `node_modules` 中的 `version` 字段。
+- **适配器 `0.6.5+` 不再随包携带任何 dsh 内部包**：`dsh-storage-domain` 的声明辅助（`defineDomain`/`domainTable`）已内联进插件，宿主的 `storageDomain` 服务按结构化契约消费。因此 dsh CLI / Desktop 在 0.2.1 线内升级（含 `0.2.1-rc.5` 起生效的插件精确版本兼容门）不会再禁用本插件。宿主 API 面仍由 startup 探针守护——宿主缺少所需服务面时拒绝激活并给出一条可操作诊断。
+- **适配器 `0.6.1`–`0.6.4` 的存量安装注意：** 这些版本把 `dsh-storage-domain@0.2.1-rc.3` 作为运行时依赖随包携带。dsh `0.2.1-rc.5` 起宿主会禁用 profile 树中与运行时版本不精确匹配的插件行——被携带的副本盖住宿主副本后，`storageDomain` 服务随之消失，插件保持 pending（UI 里既无工作区也无会话，数据无损）。把适配器升级到 `0.6.5+` 即修复；若曾在 profile 的 `package.json` 里手工添加过 `@deepseek-ai/dsh-storage-domain` 条目（一种临时缓解），请一并移除——否则下一次宿主升级它会自己撞上同一道门禁。
+- 更早的配对关系不变：适配器 `0.6.0-rc.1` ↔ dsh `0.2.0-rc.2`（dist-tags 已移到 0.2.1，两侧都只能精确版本号安装），适配器 `0.5.0` 同理反向钉在 `0.1.7-rc.1` 线；适配器 `>=0.5.0-rc.4`（含 `0.5.0`）使用 0.1.7 的 profile-backed settings forms 与控制器服务，在更旧的宿主上无法加载（startup 探针会给出一条可操作的诊断后拒绝激活）；`0.5.0-rc.1`–`rc.3` 对应 dsh `0.1.6-alpha`；适配器 `0.4.x` 使用旧版 `apiProxy` 宿主面（该面已在 `0.1.6-alpha` 中移除）——它仍是 dsh `0.1.5` stable 线的配对，可用精确版本号安装（如 `@addozhang/dsh-discord@0.4.0`）。
+- 切换 dsh CLI 通道：`npm install -g @deepseek-ai/dsh@latest`（0.2.1-rc.x，配适配器 0.6.5+）或 `npm install -g @deepseek-ai/dsh@0.1.7-rc.1`（配适配器 0.5.0）。
+- `next` 刚发版后，`@next` 规格可能解析到过期的缓存版本。若装到的版本偏旧，请改用精确版本号安装（如 `@addozhang/dsh-discord@0.6.5-rc.1`），并核对 profile `node_modules` 中的 `version` 字段。
 
 ## 安装
 

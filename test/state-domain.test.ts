@@ -14,12 +14,20 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  defineDomain as upstreamDefineDomain,
+  domainTable as upstreamDomainTable,
+} from '@deepseek-ai/dsh-storage-domain'
+import { z } from 'zod'
+
+import {
   CHANNEL_BINDINGS_TABLE,
   DISCORD_DOMAIN_NAME,
   DISCORD_DOMAIN_VERSION,
   THREAD_BINDINGS_TABLE,
   channelBindingKey,
+  defineDomain,
   discordDomainSpec,
+  domainTable,
   parseChannelBindingKey,
   parseThreadBindingKey,
   threadBindingKey,
@@ -151,4 +159,72 @@ describe('domain spec', () => {
     await domain.close()
     expect(close).toHaveBeenCalledTimes(1)
   })
+})
+
+// 16.106: the plugin mirrors defineDomain/domainTable instead of depending on
+// the package (a shipped copy hoisted over the profile tree and tripped the
+// host's exact-version gate on every upgrade). This block keeps the mirror
+// honest against the real package — accept-for-accept, reject-for-reject —
+// so an upstream semantics change fails here when the devDependency bumps.
+describe('mirrored domain spec helpers drift-guard (16.106)', () => {
+  /** Capture accept (returning the same reference) vs reject as comparable values. */
+  function outcome(apply: () => unknown): unknown {
+    try {
+      const value = apply()
+      return { ok: true, returned: value }
+    } catch {
+      return { ok: false }
+    }
+  }
+
+  /** One base valid spec the malformed variants below mutate. */
+  function baseSpec(tables: Record<string, unknown> = { bindings: domainTable(z.object({ ok: z.boolean() })) }): Record<string, unknown> {
+    return { name: 'dsh_discord', version: 1, tables }
+  }
+
+  it('the shipped spec is valid under the real upstream validator', () => {
+    // The strongest single tripwire: whatever `dsh-storage-domain` currently
+    // considers a legal domain, our inlined declaration must still pass it.
+    expect(upstreamDefineDomain(discordDomainSpec)).toBe(discordDomainSpec)
+  })
+
+  it('domainTable mirrors the upstream plain runtime value', () => {
+    const schema = z.object({ revision: z.number().int() })
+    expect(outcome(() => domainTable(schema))).toEqual(outcome(() => upstreamDomainTable(schema)))
+    expect(domainTable(schema)).toEqual({ valueSchema: schema })
+    expect(domainTable(schema).valueSchema).toBe(schema)
+  })
+
+  const malformedVariants: readonly (readonly [string, unknown])[] = [
+    ['uppercase domain name', { ...baseSpec(), name: 'DSH_discord' }],
+    ['leading-digit domain name', { ...baseSpec(), name: '1dsh' }],
+    ['negative version', { ...baseSpec(), version: -1 }],
+    ['fractional version', { ...baseSpec(), version: 1.5 }],
+    ['compatibleVersions entry not below version', { ...baseSpec(), version: 2, compatibleVersions: [2] }],
+    ['compatibleVersions negative entry', { ...baseSpec(), version: 2, compatibleVersions: [-1] }],
+    ['unknown layout', { ...baseSpec(), layout: 'both' }],
+    ['unknown invalidRecords policy', { ...baseSpec(), invalidRecords: 'drop' }],
+    ['illegal table name', baseSpec({ 'Channel-Bindings': domainTable(z.object({})) })],
+    ['nullable global schema', { ...baseSpec(), global: { schema: z.nullable(z.string()), initial: 'x' } }],
+  ]
+
+  for (const [label, spec] of malformedVariants) {
+    it(`mirrors upstream rejection: ${label}`, () => {
+      expect(outcome(() => defineDomain(spec as never))).toEqual(outcome(() => upstreamDefineDomain(spec as never)))
+    })
+  }
+
+  const acceptedVariants: readonly (readonly [string, unknown])[] = [
+    ['compatibleVersions below version', { ...baseSpec(), version: 2, compatibleVersions: [0, 1] }],
+    ['per-record layout', { ...baseSpec(), layout: 'per-record' }],
+    ['backup-and-skip policy', { ...baseSpec(), invalidRecords: 'backup-and-skip' }],
+    ['non-nullable global schema', { ...baseSpec(), global: { schema: z.string(), initial: 'x' } }],
+  ]
+
+  for (const [label, spec] of acceptedVariants) {
+    it(`mirrors upstream acceptance and returns the same reference: ${label}`, () => {
+      expect(outcome(() => defineDomain(spec as never))).toEqual(outcome(() => upstreamDefineDomain(spec as never)))
+      expect(defineDomain(spec as never)).toBe(spec)
+    })
+  }
 })
