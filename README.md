@@ -40,11 +40,12 @@ Two channels ship in parallel, each pinned to the dsh host surface it was verifi
 
 | Channel | Adapter | dsh CLI | Install |
 |---|---|---|---|
-| **next (0.2.1 line)** | `>=0.6.1-rc.1` — npm `next` | `0.2.1-rc.2` — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
-| **stable (0.1.7 line)** | `0.5.0` — npm `latest` | `0.1.7-rc.1` — exact version | `dsh plugin --profile web add @addozhang/dsh-discord` |
+| **stable (0.2.1 line)** | `0.6.4` — npm `latest` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
+| **next (0.2.1 line)** | `>=0.6.1-rc.1` — npm `next` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
+| Legacy (0.1.7 line) | `0.5.0` — exact version | `0.1.7-rc.1` — exact version | `dsh plugin --profile web add @addozhang/dsh-discord@0.5.0` |
 
 - **The rows do not mix.** Adapter `0.6.1+` carries runtime dependencies (`dsh-storage-domain`/`dsh-credentials`) pinned to the dsh `0.2.1` line — on any other host line the exact-version compatibility gate disables them (the storageDomain service never arrives and the plugin stays inactive); adapter `0.6.0-rc.1` is the `0.2.0-rc.2` pairing (both sides are exact-version installs now that the dist-tags moved to 0.2.1), and adapter `0.5.0` pins the `0.1.7` line symmetrically. Adapter `>=0.5.0-rc.4` (including `0.5.0`) speaks the 0.1.7 profile-backed settings forms and controller services and will not load on older hosts (the startup probe refuses with one actionable diagnostic); `0.5.0-rc.1`–`rc.3` target dsh `0.1.6-alpha`; adapter `0.4.x` talks to the former `apiProxy` surface, which `0.1.6-alpha` removed — it remains the pairing for the dsh `0.1.5` stable line, reachable by exact version (e.g. `@addozhang/dsh-discord@0.4.0`). A mismatched pair fails at startup.
-- To switch the dsh CLI line: `npm install -g @deepseek-ai/dsh@latest` (0.2.1-rc.2, pairs with adapter 0.6.1-rc.1) or `npm install -g @deepseek-ai/dsh@0.1.7-rc.1` (pairs with adapter 0.5.0).
+- To switch the dsh CLI line: `npm install -g @deepseek-ai/dsh@latest` (0.2.1-rc.x, pairs with adapter 0.6.1+) or `npm install -g @deepseek-ai/dsh@0.1.7-rc.1` (pairs with adapter 0.5.0).
 - Right after a `next` release, the `@next` spec can resolve to a stale cached version. If the installed copy looks old, install by exact version instead (e.g. `@addozhang/dsh-discord@0.5.0-rc.4`) and verify the `version` field inside the profile's `node_modules`.
 
 ## Install
