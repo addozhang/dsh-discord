@@ -131,8 +131,17 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
 
 - ask waterfall 对**外部插件不可达**（profile 按 bundle 组多棵事件树，只枚举基座
   树注册表）。受支持做法 = **服务边界补丁**：包一层 `ApprovalService.request` /
-  `UserQuestionService.ask`（`installAskServicePatches`）——线程绑定会话走 Discord
-  按钮流，其余透传（web UI 不受影响）。补丁路径不写 approval/asked 审计对
+  `UserQuestionService.ask`（`installAskServicePatches`）——线程绑定会话 claim 走
+  Discord 按钮流，其余透传。**claim 方向是双面的（16.105，2026-10-30）**：claim 时
+  经 relay signal（自有 AbortController 转发宿主 abort）把原请求同时转发给原始入口，
+  web 端出同款卡，两端先答先得——web 赢 → `on{Approval,Question}Resolved` 退休
+  Discord 控件；Discord 赢 → `relay.abort()` 收口 web 等待。宿主归一化事实（真机
+  核实 0.2.1-rc.3）：审批 `request` 把无答题者/异常 **resolve `'unavailable'`**（仅
+  `allowed-once`/`rejected` 裁决；policy=`never` 时宿主短路 resolve `'rejected'`，
+  web 腿即时赢——绑定会话的 Discord 审批按钮闪现即灰，符合宿主策略语义）；提问无
+  答题者 reject `NO_PROVIDER`（吞掉）。claim 路径现在也走真实入口 → 审批 ask/decided
+  审计对开始落盘（旧判例"补丁路径不写审计对"作废）。passthrough 方向（ask 发出后才
+  绑定，Discord 永不可见）保持现状——2026-10-26 决策，issue #11 记录
 - 权限预设三档 `read-only` / `workspace-write` / `danger-full-access`（沙箱+审批
   捆绑）。读 = `permissionPresets.catalog()` + `observeSession` 的 permissions
   投影 `{currentValue}`；写 = 宿主唯一认可的 `/permission` 命令路径：
