@@ -288,6 +288,39 @@ typecheck 唯一触点 = 测试 fixture 的 `mode` 字段（settings type 面删
   `^dsh` 前缀匹配（`\bdsh\b` 会因 "dshdsh#0905" 无词边界而漏）；`<@&id>` = 角色
   mention（@DSH 是角色不是 bot），REST 拉原始消息看 mentions 数组是权威判定
 
+**验证基线（0.2.1-rc.5 线，2026-10-31 真机通过；0.6.5-rc.1 = 去依赖版）**：
+真 guild（1517134847850709032，token = app 1541450442419081316）上
+`real-machine-full.sh` 5/6 阶段过 + mention E2E 以 REST 证据人工判过：smoke 9/9
+（identity/9 命令注册/D1 权限/probe nonce）、ack ×3 ~300ms、bind 交互半程
+（autocomplete→confirm 到达宿主；commit 因 #temp 为 bot 不可读私有频道被
+deny-first 正确拒绝——**换可读频道才能验 channel_bindings 真写入**）、
+mention 全链（线程+head embed+工具行+finalize 成文、turn 完成、
+thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild 白名单
+（已覆盖标记）+ 自动归档四档 + Bot 语言三选 + Feedback/保存。**UI 工作区与会话
+列表恢复**（原始故障症状解除）。去依赖修复面本身另由：隔离空 home 冒烟
+（零门禁/零 pending/插件全量激活）+ 审计 51 OK + 打包守卫 + 漂移矩阵 +
+825/825 twin 覆盖。
+
+**新判例（2026-10-31 验证踩出，两条 follow-up 不阻塞发版）**：
+
+- **gateway close 1006 后 40 分钟零重连**（08:30 前的宿主实例）：desktop App 短暂
+  重启（同 token 互踢）后适配器只记录一次 close、其后无任何重连/reconcile trace，
+  probe 消息无反应——重启宿主即恢复。与旧判例"重连+READY reconcile 自愈"矛盾，
+  需复现定性（怀疑重连退避/纤维卡死）；0.6.5-rc.1 未改 gateway 代码，非本次回归
+- **`discord_ack_failed: rejected` ×3**：与 slash/component dispatch 一一对应但
+  交互功能全部成功（回复可见、bind 确认完成）——疑似良性（重复/过期 token 的
+  ack 被 Discord 拒）但 **trace 只打 outcome 不带 status/error.code，无从精判**；
+  follow-up = 补 trace 细节后复现分类。旧基线（rc.3 宿主）trace hygiene 全绿，
+  此信号为 rc.5 宿主线新出现
+- 套件校准坑：`devtools-cdp-mention.mjs` bot 消息过滤**钉死测试 app id**
+  （1550676723773739048）——换 guild 跑必假阴性；套件默认 GUILD/频道全是
+  测试 guild 的；`#temp`（真 guild）是私有频道，bot 50001 Missing Access
+- 凭据槽换 app 是常态故障源：token 属于哪个 app（REST users/@me）× 命令
+  敲在哪个 guild，二者错位 = interaction 永远到不了宿主（"The application did
+  not respond"），与适配器无关——先对 app id 再查别的
+- 测试宿主端口换 3081 以外时记得同步 `real-machine-full.sh` 的 TRACE 默认值
+  与 `devtools-chrome.sh` 的 HOST_URL
+
 ## 测试与联调约定
 
 - 纪律：行为变更先写失败测试（RED→GREEN）；wire 形状走 twin E2E，
