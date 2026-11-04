@@ -40,7 +40,7 @@
 
 | 通道 | 适配器 | dsh CLI | 安装命令 |
 |---|---|---|---|
-| **stable（0.2.1 线）** | `0.6.5` — npm `latest` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
+| **stable（0.2.1 线）** | `0.6.6` — npm `latest` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
 | **next（0.2.1 线）** | `>=0.6.5-rc.1` — npm `next` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
 | 旧线（0.1.7） | `0.5.0` — 精确版本号 | `0.1.7-rc.1` — 精确版本号 | `dsh plugin --profile web add @addozhang/dsh-discord@0.5.0` |
 

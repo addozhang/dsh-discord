@@ -338,10 +338,13 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   CLI + 0.6.5 tarball：零门禁/零 pending/插件全量激活，`adapter.status` RPC 200
   返回 `token: unconfigured` 正确信封——cookie 认证链路：先 GET `/?token=` 303
   铸 cookie 再 POST channel 信封）
-- **发版配方（0.6.6-rc.1）**：devDependencies 全部 dsh-\* → 0.2.2-rc.1 +
-  cordis → 4.1.0 + schemastery → 3.19.0（dependencies）；发布前按 rc 通道要求补
-  全功能真机验证（CDP 驱动 Discord）——**desktop profile 正跑 0.6.5 +
-  `enabled: true`，必须先停 Desktop 宿主**（单宿主红线）
+- **发版记录（0.6.6 stable，2026-11-05）**：原配方写的是 0.6.6-rc.1，实际发
+  **stable**——0.6.5→0.6.6 的 lib 代码零变化（仅 devDeps 矩阵/locale meta/详情页
+  文档/图标），运行时唯一变化 schemastery 3.18.5→3.19.0 的 lib 逐字节相同，双宿主
+  线（0.2.1 latest / 0.2.2 next）审计全绿 + 隔离冒烟双过——零行为风险；且 star
+  引流 CTA 的受众在 `latest` 通道，-rc 只上 `next` 到不了下载用户。**0.2.2 宿主的
+  全功能真机 CDP 验证仍欠着**（desktop profile 停机窗口），作为独立 follow-up 不
+  阻塞发版——若真机验证发现 0.2.2 线问题，按矩阵规则再发 0.6.7
 
 - **插件列表显示名/描述/图标（`locale/` meta 约定）**：宿主 `dsh-app-boot` 的
   `readPluginMeta`（`pluginPackages.metaOf`）不执行插件代码、只读静态资源——

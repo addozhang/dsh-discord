@@ -40,7 +40,7 @@ Two channels ship in parallel, each following the dsh host surface it was verifi
 
 | Channel | Adapter | dsh CLI | Install |
 |---|---|---|---|
-| **stable (0.2.1 line)** | `0.6.5` — npm `latest` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
+| **stable (0.2.1 line)** | `0.6.6` — npm `latest` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
 | **next (0.2.1 line)** | `>=0.6.5-rc.1` — npm `next` | `0.2.1-rc.3`+ — npm `latest`/`next` | `dsh plugin --profile web add @addozhang/dsh-discord@next` |
 | Legacy (0.1.7 line) | `0.5.0` — exact version | `0.1.7-rc.1` — exact version | `dsh plugin --profile web add @addozhang/dsh-discord@0.5.0` |
 
