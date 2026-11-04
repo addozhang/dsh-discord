@@ -321,6 +321,28 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
 - 测试宿主端口换 3081 以外时记得同步 `real-machine-full.sh` 的 TRACE 默认值
   与 `devtools-chrome.sh` 的 HOST_URL
 
+**0.2.2-rc.1 审计（2026-11-04，next 通道；0.6.5 去依赖版矩阵已 bump 待发）**：
+
+- 审计 **51 OK 零漂移**；CLI（npm 全局 `/opt/homebrew`）已升 0.2.2-rc.1。注意 npm
+  全局升级可能留 `.dsh-XXXX` 临时 bin 链接导致 `dsh` 命令消失——重装同版本即修
+- 依赖矩阵 diff（0.2.1-rc.5→0.2.2-rc.1，tarball 级）：**credentials lib 逐字节相同**
+  （纯 peer 移动）；storage-domain 核心 API 不变纯增量（`deleteMany` 批删 +
+  `unknown-state` 隔离语义，均未用）；**cordis 4.0.5→4.1.0**——类型面内部重构 +
+  `LoggerLevel` const enum INFO/WARN 数值互换（插件对 cordis 全部 type-only
+  `Context` 导入、零运行时引用，咬不到；新代码若比较 logger 数值级别需警惕）；
+  **schemastery 3.18.5→3.19.0 lib 逐字节相同**（纯版本 pin 对齐）；客户端类型包
+  全部纯增量（dsh-client-ui-settings 新可选 slot `settings.section.icon` +
+  `SettingsSectionIconOwnerProps`，可择机采纳；dsh-settings 内部 fiber 访问适配
+  cordis 4.1.0）
+- 本地验证：typecheck/lint/build/825 测试全绿 + 隔离空 home 冒烟通过（0.2.2-rc.1
+  CLI + 0.6.5 tarball：零门禁/零 pending/插件全量激活，`adapter.status` RPC 200
+  返回 `token: unconfigured` 正确信封——cookie 认证链路：先 GET `/?token=` 303
+  铸 cookie 再 POST channel 信封）
+- **发版配方（0.6.6-rc.1）**：devDependencies 全部 dsh-\* → 0.2.2-rc.1 +
+  cordis → 4.1.0 + schemastery → 3.19.0（dependencies）；发布前按 rc 通道要求补
+  全功能真机验证（CDP 驱动 Discord）——**desktop profile 正跑 0.6.5 +
+  `enabled: true`，必须先停 Desktop 宿主**（单宿主红线）
+
 ## 测试与联调约定
 
 - 纪律：行为变更先写失败测试（RED→GREEN）；wire 形状走 twin E2E，
