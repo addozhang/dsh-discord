@@ -1,6 +1,7 @@
 {
   "meta": {
     "title": "Discord Adapter",
-    "description": "Bridge a Discord server into DeepSeek Harness: guild-allowlist channel bindings, @mention sessions with streaming renders, approval & question button flows, plus slash commands like /permission and /model."
+    "description": "Bridge a Discord server into DeepSeek Harness: guild-allowlist channel bindings, @mention sessions with streaming renders, approval & question button flows, plus slash commands like /permission and /model.",
+    "detail": "docs/plugin-detail.en.md"
   }
 }

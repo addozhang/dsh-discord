@@ -28,6 +28,8 @@
   "files": [
     "lib",
     "locale/*.json",
+    "docs/plugin-detail.zh.md",
+    "docs/plugin-detail.en.md",
     "icon.svg",
     "README.md",
     "README.zh.md",

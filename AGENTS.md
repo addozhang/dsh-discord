@@ -352,6 +352,19 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   每个 `*.json` 文件名必须是语言 id（`LANGUAGE_ID` 正则）、须在 exports 放行
   `./locale/*.json` 且进 tarball `files`（先例：dsh-turn-toc；本插件 0.6.5+
   已配 `locale/{zh,en}.json` + `icon.svg`）
+- **插件详情页富文本（`meta.detail`，`dsh-plugin-detail` 包）**：详情页文档选择
+  = `locale/<lang>.json` 的 `meta.detail`（包内相对 `.md`/`.markdown` 路径）沿
+  语言链（如 zh-CN→zh→en）取第一个声明者；**没声明才回退 README**
+  （README.md→readme.md→… 顺序）——不声明时详情页就是整页大 README。渲染约束
+  （`DetailDocument`/`MarkdownText`）：raw HTML 略过、**相对链接退化为纯文本**、
+  绝对 http(s) 链接是真实外链锚点、绝对 http(s) 图片与包内相对图片可用
+  （shields.io 徽章 OK，`[![Star](badge)](repo)` 可点）；YAML front matter 被
+  剥掉；上限 = 文档 1MiB / 图片 5MiB；未安装态（marketplace）从 npm file CDN
+  读同一份文档 → 详情文档必须进 tarball。读取不走 exports/ESM 解析（fs/CDN
+  直读），无需 exports 条目。本插件已配 `docs/plugin-detail.{zh,en}.md`
+  （含 star 引流 CTA），验证法 = 隔离 profile 里 import 宿主
+  `dsh-plugin-detail` 的 `readPackageDocument(localFiles(dir, ver), '',
+  languageChain(lang), …)` 断言 origin=locale
 
 ## 测试与联调约定
 

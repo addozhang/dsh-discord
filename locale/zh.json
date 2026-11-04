@@ -1,6 +1,7 @@
 {
   "meta": {
     "title": "Discord 适配器",
-    "description": "把 Discord 服务器接入 DeepSeek Harness：guild 白名单与频道绑定、@mention 发起会话与流式渲染、审批/提问按钮流，以及 /permission、/model 等斜杠命令。"
+    "description": "把 Discord 服务器接入 DeepSeek Harness：guild 白名单与频道绑定、@mention 发起会话与流式渲染、审批/提问按钮流，以及 /permission、/model 等斜杠命令。",
+    "detail": "docs/plugin-detail.zh.md"
   }
 }
