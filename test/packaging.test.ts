@@ -78,9 +78,13 @@ function scanSourceImports(): SourceImport[] {
     // `export … from '…'` re-export — runtime unless led by `type`.
     { re: /export\s+(type\s+)?[^;'"]*from\s+['"](@deepseek-ai\/dsh-[^'"]+)['"]/g, moduleGroup: 2, typeGroup: 1 },
   ]
+  // Read every source file ONCE: the three patterns below share the text.
+  // Walking the tree inside the pattern loop cost three full passes of
+  // synchronous IO, which the suite's parallel workers turn into a >5s
+  // stall (the test timed out at the default testTimeout).
+  const sources = walkSources(join(repoRoot, 'src')).map(file => ({ file, text: readFileSync(file, 'utf8') }))
   for (const { re, moduleGroup, typeGroup } of patterns) {
-    for (const file of walkSources(join(repoRoot, 'src'))) {
-      const text = readFileSync(file, 'utf8')
+    for (const { file, text } of sources) {
       for (const match of text.matchAll(re)) {
         const module = match[moduleGroup]
         if (module === undefined) continue
