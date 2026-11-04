@@ -345,6 +345,17 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   引流 CTA 的受众在 `latest` 通道，-rc 只上 `next` 到不了下载用户。**0.2.2 宿主的
   全功能真机 CDP 验证仍欠着**（desktop profile 停机窗口），作为独立 follow-up 不
   阻塞发版——若真机验证发现 0.2.2 线问题，按矩阵规则再发 0.6.7
+- **判例（2026-11-05 真机，desktop auto-update 到 0.2.2-rc.1 后触发）**：0.2.2 的
+  插件管理器更新流会**热切换 fiber**（旧 fiber 卸载 → 新 fiber 同进程激活；0.2.1
+  是重启制）——插件 `apply()` 里任何 `webServer.register()` **必须返回 disposer**
+  （register 的返回值或 `ctx.effect` 包裹），否则卸载残留注册、更新时撞
+  `webserver: duplicate exact route "…"` 被拒。dsh-host-webserver 的 register 契约
+  （重复抛 + 返回删除器）0.2.1/0.2.2 逐字节相同——泄漏一直在，热更新只是暴露它。
+  实例：dsh-3d-model-viewer 0.4.1 的 exact route 无清理 → desktop 上更新被拒，
+  0.4.2 返回 disposer 修复；本插件无此问题（installAdapterStatusRpc 走 ctx.effect）
+- **Desktop 已 auto-update 到 0.2.2-rc.1（2026-11-05 核实）**——README 配对表的
+  "0.2.1 线"表述滞后于真实桌面生态；0.6.6 在 0.2.2-rc.1 上隔离冒烟已过，desktop
+  真机全量验证仍待做
 
 - **插件列表显示名/描述/图标（`locale/` meta 约定）**：宿主 `dsh-app-boot` 的
   `readPluginMeta`（`pluginPackages.metaOf`）不执行插件代码、只读静态资源——
