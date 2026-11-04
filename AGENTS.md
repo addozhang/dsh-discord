@@ -343,6 +343,16 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   全功能真机验证（CDP 驱动 Discord）——**desktop profile 正跑 0.6.5 +
   `enabled: true`，必须先停 Desktop 宿主**（单宿主红线）
 
+- **插件列表显示名/描述/图标（`locale/` meta 约定）**：宿主 `dsh-app-boot` 的
+  `readPluginMeta`（`pluginPackages.metaOf`）不执行插件代码、只读静态资源——
+  标题回退链 = `locale/<lang>.json` 的 `meta.title` → package.json `name` →
+  模块名（**不配 locale 就显示裸包名**）；描述 = `meta.description` →
+  package.json `description`；图标 = package.json `icon` 字段（相对路径，
+  SVG/PNG/JPEG/WebP ≤256KiB，base64 data URL）。约束：`en.json` 是锚点，同目录
+  每个 `*.json` 文件名必须是语言 id（`LANGUAGE_ID` 正则）、须在 exports 放行
+  `./locale/*.json` 且进 tarball `files`（先例：dsh-turn-toc；本插件 0.6.5+
+  已配 `locale/{zh,en}.json` + `icon.svg`）
+
 ## 测试与联调约定
 
 - 纪律：行为变更先写失败测试（RED→GREEN）；wire 形状走 twin E2E，

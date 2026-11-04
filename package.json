@@ -3,6 +3,7 @@
   "version": "0.6.5",
   "description": "Discord adapter for DeepSeek Harness · DeepSeek Harness 的 Discord 适配器",
   "license": "MIT",
+  "icon": "./icon.svg",
   "type": "module",
   "packageManager": "pnpm@11.0.8",
   "engines": {
@@ -20,10 +21,14 @@
       "default": "./lib/client.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "locale/*.json",
+    "icon.svg",
     "README.md",
     "README.zh.md",
     "LICENSE",
