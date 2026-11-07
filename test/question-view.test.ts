@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import { createComponentRegistry, type ComponentRegistry } from '../src/discord/components.js'
 import type { QuestionBatch } from '../src/features/question-store.js'
 import {
+  CUSTOM_ANSWER_VALUE,
   renderQuestionControls,
   type QuestionSelectComponent,
 } from '../src/features/question-view.js'
@@ -58,6 +59,48 @@ describe('question controls rendering', () => {
     const options = single?.options ?? []
     expect(options.map(option => option.label)).toEqual(['Postgres', 'SQLite', expect.stringMatching(/^Other/u)])
     expect(options.slice(0, 2).map(option => option.value)).toEqual(['Postgres', 'SQLite'])
+  })
+
+  it('renders a free-text question as a single Type-your-answer select (16.108)', () => {
+    const { registry } = setup()
+    const view = renderQuestionControls({
+      registry,
+      batch: batch({
+        questions: [{ id: 'q1', question: 'What is your favorite color?', options: undefined, multiSelect: false }],
+      }),
+    })
+
+    const select = view.components.flatMap(row => row.components).find((component): component is QuestionSelectComponent => component.type === 3)
+    expect(select).toBeDefined()
+    if (select === undefined) return
+    expect(select.type).toBe(3)
+    expect(select.min_values).toBe(1)
+    expect(select.max_values).toBe(1)
+    // The ONLY option is the custom affordance — picking it opens the modal.
+    expect(select.options).toHaveLength(1)
+    expect(select.options[0]).toMatchObject({ label: 'Type your answer', value: CUSTOM_ANSWER_VALUE })
+  })
+
+  it('fits a 24-option question with the reserved custom entry in Discord’s 25 slots', () => {
+    const { registry } = setup()
+    const view = renderQuestionControls({
+      registry,
+      batch: batch({
+        questions: [{
+          id: 'q1',
+          question: 'Pick',
+          options: Array.from({ length: 24 }, (_, index) => ({ label: `option-${String(index)}` })),
+          multiSelect: false,
+        }],
+      }),
+    })
+
+    const select = view.components.flatMap(row => row.components).find((component): component is QuestionSelectComponent => component.type === 3)
+    expect(select).toBeDefined()
+    if (select === undefined) return
+    // 24 host options + 1 trailing custom entry = exactly Discord's cap.
+    expect(select.options).toHaveLength(25)
+    expect(select.options.at(-1)?.value).toBe(CUSTOM_ANSWER_VALUE)
   })
 
   it('carries option descriptions into the select options', () => {

@@ -199,13 +199,14 @@ describe('ask wiring: question batch and render failure', () => {
       },
     })
 
-    // Option-less batch: the claim-time pre-check normally deflects these;
-    // reaching onQuestionRequested with one means bounds drifted. The ask
-    // must not strand — cancel the owning turn instead of waiting out a
-    // deadline nothing can answer.
+    // Over-bound batch (more questions than Discord action rows): the
+    // claim-time pre-check normally deflects these; reaching
+    // onQuestionRequested with one means bounds drifted. The ask must not
+    // strand — cancel the owning turn instead of waiting out a deadline
+    // nothing can answer.
     wiring.onQuestionRequested({
       sessionId: 'sess-1', threadId: 'thread-1', rpcId: 'ask-1', expiresAtMs: 1_800_000,
-      questions: [{ id: 'q1', question: 'Free text?' }],
+      questions: Array.from({ length: 6 }, (_, index) => ({ id: `q${String(index)}`, question: `Q${String(index)}?`, options: [{ label: 'y' }] })),
     } satisfies QuestionAskInput)
 
     await vi.waitFor(() => { expect(cancelCalls).toEqual([{ sessionId: 'sess-1', requestId: 'discord:m-1' }]) })

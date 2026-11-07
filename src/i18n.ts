@@ -88,7 +88,7 @@ const zh = {
   questionInvalid: (reason: string) => `⚠️ 回答无效：${reason}`,
   questionUnresolved: '⚠️ 应答结果未知；DSH 未确认。',
   questionResolvedElsewhere: '💡 该问题已被其他客户端处理。',
-  questionWebOnlyNotice: '💡 这轮提问无法在 Discord 展示（如开放式问题），已转到 DSH 网页端作答。',
+  questionWebOnlyNotice: '💡 这轮提问超出 Discord 的展示上限（如题数或选项数超限），已转到 DSH 网页端作答。',
 
   // ── mainline failure copies (per outcome) ────────────────────────────
   mainlineThreadConflict: '⚠️ 这条消息已被用于另一个会话任务，无法重复创建线程。',
@@ -263,7 +263,7 @@ const en: CopyTable = {
   questionInvalid: reason => `⚠️ Invalid answer: ${reason}`,
   questionUnresolved: '⚠️ Outcome unknown; DSH did not confirm.',
   questionResolvedElsewhere: '💡 This question was already handled by another client.',
-  questionWebOnlyNotice: '💡 These questions cannot be shown in Discord (e.g. open-ended questions); they were sent to the DSH web app for answering.',
+  questionWebOnlyNotice: '💡 These questions exceed what Discord can display (e.g. too many questions or options); they were sent to the DSH web app for answering.',
 
   mainlineThreadConflict: '⚠️ This message was already used for another session task; the thread cannot be recreated.',
   mainlineThreadFailed: '⚠️ Thread creation failed; try again later.',

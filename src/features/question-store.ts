@@ -48,7 +48,11 @@ export interface EncodedQuestionAnswer {
 /** Discord action rows per message — one select each. */
 export const MAX_QUESTIONS_PER_BATCH = 5
 /** Discord string-select option bound. */
-export const MAX_OPTIONS_PER_QUESTION = 25
+export const MAX_OPTIONS_PER_QUESTION = 24
+// Discord caps one select at 25 options and the renderer always appends the
+// custom-text affordance (modal answer), so host options cap at 24 — 25 host
+// options + custom would overflow the wire and Discord rejects the component
+// (16.108; Kimaki precedent: "25 options per select, one is Other").
 /** Discord select option label bound (characters). */
 export const MAX_LABEL_LENGTH = 100
 /** The adapter's own custom-text bound (inside Discord's 4000). */
@@ -58,7 +62,6 @@ export type OpenBatchError =
   | 'too-many-questions'
   | 'too-many-options'
   | 'option-label-too-long'
-  | 'options-required'
   | 'duplicate'
 
 export type DraftAnswerError =
@@ -76,13 +79,14 @@ export type ValidateResult =
  * ask patches applies the SAME limits before a thread-bound ask is claimed
  * (a claimed ask whose batch the store then refuses would strand: no
  * controls exist, no sweep can see it). Returns the first violated bound,
- * or undefined when Discord can render the batch.
+ * or undefined when Discord can render the batch. Free-text questions
+ * without options are renderable since 16.108: they render as a
+ * single-option select that opens the custom-text modal.
  */
 export function questionBoundsError(questions: readonly QuestionItemView[]): OpenBatchError | undefined {
   if (questions.length > MAX_QUESTIONS_PER_BATCH) return 'too-many-questions'
   for (const question of questions) {
     const options = question.options ?? []
-    if (options.length === 0) return 'options-required'
     if (options.length > MAX_OPTIONS_PER_QUESTION) return 'too-many-options'
     if (options.some(option => option.label.length > MAX_LABEL_LENGTH)) {
       return 'option-label-too-long'

@@ -365,18 +365,22 @@ describe('dual-surface asks: the web surface races the Discord surface', () => {
 })
 
 describe('unrenderable question batches deflect to the web surface', () => {
-  /** Pre-check shape: every question needs a non-empty options list. */
-  const optionsRequired = (rows: ReadonlyArray<Record<string, unknown>>): string | undefined =>
-    rows.every(row => Array.isArray(row['options']) && row['options'].length > 0) ? undefined : 'options-required'
+  /** Pre-check shape: more than 24 options exceeds the select's wire slots. */
+  const tooWide = (rows: ReadonlyArray<Record<string, unknown>>): string | undefined =>
+    rows.some(row => Array.isArray(row['options']) && row['options'].length > 24) ? 'too-many-options' : undefined
+  const wideQuestion = (id: string): Record<string, unknown> => ({
+    id, question: 'Pick',
+    options: Array.from({ length: 25 }, (_, index) => ({ label: `option-${String(index)}` })),
+  })
 
   it('passes an unrenderable batch through untouched instead of claiming it', async () => {
     const approval = fakeApprovalService()
     const questions = fakeQuestionService({ manual: true })
     const fake = fakeDeps()
-    const deps = { ...fake.deps, renderabilityOfQuestions: optionsRequired }
+    const deps = { ...fake.deps, renderabilityOfQuestions: tooWide }
     const patch = installAskServicePatches(approval.service, questions.service, deps)
 
-    const req: HostQuestionRequest = { agent: { id: 'sess-1' }, questions: [{ id: 'q1', question: 'Name?' }] }
+    const req: HostQuestionRequest = { agent: { id: 'sess-1' }, questions: [wideQuestion('q1')] }
     const answer = questions.service.ask(req)
     await flush()
 
@@ -399,12 +403,16 @@ describe('unrenderable question batches deflect to the web surface', () => {
     const approval = fakeApprovalService()
     const questions = fakeQuestionService({ manual: true })
     const fake = fakeDeps()
-    const deps = { ...fake.deps, renderabilityOfQuestions: optionsRequired }
+    const deps = { ...fake.deps, renderabilityOfQuestions: tooWide }
     const patch = installAskServicePatches(approval.service, questions.service, deps)
 
     void questions.service.ask({
       agent: { id: 'sess-1' },
-      questions: [{ id: 'q1', question: 'Which?', options: [{ label: 'a' }] }],
+      questions: [
+        { id: 'q1', question: 'Which?', options: [{ label: 'a' }] },
+        // Free-text questions are renderable since 16.108 and must claim.
+        { id: 'q2', question: 'Name?' },
+      ],
     })
     await flush()
 
@@ -417,10 +425,10 @@ describe('unrenderable question batches deflect to the web surface', () => {
     const approval = fakeApprovalService()
     const questions = fakeQuestionService({ manual: true })
     const fake = fakeDeps({})
-    const deps = { ...fake.deps, renderabilityOfQuestions: optionsRequired }
+    const deps = { ...fake.deps, renderabilityOfQuestions: tooWide }
     const patch = installAskServicePatches(approval.service, questions.service, deps)
 
-    const req: HostQuestionRequest = { agent: { id: 'sess-x' }, questions: [{ id: 'q1', question: 'Name?' }] }
+    const req: HostQuestionRequest = { agent: { id: 'sess-x' }, questions: [wideQuestion('q1')] }
     void questions.service.ask(req)
     await flush()
 

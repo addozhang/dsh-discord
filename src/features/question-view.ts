@@ -77,13 +77,17 @@ function boundedQuestionText(text: string): string {
 }
 
 function selectFor(registry: ComponentRegistry, batch: QuestionBatch, question: QuestionItemView): QuestionSelectComponent {
-  const options = (question.options ?? []).map(option => ({
+  const hostOptions = (question.options ?? []).map(option => ({
     label: option.label,
     value: option.label,
     ...(option.description === undefined ? {} : { description: option.description }),
   }))
-  const customLabel = `Other — tell us in your own words`
-  options.push({ label: customLabel, value: CUSTOM_ANSWER_VALUE })
+  // A free-text question (no options) renders as a single-option select whose
+  // only entry is the custom affordance — picking it opens the text modal
+  // (16.108). Option-bearing questions keep the trailing "Other…" entry.
+  const options = hostOptions.length === 0
+    ? [{ label: 'Type your answer', value: CUSTOM_ANSWER_VALUE }]
+    : [...hostOptions, { label: `Other — tell us in your own words`, value: CUSTOM_ANSWER_VALUE }]
   return {
     type: STRING_SELECT,
     custom_id: registry.register({

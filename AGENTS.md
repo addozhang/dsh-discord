@@ -150,7 +150,14 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   `questionWebOnlyNotice` 双语系统行——判例来源 issue #12：claim 后拒收 = 活的宿主
   Promise 搁浅（无控件/无 store 记录/sweep 不可见，legacy 模式永续 typing）。兜底：
   open 拒收若因漂移再现，直调 cancelPort 取消所属 turn（拒收无记录，abandon 的
-  claim 路径无从工作），`discord_question_open_failed` warn 级
+  claim 路径无从工作），`discord_question_open_failed` warn 级。
+  **16.108 修订（2026-11-07，参考 kimaki questions.ts）**：无选项开放题转正为
+  **可渲染**——单选项 select（唯一选项 "Type your answer"，value 复用
+  `CUSTOM_ANSWER_VALUE`）→ 现有 custom-text modal → `{selected: [], custom}`，
+  modal 路由与 draft 校验天然 option-agnostic，零新 wire 概念；`options-required`
+  拒收类删除，deflection 退守纯硬边界（>5 问 / >24 选项 / 标签 >100）。**Other
+  槽位判例**：渲染器恒追加 custom 选项 → store 上限必须是 **24**（25 会 26 溢出
+  撞 Discord 50035，twin 测不出——kimaki `MAX_OPTIONS = 24 // one is Other` 同款）
 - 权限预设三档 `read-only` / `workspace-write` / `danger-full-access`（沙箱+审批
   捆绑）。读 = `permissionPresets.catalog()` + `observeSession` 的 permissions
   投影 `{currentValue}`；写 = 宿主唯一认可的 `/permission` 命令路径：

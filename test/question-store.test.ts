@@ -81,16 +81,27 @@ describe('question batch bounds', () => {
     expect(store().open(many)).toEqual({ ok: false, error: 'too-many-questions' })
   })
 
-  it('refuses more options than a select menu allows', () => {
+  it('refuses more options than a select menu allows (25th slot is the custom entry)', () => {
     const wide = batch({
       questions: [{
         id: 'q1',
         question: 'Pick',
-        options: Array.from({ length: 26 }, (_, index) => ({ label: `option-${String(index)}` })),
+        options: Array.from({ length: 25 }, (_, index) => ({ label: `option-${String(index)}` })),
         multiSelect: false,
       }],
     })
     expect(store().open(wide)).toEqual({ ok: false, error: 'too-many-options' })
+  })
+
+  it('accepts a question at the 24-option bound (24 host + 1 custom = 25 wire slots)', () => {
+    expect(store().open(batch({
+      questions: [{
+        id: 'q1',
+        question: 'Pick',
+        options: Array.from({ length: 24 }, (_, index) => ({ label: `option-${String(index)}` })),
+        multiSelect: false,
+      }],
+    }))).toEqual({ ok: true })
   })
 
   it('refuses labels longer than a select option can carry', () => {
@@ -100,21 +111,19 @@ describe('question batch bounds', () => {
     expect(store().open(long)).toEqual({ ok: false, error: 'option-label-too-long' })
   })
 
-  it('refuses a question without options', () => {
+  it('accepts a free-text question without options (16.108: modal answer)', () => {
     expect(store().open(batch({
       questions: [{ id: 'q1', question: 'Free?', options: undefined, multiSelect: false }],
-    }))).toEqual({ ok: false, error: 'options-required' })
+    }))).toEqual({ ok: true })
   })
 
   it('open() and questionBoundsError agree on every refusal kind', () => {
     const refusals: Array<[QuestionBatch, QuestionItemView[]]> = [
       // [full batch for open(), bare question list for the pure check]
-      [batch({ questions: [{ id: 'q1', question: 'Free?', options: undefined, multiSelect: false }] }),
-        [{ id: 'q1', question: 'Free?', options: undefined, multiSelect: false }]],
       [batch({ questions: Array.from({ length: 6 }, (_, index) => ({ id: `q${String(index)}`, question: 'Q', options: [{ label: 'y' }], multiSelect: false })) }),
         Array.from({ length: 6 }, () => ({ id: 'q', question: 'Q', options: [{ label: 'y' }], multiSelect: false }))],
-      [batch({ questions: [{ id: 'q1', question: 'Pick', options: Array.from({ length: 26 }, () => ({ label: 'o' })), multiSelect: false }] }),
-        [{ id: 'q1', question: 'Pick', options: Array.from({ length: 26 }, () => ({ label: 'o' })), multiSelect: false }]],
+      [batch({ questions: [{ id: 'q1', question: 'Pick', options: Array.from({ length: 25 }, () => ({ label: 'o' })), multiSelect: false }] }),
+        [{ id: 'q1', question: 'Pick', options: Array.from({ length: 25 }, () => ({ label: 'o' })), multiSelect: false }]],
       [batch({ questions: [{ id: 'q1', question: 'Pick', options: [{ label: 'x'.repeat(101) }], multiSelect: false }] }),
         [{ id: 'q1', question: 'Pick', options: [{ label: 'x'.repeat(101) }], multiSelect: false }]],
     ]
@@ -129,11 +138,21 @@ describe('question batch bounds', () => {
 
   it('questionBoundsError accepts a renderable batch and names the first violation otherwise', () => {
     expect(questionBoundsError(batch().questions)).toBeUndefined()
+    // Free-text questions are renderable since 16.108 (single-option select + modal).
+    expect(questionBoundsError([
+      { id: 'q1', question: 'Free text?', options: undefined, multiSelect: false },
+    ])).toBeUndefined()
     expect(questionBoundsError([
       { id: 'q1', question: 'Ok?', options: [{ label: 'y' }], multiSelect: false },
-      { id: 'q2', question: 'Free?', options: undefined, multiSelect: false },
-      { id: 'q3', question: 'Wide?', options: Array.from({ length: 26 }, () => ({ label: 'o' })), multiSelect: false },
-    ])).toBe('options-required')
+      { id: 'q2', question: 'Too wide?', options: Array.from({ length: 25 }, () => ({ label: 'o' })), multiSelect: false },
+      { id: 'q3', question: 'Long?', options: [{ label: 'x'.repeat(101) }], multiSelect: false },
+    ])).toBe('too-many-options')
+  })
+
+  it('validates a free-text draft against an option-less question', () => {
+    const question: QuestionItemView = { id: 'q1', question: 'Free?', options: undefined, multiSelect: false }
+    expect(validateDraftAnswer(question, { id: 'q1', selected: [], custom: 'blue' })).toEqual({ ok: true })
+    expect(validateDraftAnswer(question, { id: 'q1', selected: ['nope'] })).toEqual({ ok: false, error: 'invalid-label' })
   })
 })
 
