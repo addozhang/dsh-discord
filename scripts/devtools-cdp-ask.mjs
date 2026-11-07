@@ -298,11 +298,50 @@ async function main() {
       return true
     })()`)
     check('modal answer submitted', submitted === true)
-    await sleep(3_000)
-    // The thread must show the settled notice, not a dead control.
-    const after = await rest('GET', `/channels/${threadId}/messages?limit=10`)
-    const tail = Array.isArray(after.body) ? after.body.map(m => m.content ?? '').join(' ') : ''
-    check('thread acknowledges the answer', /回答|answer|已提交|submitted/i.test(tail), tail.slice(-80))
+    await sleep(1_500)
+
+    // The modal only writes a draft. Until the submit row is pressed the batch
+    // stays pending and the host keeps waiting — a run that stops here proves
+    // the modal opens and nothing more.
+    const rowClicked = await evaluate(`(async () => {
+      const node = [...document.querySelectorAll('[data-list-item-id]')]
+        .find(n => (n.getAttribute('data-list-item-id') ?? '').endsWith('-${control.id}'))
+      if (node === undefined) return 'no-node'
+      const button = [...node.querySelectorAll('[role="button"]')]
+        .find(b => /submit answers|提交/i.test(b.textContent ?? ''))
+      if (button === undefined) return 'no-submit-row'
+      if (button.getAttribute('aria-disabled') === 'true' || button.disabled === true) return 'already-retired'
+      button.click()
+      return 'clicked'
+    })()`)
+    check('submit row pressed', rowClicked === 'clicked' || rowClicked === 'no-submit-row', rowClicked)
+
+    // Settlement is observable on the wire: retire disables every control.
+    // (Asserting on thread prose is a trap — the prompt itself contains
+    // "answers stay editable until you submit", which every naive /answers/
+    // matcher reports as an acknowledgement.)
+    let settled = false
+    const settleBy = Date.now() + 30_000
+    while (Date.now() < settleBy && !settled) {
+      const one = await rest('GET', `/channels/${threadId}/messages/${control.id}`)
+      const controls = (one.body?.components ?? []).flatMap(row => row.components ?? [])
+      settled = controls.length > 0 && controls.every(c => c.disabled === true)
+      if (!settled) await sleep(2_000)
+    }
+    check('ask batch settled (every control retired)', settled)
+
+    // The real end-to-end signal: the host picks the session back up and posts
+    // something after the ask. Without this the answer never left the store.
+    let resumed = ''
+    const resumeBy = Date.now() + 45_000
+    while (Date.now() < resumeBy && resumed === '') {
+      const after = await rest('GET', `/channels/${threadId}/messages?limit=20`)
+      const followUp = (Array.isArray(after.body) ? after.body : [])
+        .filter(m => m.author?.id === BOT_ID && BigInt(m.id) > BigInt(control.id) && (m.content ?? '').trim() !== '')
+      if (followUp.length > 0) resumed = followUp[0].content.trim()
+      else await sleep(3_000)
+    }
+    check('session resumed (host posted after the answer)', resumed !== '', resumed.slice(0, 100))
   }
 
   if (TRACE !== undefined) {
