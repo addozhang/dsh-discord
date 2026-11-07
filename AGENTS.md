@@ -391,6 +391,30 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
 
 ## 测试与联调约定
 
+真机测试铁律（2026-11-07 定稿，违反即重来）：
+
+- **CLI = latest 稳定**：`npm view @deepseek-ai/dsh dist-tags` 的 `latest` 对齐
+  `dsh --version`；不追 alpha/next（除非明确要求）
+- **环境三件套**：CLI 宿主 + `web-test` profile + 调试 Chrome（9222）；测试
+  guild = **Bot Test Server**（1562450757805146123），bot = **DSH Test**
+  （app 1550676723773739048，token 不在全局凭据槽的常态，问用户拿，先
+  REST users/@me 验 app id 再写入）
+- **绝不碰 desktop profile**：desktop 是日用宿主（App 正在跑，改前先确认；
+  它的 patch/插件目录/凭据一律不动；验证结束恢复 App 运行态）
+- **控制变量**：先装 npm **发布版**（精确版本号）验证配置基线（白名单/
+  绑定频道/命令注册），基线通过后才换本地修复构建对比测试
+- **凭据槽是全局单槽**：换 DSH Test 前备份 `.credentials.yaml`，测完恢复；
+  桌面宿主运行中持有旧凭据直到它下次重连——换槽后注意互踢窗口
+- **别起独立 gateway 探针**：同 token identify 会踢掉宿主会话（1006），
+  且宿主有"1006 后零重连"已知缺陷（10-31 判例）；需要旁证时先停宿主
+- **只配 allowedGuildIds ≠ 能用（2026-11-07 判例）**：消息路径不带
+  permissions 位（`isGuildOwner`/member.permissions 只有 interaction 才有）——
+  缺 `memberUserIds`/`hostOperatorUserIds` 时 mention 被 deny-first 静默拒
+  （no-grant），slash 却照常工作（自带 member.permissions）→ 极易误判为
+  gateway/投递问题；且 `discord_dispatch_rejected` warn 走 host logger，
+  **不出现在 CLI stderr**——定位手段 = gateway/compose 临时 console.error
+  仪表（验完即撤）。白名单配置 = guild 白名单 + 成员授权两项，缺一不可
+
 - 纪律：行为变更先写失败测试（RED→GREEN）；wire 形状走 twin E2E，
   纯逻辑走模块单测
 - twin（discord-digital-twin）**不建模 Discord 表单校验**——nonce 长度这类
