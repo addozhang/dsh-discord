@@ -168,6 +168,15 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   折叠空白 + 45 截断，空文本退 `Your answer`），text-input `label` 走同一函数
   （同样 45 上限，之前直接用原始 header）。twin 只校验 40060（重复 ack），不做表单
   校验 → **wire 形状必须在 twin 测试里显式断言**（`data.title`），否则"测不出"重演。
+  **真机验证（2026-11-07，web-test @ Bot Test Server）**：0.6.7 基线上无选项题渲染成
+  "Type your answer"，点选后**无弹窗、无日志**（静默丢弃，与 issue #12 症状一致）；
+  换本地修复构建后同流程弹窗正常、答案提交、线程确认、trace 零失败事件；多选 +
+  Other（先勾一个选项再选 Other）同样通过。驱动脚本 `scripts/devtools-cdp-ask.mjs`
+  （`--expect modal|silent`、`--thread` 复用已渲染控件、`--pre` 先勾选项、`--answer`
+  走 modal 提交）。**Discord UI 判例**：多选 select 勾选后弹层**不自动关闭**，交互
+  要等弹层关闭才发出——脚本必须补一次"点外部"（`Input.dispatchMouseEvent`），否则会
+  误判成"我们的 modal 没弹"；retire 的控件 `aria-disabled="true"`，点它同样无反应，
+  与 400 丢弃外观相同，测试前先判定该属性。
   **16.110 修订（2026-11-07）**：多选 + Other 会**丢掉同批勾选**——`handleModalSubmit`
   硬编码 `selected: []` 且 `setDraft` 整条覆盖 draft，勾了 A、B 再选 Other 写 C 只剩 C。
   Kimaki 判例（`otherPicks: Map<formID:key, labels>`）：开 modal 前把同一 submission 里的

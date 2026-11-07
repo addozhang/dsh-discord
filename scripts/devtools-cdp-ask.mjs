@@ -11,8 +11,15 @@
  *
  * Usage:
  *   DISCORD_BOT_TOKEN=... node scripts/devtools-cdp-ask.mjs "任务描述" \
- *     [--channel <id>] [--entry "Type your answer"] [--answer <text>] \
- *     [--expect modal|silent] [--trace /tmp/web-test-3081.log]
+ *     [--channel <id>] [--entry "Type your answer"] [--pre <option>] \
+ *     [--answer <text>] [--expect modal|silent] [--trace /tmp/web-test-3081.log]
+ *
+ *   # Reuse controls a previous run already rendered (no mention is sent; the
+ *   # task argument is then required but ignored, pass any placeholder):
+ *   node scripts/devtools-cdp-ask.mjs x --thread <threadId> --entry Other --answer ...
+ *
+ * `--expect silent` is the baseline mode: it asserts the modal does NOT open,
+ * which is what a dropped MODAL callback looks like (16.109).
  *
  * Exit 0 pass / 1 fail / 2 setup error.
  */
@@ -30,6 +37,8 @@ const EXPECT = args.expect ?? 'modal'
 const TRACE = args.trace
 /** Reuse a thread whose ask controls were rendered by an earlier run. */
 const THREAD = args.thread
+/** Tick one more option before the entry (multi-select merge check). */
+const PRE = args.pre
 const TOKEN = process.env.DISCORD_BOT_TOKEN ?? ''
 const BOT_ID = '1550676723773739048'
 const API = 'https://discord.com/api/v10'
@@ -105,41 +114,41 @@ async function main() {
   } else {
     const channelUrl = `https://discord.com/channels/${GUILD}/${CHANNEL}`
     if (!page.url.includes(CHANNEL)) {
-    await send('Page.navigate', { url: channelUrl })
-    await sleep(4_000)
-  }
-  const focused = await evaluate(`(() => { const b = document.querySelector('[role=textbox]'); if (b === null) return false; b.focus(); return document.activeElement === b })()`)
-  if (focused !== true) throw new Error('textbox not focusable')
+      await send('Page.navigate', { url: channelUrl })
+      await sleep(4_000)
+    }
+    const focused = await evaluate(`(() => { const b = document.querySelector('[role=textbox]'); if (b === null) return false; b.focus(); return document.activeElement === b })()`)
+    if (focused !== true) throw new Error('textbox not focusable')
 
-  let options = []
-  for (let attempt = 0; attempt < 4 && options.length === 0; attempt += 1) {
-    await evaluate(`document.querySelector('[role=textbox]')?.focus()`)
+    let options = []
+    for (let attempt = 0; attempt < 4 && options.length === 0; attempt += 1) {
+      await evaluate(`document.querySelector('[role=textbox]')?.focus()`)
+      await sleep(500)
+      await key({ type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+      await key({ type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
+      await key({ type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
+      await key({ type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
+      for (const char of '@dsh') await typeChar(char)
+      await sleep(1_500)
+      options = (await evaluate(`[...document.querySelectorAll('[role=option]')].map(o => (o.textContent ?? '').trim()).filter(Boolean).slice(0, 6)`)) ?? []
+    }
+    if (options.length === 0) throw new Error('mention autocomplete empty after "@dsh" retries')
+    console.log(`autocomplete rows: ${options.join(' | ')}`)
+    await key({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+    await key({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
     await sleep(500)
-    await key({ type: 'keyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
-    await key({ type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 })
-    await key({ type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
-    await key({ type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 })
-    for (const char of '@dsh') await typeChar(char)
-    await sleep(1_500)
-    options = (await evaluate(`[...document.querySelectorAll('[role=option]')].map(o => (o.textContent ?? '').trim()).filter(Boolean).slice(0, 6)`)) ?? []
-  }
-  if (options.length === 0) throw new Error('mention autocomplete empty after "@dsh" retries')
-  console.log(`autocomplete rows: ${options.join(' | ')}`)
-  await key({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
-  await key({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
-  await sleep(500)
-  for (const char of ` ${TASK}`) await typeChar(char)
-  await sleep(300)
-  preSendLastId = await evaluate(`(() => {
-    const items = [...document.querySelectorAll('[data-list-item-id]')]
-      .filter(node => /^chat-messages___chat-messages-\\d+-\\d+$/.test(node.getAttribute('data-list-item-id') ?? ''))
-    if (items.length === 0) return ''
-    const parts = (items[items.length - 1].getAttribute('data-list-item-id') ?? '').split('-')
-    return parts[parts.length - 1]
-  })()`)
-  await key({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
-  await key({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
-  console.log('mention sent — switching to REST discovery')
+    for (const char of ` ${TASK}`) await typeChar(char)
+    await sleep(300)
+    preSendLastId = await evaluate(`(() => {
+      const items = [...document.querySelectorAll('[data-list-item-id]')]
+        .filter(node => /^chat-messages___chat-messages-\\d+-\\d+$/.test(node.getAttribute('data-list-item-id') ?? ''))
+      if (items.length === 0) return ''
+      const parts = (items[items.length - 1].getAttribute('data-list-item-id') ?? '').split('-')
+      return parts[parts.length - 1]
+    })()`)
+    await key({ type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+    await key({ type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+    console.log('mention sent — switching to REST discovery')
   }
 
   // ── 2. Find this run's thread (mention mode only) ──
@@ -220,6 +229,20 @@ async function main() {
     process.exit(1)
   }
 
+  if (PRE !== undefined) {
+    const prePicked = await evaluate(`(async () => {
+      for (let i = 0; i < 30; i++) {
+        const hit = [...document.querySelectorAll('[role="option"]')]
+          .find(o => (o.textContent ?? '').includes(${JSON.stringify(PRE)}))
+        if (hit !== undefined) { hit.click(); return true }
+        await new Promise(r => setTimeout(r, 150))
+      }
+      return false
+    })()`)
+    check(`pre-selection "${PRE}" ticked`, prePicked === true)
+    await sleep(400)
+  }
+
   const picked = await evaluate(`(async () => {
     for (let i = 0; i < 30; i++) {
       const hit = [...document.querySelectorAll('[role="option"]')]
@@ -230,6 +253,18 @@ async function main() {
     return false
   })()`)
   check(`entry "${ENTRY}" picked`, picked === true)
+
+  // A multi-select popout stays open after ticking (the user may tick more);
+  // the interaction only fires once it closes, so click outside it.
+  if (picked === true) {
+    await sleep(700)
+    const alreadyOpen = await evaluate(`document.querySelector('[role="dialog"]') !== null`)
+    if (alreadyOpen !== true) {
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 5, y: 5, button: 'left', clickCount: 1 })
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 5, y: 5, button: 'left', clickCount: 1 })
+      await sleep(1_500)
+    }
+  }
 
   // ── 5. Did the modal actually appear? ──
   const modal = await evaluate(`(async () => {
