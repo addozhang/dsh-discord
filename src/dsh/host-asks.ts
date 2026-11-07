@@ -57,6 +57,16 @@ export interface HostQuestionServiceFace {
 
 export interface HostAskDeps {
   threadForSession(sessionId: string): string | undefined
+  /**
+   * Claim-time renderability pre-check for question batches (the question
+   * store's own bounds, applied to the raw rows): returns the violated
+   * bound's name, or undefined when Discord can render the batch. A batch
+   * Discord cannot render must NOT be claimed — the store would refuse the
+   * open with no controls and no sweepable record, stranding the host's
+   * tool call while the web surface alone shows the card. Such asks pass
+   * through untouched (the pre-binding direction's status quo).
+   */
+  renderabilityOfQuestions(rows: ReadonlyArray<Record<string, unknown>>): string | undefined
   askWiring: {
     onApprovalRequested(input: {
       sessionId: string
@@ -79,6 +89,8 @@ export interface HostAskDeps {
     onApprovalResolved(input: { sessionId: string; approvalId: string; outcome?: string | undefined }): void
     /** Record a web-surface resolution and retire the Discord controls. */
     onQuestionResolved(input: { sessionId: string; questionRpcId: string; outcome: 'answered' | 'cancelled' }): void
+    /** A thread-bound ask the adapter cannot render passed through to the web surface. */
+    onQuestionDeflected(input: { sessionId: string; threadId: string }): void
   }
   approvalTimeoutMs(): number
   questionTimeoutMs(): number
@@ -288,6 +300,18 @@ export function installAskServicePatches(
       }
       const rows = Array.isArray(req.questions) ? req.questions : []
       if (rows.length === 0) return originalAsk(req)
+      // Unrenderable batches (e.g. open questions without options — the web
+      // surface renders them, Discord's select-menu model cannot) deflect
+      // BEFORE the claim: the store would refuse the open, leaving the
+      // claimed ask without controls and without any sweepable record.
+      const unrenderable = deps.renderabilityOfQuestions(rows)
+      if (unrenderable !== undefined) {
+        deps.log('discord_question_deflected_web_only', {
+          sessionId, threadId, reason: unrenderable, questions: rows.length,
+        })
+        deps.askWiring.onQuestionDeflected({ sessionId, threadId })
+        return originalAsk(req)
+      }
       const rpcId = crypto.randomUUID()
       deps.log('discord_question_claimed', { rpcId, sessionId, threadId, questions: rows.length })
       deps.onWaitState?.(threadId, true)

@@ -14,6 +14,8 @@ import { createApprovalStore, type ApprovalStore } from '../src/features/approva
 import { createAskWiring, type ApprovalAskInput, type QuestionAskInput } from '../src/features/ask-wiring.js'
 import { createQuestionStore } from '../src/features/question-store.js'
 import { createComponentRegistry, type ComponentRegistry } from '../src/discord/components.js'
+import { createCopy } from '../src/i18n.js'
+import { DISCORD_SUPPRESS_NOTIFICATIONS_FLAG } from '../src/policy/disclosure.js'
 import { createKvTableStub } from './helpers/kv-table.js'
 
 const USER = '222222222222222222'
@@ -48,6 +50,7 @@ describe('ask wiring: ownership', () => {
       questions: createQuestionStore(),
       cancelPort: { cancel: () => Promise.resolve({ outcome: 'accepted' }) },
       nowMs: () => 0,
+      copy: createCopy('en'),
       log: () => {},
       activeTurnRequestId: () => 'discord:m-1',
       turnActor: requestId => (requestId === "discord:m-1" ? USER : undefined),
@@ -78,6 +81,7 @@ describe('ask wiring: ownership', () => {
       questions: createQuestionStore(),
       cancelPort: { cancel: () => Promise.resolve({ outcome: 'accepted' }) },
       nowMs: () => 0,
+      copy: createCopy('en'),
       log: () => {},
       activeTurnRequestId: () => undefined,
       turnActor: () => undefined,
@@ -106,6 +110,7 @@ describe('ask wiring: question batch and render failure', () => {
       approvals: createApprovalStore(createKvTableStub()),
       cancelPort: { cancel: () => Promise.resolve({ outcome: 'accepted' }) },
       nowMs: () => 0,
+      copy: createCopy('en'),
       log: () => {},
       activeTurnRequestId: () => 'discord:m-1',
       turnActor: () => USER,
@@ -145,6 +150,7 @@ describe('ask wiring: question batch and render failure', () => {
         },
       },
       nowMs: () => 0,
+      copy: createCopy('en'),
       log: () => {},
       activeTurnRequestId: () => undefined,
       turnActor: () => undefined,
@@ -163,6 +169,79 @@ describe('ask wiring: question batch and render failure', () => {
     })
     expect(cancelCalls).toEqual([{ sessionId: 'sess-1' }])
   })
+
+  it('cancels the owning turn when an unrenderable batch slips past the claim-time pre-check', async () => {
+    const questions = createQuestionStore()
+    const { registry } = makeRegistries()
+    const cancelCalls: Array<{ sessionId: string; requestId: string }> = []
+    const logs: Array<{ event: string; detail?: unknown }> = []
+    const posted: unknown[] = []
+    const wiring = createAskWiring({
+      registry,
+      questions,
+      approvals: createApprovalStore(createKvTableStub()),
+      cancelPort: {
+        cancel: input => {
+          cancelCalls.push({ sessionId: input.sessionId, requestId: input.requestId })
+          return Promise.resolve({ outcome: 'accepted' })
+        },
+      },
+      nowMs: () => 0,
+      copy: createCopy('en'),
+      log: (event, detail) => { logs.push({ event, detail }) },
+      activeTurnRequestId: () => 'discord:m-1',
+      turnActor: () => USER,
+      threadOwner: () => undefined,
+      editMessage: () => Promise.resolve({ stored: true }),
+      postMessage: (_threadId, payload) => {
+        posted.push(payload)
+        return Promise.resolve({ stored: true, messageId: 'm-x' })
+      },
+    })
+
+    // Option-less batch: the claim-time pre-check normally deflects these;
+    // reaching onQuestionRequested with one means bounds drifted. The ask
+    // must not strand — cancel the owning turn instead of waiting out a
+    // deadline nothing can answer.
+    wiring.onQuestionRequested({
+      sessionId: 'sess-1', threadId: 'thread-1', rpcId: 'ask-1', expiresAtMs: 1_800_000,
+      questions: [{ id: 'q1', question: 'Free text?' }],
+    } satisfies QuestionAskInput)
+
+    await vi.waitFor(() => { expect(cancelCalls).toEqual([{ sessionId: 'sess-1', requestId: 'discord:m-1' }]) })
+    expect(posted).toHaveLength(0)
+    expect(questions.get('ask-1')).toBeUndefined()
+    expect(logs.some(entry => entry.event === 'discord_question_open_failed')).toBe(true)
+  })
+
+  it('posts a localized web-only notice when an ask is deflected', async () => {
+    const posted: Array<{ threadId: string; payload: { content?: string; flags?: number } }> = []
+    const logs: Array<{ event: string; detail?: unknown }> = []
+    const wiring = createAskWiring({
+      registry: createComponentRegistry(),
+      approvals: createApprovalStore(createKvTableStub()),
+      questions: createQuestionStore(),
+      cancelPort: { cancel: () => Promise.resolve({ outcome: 'accepted' }) },
+      nowMs: () => 0,
+      copy: createCopy('zh'),
+      log: (event, detail) => { logs.push({ event, detail }) },
+      activeTurnRequestId: () => undefined,
+      turnActor: () => undefined,
+      threadOwner: () => undefined,
+      editMessage: () => Promise.resolve({ stored: true }),
+      postMessage: (threadId, payload) => {
+        posted.push({ threadId, payload: payload as { content?: string; flags?: number } })
+        return Promise.resolve({ stored: true, messageId: 'm-notice' })
+      },
+    })
+
+    wiring.onQuestionDeflected({ sessionId: 'sess-1', threadId: 'thread-1' })
+    await vi.waitFor(() => { expect(posted).toHaveLength(1) })
+
+    expect(posted[0]?.threadId).toBe('thread-1')
+    expect(posted[0]?.payload.content).toBe(createCopy('zh').questionWebOnlyNotice)
+    expect(posted[0]?.payload.flags).toBe(DISCORD_SUPPRESS_NOTIFICATIONS_FLAG)
+  })
 })
 
 describe('ask wiring: control retirement greys the original message (16.41)', () => {
@@ -176,6 +255,7 @@ describe('ask wiring: control retirement greys the original message (16.41)', ()
       questions: createQuestionStore(),
       cancelPort: { cancel: () => Promise.resolve({ outcome: 'accepted' }) },
       nowMs: () => 0,
+      copy: createCopy('en'),
       log: () => {},
       activeTurnRequestId: () => undefined,
       turnActor: () => undefined,
@@ -219,6 +299,7 @@ describe('ask wiring: control retirement greys the original message (16.41)', ()
       questions: createQuestionStore(),
       cancelPort: { cancel: () => Promise.resolve({ outcome: 'accepted' }) },
       nowMs: () => 0,
+      copy: createCopy('en'),
       log: (_event, detail) => { logged.push(detail) },
       activeTurnRequestId: () => undefined,
       turnActor: () => undefined,

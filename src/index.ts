@@ -21,10 +21,10 @@ import { buildCommandRegistrations } from './discord/commands.js'
 import { startDiscordAdapter, type BindingsProbe, type DiscordAdapterRuntime } from './compose.js'
 import { createModelPort, createPermissionPort, createWorkspaceCatalogPort, createWorkspaceResolver, readWorkspaceDetail, promptSession, createSessionViaProxy, cancelSessionViaProxy, steerSession, removeQueueItemViaProxy, resolveHostFace } from './dsh/host-face.js'
 import { createApprovalStore, type ApprovalRecord } from './features/approval-store.js'
-import { createAskWiring } from './features/ask-wiring.js'
+import { createAskWiring, questionItemsOf } from './features/ask-wiring.js'
 import { sweepExpiredApprovals } from './features/approval-expiry.js'
 import { sweepExpiredQuestions, type DshTurnCancelPort } from './features/question-expiry.js'
-import { createQuestionStore } from './features/question-store.js'
+import { createQuestionStore, questionBoundsError } from './features/question-store.js'
 import { createTrailingSingleFlight } from './features/single-flight.js'
 import { ADAPTER_VERSION } from './version.js'
 import { handleSelectInput, handleModalSubmit, type QuestionRoutingDeps } from './features/question-routing.js'
@@ -308,6 +308,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       approvals: approvalsStore,
       questions: questionsStore,
       cancelPort: questionCancelPort,
+      copy,
       nowMs: () => Date.now(),
       log: rpcLog,
       activeTurnRequestId: sessionId => turnTracker.active(sessionId)?.requestId,
@@ -876,6 +877,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       questionsService as Parameters<typeof installAskServicePatches>[1],
       {
         threadForSession,
+        renderabilityOfQuestions: rows => questionBoundsError(questionItemsOf(rows)),
         askWiring,
         approvalTimeoutMs: () => current.approvalTimeoutMs,
         questionTimeoutMs: () => current.questionTimeoutMs,

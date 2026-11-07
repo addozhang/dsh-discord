@@ -11,9 +11,11 @@
  */
 
 import type { ComponentRegistry } from '../discord/components.js'
+import type { CopyTable } from '../i18n.js'
+import { DISCORD_SUPPRESS_NOTIFICATIONS_FLAG } from '../policy/disclosure.js'
 import type { ApprovalStore } from './approval-store.js'
 import { renderApprovalControls } from './approval-view.js'
-import type { QuestionStore } from './question-store.js'
+import type { QuestionItemView, QuestionStore } from './question-store.js'
 import { renderQuestionControls } from './question-view.js'
 import type { DshTurnCancelPort } from './question-expiry.js'
 import { abandonUnrenderableQuestion } from './question-expiry.js'
@@ -43,6 +45,8 @@ export interface AskWiringDeps {
   registry: ComponentRegistry
   approvals: ApprovalStore
   questions: QuestionStore
+  /** Localized copy for thread-visible notices. */
+  copy: CopyTable
   /** Cancellation face for asks that can never be answered. */
   cancelPort: DshTurnCancelPort
   nowMs(): number
@@ -67,6 +71,28 @@ export interface AskWiringDeps {
   editMessage(channelId: string, messageId: string, payload: unknown): Promise<{ stored: boolean; reason?: string }>
 }
 
+/**
+ * Map raw host question rows onto adapter views (pure). Shared by the
+ * ask-wiring batch assembly and the claim-time renderability pre-check, so
+ * both see the exact same shapes — including the empty-string fallbacks for
+ * malformed fields — and can never drift on what "renderable" means.
+ */
+export function questionItemsOf(rows: ReadonlyArray<Record<string, unknown>>): QuestionItemView[] {
+  return rows.map(question => ({
+    id: typeof question['id'] === 'string' ? question['id'] : '',
+    question: typeof question['question'] === 'string' ? question['question'] : '',
+    header: typeof question['header'] === 'string' ? question['header'] : undefined,
+    options: Array.isArray(question['options'])
+      ? question['options'].map(option => ({
+          label: typeof (option as { label?: unknown }).label === 'string'
+            ? (option as { label: string }).label
+            : '',
+        }))
+      : undefined,
+    multiSelect: question['multiSelect'] === true,
+  }))
+}
+
 export function createAskWiring(deps: AskWiringDeps): {
   /** Retire a rendered control (clear components) once the ask is settled. */
   disableControl(key: string): Promise<void>
@@ -74,6 +100,11 @@ export function createAskWiring(deps: AskWiringDeps): {
   onApprovalResolved(input: { sessionId: string; approvalId: string; outcome?: string | undefined }): void
   onQuestionRequested(input: QuestionAskInput): void
   onQuestionResolved(input: { sessionId: string; questionRpcId: string; outcome: 'answered' | 'cancelled' }): void
+  /**
+   * A thread-bound ask the adapter cannot render passed through to the web
+   * surface: post the web-only notice so the thread knows where to answer.
+   */
+  onQuestionDeflected(input: { sessionId: string; threadId: string }): void
 } {
   /** Discord message refs + rendered rows for controls, keyed by ask id. */
   const controlMessages = new Map<string, { channelId: string; messageId: string; components: unknown }>()
@@ -186,23 +217,26 @@ export function createAskWiring(deps: AskWiringDeps): {
         requestId,
         actorUserId,
         expiresAtMs: input.expiresAtMs,
-        questions: input.questions.map(question => ({
-          id: typeof question['id'] === 'string' ? question['id'] : '',
-          question: typeof question['question'] === 'string' ? question['question'] : '',
-          header: typeof question['header'] === 'string' ? question['header'] : undefined,
-          options: Array.isArray(question['options'])
-            ? question['options'].map(option => ({
-                label: typeof (option as { label?: unknown }).label === 'string'
-                  ? (option as { label: string }).label
-                  : '',
-              }))
-            : undefined,
-          multiSelect: question['multiSelect'] === true,
-        })),
+        questions: questionItemsOf(input.questions),
       }
       const opened = deps.questions.open(batch)
       if (!opened.ok) {
-        deps.log('discord_question_open_rejected', { error: opened.error })
+        // Belt-and-braces for claim-time pre-check drift: a batch the store
+        // refuses has no record, so no sweep can ever retire it. Cancel the
+        // owning turn now — a web answer still settles the claimed ask —
+        // instead of stranding the host's tool call without controls.
+        deps.log('discord_question_open_failed', { error: opened.error, questionRpcId: input.rpcId, requestId })
+        void deps.cancelPort.cancel({ sessionId: input.sessionId, requestId })
+          .then(cancelled => {
+            if (cancelled.outcome === 'accepted') return
+            deps.log('discord_question_open_cancel_failed', {
+              questionRpcId: input.rpcId, outcome: cancelled.outcome,
+              reason: cancelled.outcome === 'rejected' ? cancelled.reason : undefined,
+            })
+          })
+          .catch((cause: unknown) => {
+            deps.log('discord_question_open_cancel_failed', { questionRpcId: input.rpcId, cause: String(cause) })
+          })
         return
       }
       const payload = renderQuestionControls({ registry: deps.registry, batch })
@@ -236,6 +270,23 @@ export function createAskWiring(deps: AskWiringDeps): {
         },
         { questionRpcId: input.questionRpcId, outcome: input.outcome },
       ).catch((cause: unknown) => { deps.log('discord_question_remote_resolve_failed', String(cause)) })
+    },
+
+    onQuestionDeflected: (input) => {
+      deps.log('discord_question_deflection_notice', {
+        sessionId: input.sessionId, threadId: input.threadId,
+      })
+      void deps.postMessage(input.threadId, {
+        content: deps.copy.questionWebOnlyNotice,
+        flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG,
+      })
+        .then(sent => {
+          if (sent.stored) return
+          deps.log('discord_question_deflection_notice_failed', { reason: sent.reason ?? 'post rejected' })
+        })
+        .catch((cause: unknown) => {
+          deps.log('discord_question_deflection_notice_failed', { cause: String(cause) })
+        })
     },
   }
 }

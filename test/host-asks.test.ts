@@ -91,16 +91,19 @@ function fakeDeps(threads: Record<string, string> = { 'sess-1': 'thread-1' }) {
   const questionAsks: Array<Record<string, unknown>> = []
   const approvalResolved: Array<Record<string, unknown>> = []
   const questionResolved: Array<Record<string, unknown>> = []
+  const questionDeflections: Array<Record<string, unknown>> = []
   const disabled: string[] = []
   const logs: Array<{ event: string; detail?: unknown }> = []
   return {
     deps: {
       threadForSession: (sessionId: string) => threads[sessionId],
+      renderabilityOfQuestions: () => undefined,
       askWiring: {
         onApprovalRequested: (input: Record<string, unknown>) => { approvalAsks.push(input) },
         onQuestionRequested: (input: Record<string, unknown>) => { questionAsks.push(input) },
         onApprovalResolved: (input: Record<string, unknown>) => { approvalResolved.push(input) },
         onQuestionResolved: (input: Record<string, unknown>) => { questionResolved.push(input) },
+        onQuestionDeflected: (input: Record<string, unknown>) => { questionDeflections.push(input) },
         disableControl: (key: string) => { disabled.push(key); return Promise.resolve() },
       },
       approvalTimeoutMs: () => 60_000,
@@ -112,6 +115,7 @@ function fakeDeps(threads: Record<string, string> = { 'sess-1': 'thread-1' }) {
     questionAsks,
     approvalResolved,
     questionResolved,
+    questionDeflections,
     disabled,
     logs,
   }
@@ -357,5 +361,71 @@ describe('dual-surface asks: the web surface races the Discord surface', () => {
     await flush()
     patch.dispose()
     expect(questions.calls[0]?.signal?.aborted).toBe(true)
+  })
+})
+
+describe('unrenderable question batches deflect to the web surface', () => {
+  /** Pre-check shape: every question needs a non-empty options list. */
+  const optionsRequired = (rows: ReadonlyArray<Record<string, unknown>>): string | undefined =>
+    rows.every(row => Array.isArray(row['options']) && row['options'].length > 0) ? undefined : 'options-required'
+
+  it('passes an unrenderable batch through untouched instead of claiming it', async () => {
+    const approval = fakeApprovalService()
+    const questions = fakeQuestionService({ manual: true })
+    const fake = fakeDeps()
+    const deps = { ...fake.deps, renderabilityOfQuestions: optionsRequired }
+    const patch = installAskServicePatches(approval.service, questions.service, deps)
+
+    const req: HostQuestionRequest = { agent: { id: 'sess-1' }, questions: [{ id: 'q1', question: 'Name?' }] }
+    const answer = questions.service.ask(req)
+    await flush()
+
+    // Not claimed: no Discord-side ask opened, no pending settle port.
+    expect(fake.questionAsks).toHaveLength(0)
+    // The web entry received the ORIGINAL request object (no relay signal swap).
+    expect(questions.calls).toHaveLength(1)
+    expect(questions.calls[0]).toBe(req)
+    // The thread was told the ask went to the web surface.
+    expect(fake.questionDeflections).toEqual([{ sessionId: 'sess-1', threadId: 'thread-1' }])
+    expect(fake.logs.some(entry => entry.event === 'discord_question_deflected_web_only')).toBe(true)
+
+    // The web answer settles the passthrough normally.
+    questions.answer(0, { answers: [{ id: 'q1', selected: [], custom: 'Ada' }] })
+    await expect(answer).resolves.toEqual({ answers: [{ id: 'q1', selected: [], custom: 'Ada' }] })
+    patch.dispose()
+  })
+
+  it('still claims a renderable batch when the pre-check is armed', async () => {
+    const approval = fakeApprovalService()
+    const questions = fakeQuestionService({ manual: true })
+    const fake = fakeDeps()
+    const deps = { ...fake.deps, renderabilityOfQuestions: optionsRequired }
+    const patch = installAskServicePatches(approval.service, questions.service, deps)
+
+    void questions.service.ask({
+      agent: { id: 'sess-1' },
+      questions: [{ id: 'q1', question: 'Which?', options: [{ label: 'a' }] }],
+    })
+    await flush()
+
+    expect(fake.questionAsks).toHaveLength(1)
+    expect(fake.questionDeflections).toHaveLength(0)
+    patch.dispose()
+  })
+
+  it('does not deflect unbound sessions (the normal passthrough covers them)', async () => {
+    const approval = fakeApprovalService()
+    const questions = fakeQuestionService({ manual: true })
+    const fake = fakeDeps({})
+    const deps = { ...fake.deps, renderabilityOfQuestions: optionsRequired }
+    const patch = installAskServicePatches(approval.service, questions.service, deps)
+
+    const req: HostQuestionRequest = { agent: { id: 'sess-x' }, questions: [{ id: 'q1', question: 'Name?' }] }
+    void questions.service.ask(req)
+    await flush()
+
+    expect(questions.calls[0]).toBe(req)
+    expect(fake.questionDeflections).toHaveLength(0)
+    patch.dispose()
   })
 })

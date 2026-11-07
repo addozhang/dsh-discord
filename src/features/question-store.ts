@@ -70,6 +70,27 @@ export type ValidateResult =
   | { ok: true }
   | { ok: false; error: DraftAnswerError }
 
+/**
+ * Pure renderability bounds for one question batch — the exact refusal
+ * rules `open()` enforces, factored out so the claim-time pre-check in the
+ * ask patches applies the SAME limits before a thread-bound ask is claimed
+ * (a claimed ask whose batch the store then refuses would strand: no
+ * controls exist, no sweep can see it). Returns the first violated bound,
+ * or undefined when Discord can render the batch.
+ */
+export function questionBoundsError(questions: readonly QuestionItemView[]): OpenBatchError | undefined {
+  if (questions.length > MAX_QUESTIONS_PER_BATCH) return 'too-many-questions'
+  for (const question of questions) {
+    const options = question.options ?? []
+    if (options.length === 0) return 'options-required'
+    if (options.length > MAX_OPTIONS_PER_QUESTION) return 'too-many-options'
+    if (options.some(option => option.label.length > MAX_LABEL_LENGTH)) {
+      return 'option-label-too-long'
+    }
+  }
+  return undefined
+}
+
 /** Validate one draft answer against its question (pure; also used by routing). */
 export function validateDraftAnswer(
   question: QuestionItemView | undefined,
@@ -217,15 +238,8 @@ export function createQuestionStore(): QuestionStore {
     open(candidate) {
       const existing = entries.get(candidate.questionRpcId)
       if (existing !== undefined) return { ok: true }
-      if (candidate.questions.length > MAX_QUESTIONS_PER_BATCH) return { ok: false, error: 'too-many-questions' }
-      for (const question of candidate.questions) {
-        const options = question.options ?? []
-        if (options.length === 0) return { ok: false, error: 'options-required' }
-        if (options.length > MAX_OPTIONS_PER_QUESTION) return { ok: false, error: 'too-many-options' }
-        if (options.some(option => option.label.length > MAX_LABEL_LENGTH)) {
-          return { ok: false, error: 'option-label-too-long' }
-        }
-      }
+      const bounds = questionBoundsError(candidate.questions)
+      if (bounds !== undefined) return { ok: false, error: bounds }
       entries.set(candidate.questionRpcId, {
         batch: candidate,
         state: 'pending',

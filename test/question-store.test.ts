@@ -14,9 +14,11 @@ import {
   createQuestionStore,
   encodeAnswer,
   isCompleteDraft,
+  questionBoundsError,
   validateDraftAnswer,
   type QuestionBatch,
   type QuestionDraft,
+  type QuestionItemView,
 } from '../src/features/question-store.js'
 
 function batch(overrides: Partial<QuestionBatch> = {}): QuestionBatch {
@@ -102,6 +104,36 @@ describe('question batch bounds', () => {
     expect(store().open(batch({
       questions: [{ id: 'q1', question: 'Free?', options: undefined, multiSelect: false }],
     }))).toEqual({ ok: false, error: 'options-required' })
+  })
+
+  it('open() and questionBoundsError agree on every refusal kind', () => {
+    const refusals: Array<[QuestionBatch, QuestionItemView[]]> = [
+      // [full batch for open(), bare question list for the pure check]
+      [batch({ questions: [{ id: 'q1', question: 'Free?', options: undefined, multiSelect: false }] }),
+        [{ id: 'q1', question: 'Free?', options: undefined, multiSelect: false }]],
+      [batch({ questions: Array.from({ length: 6 }, (_, index) => ({ id: `q${String(index)}`, question: 'Q', options: [{ label: 'y' }], multiSelect: false })) }),
+        Array.from({ length: 6 }, () => ({ id: 'q', question: 'Q', options: [{ label: 'y' }], multiSelect: false }))],
+      [batch({ questions: [{ id: 'q1', question: 'Pick', options: Array.from({ length: 26 }, () => ({ label: 'o' })), multiSelect: false }] }),
+        [{ id: 'q1', question: 'Pick', options: Array.from({ length: 26 }, () => ({ label: 'o' })), multiSelect: false }]],
+      [batch({ questions: [{ id: 'q1', question: 'Pick', options: [{ label: 'x'.repeat(101) }], multiSelect: false }] }),
+        [{ id: 'q1', question: 'Pick', options: [{ label: 'x'.repeat(101) }], multiSelect: false }]],
+    ]
+    for (const [full, questions] of refusals) {
+      const viaOpen = store().open(full)
+      expect(viaOpen, `open() accepted a batch the pure check refuses: ${JSON.stringify(questions)}`).toMatchObject({ ok: false })
+      if (!viaOpen.ok) {
+        expect(questionBoundsError(questions), `pure check disagrees with open() (${viaOpen.error})`).toBe(viaOpen.error)
+      }
+    }
+  })
+
+  it('questionBoundsError accepts a renderable batch and names the first violation otherwise', () => {
+    expect(questionBoundsError(batch().questions)).toBeUndefined()
+    expect(questionBoundsError([
+      { id: 'q1', question: 'Ok?', options: [{ label: 'y' }], multiSelect: false },
+      { id: 'q2', question: 'Free?', options: undefined, multiSelect: false },
+      { id: 'q3', question: 'Wide?', options: Array.from({ length: 26 }, () => ({ label: 'o' })), multiSelect: false },
+    ])).toBe('options-required')
   })
 })
 

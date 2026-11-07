@@ -141,7 +141,16 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   web 腿即时赢——绑定会话的 Discord 审批按钮闪现即灰，符合宿主策略语义）；提问无
   答题者 reject `NO_PROVIDER`（吞掉）。claim 路径现在也走真实入口 → 审批 ask/decided
   审计对开始落盘（旧判例"补丁路径不写审计对"作废）。passthrough 方向（ask 发出后才
-  绑定，Discord 永不可见）保持现状——2026-10-26 决策，issue #11 记录
+  绑定，Discord 永不可见）保持现状——2026-10-26 决策，issue #11 记录。
+  **claim 有可渲染前提（16.107，2026-11-07）**：question store 的 fail-closed 拒收
+  边界（每题必有 options、≤5 问、≤25 选项、标签 ≤100 字符——宿主工具 schema 里
+  options 可选、web 端出文本输入，无选项开放题是合法且高频的 ask 形态）在 claim
+  **之前**由 `questionBoundsError()`/`questionItemsOf()` 预检（与 `open()` 共用同
+  一纯函数，结构上不可漂移），不可渲染批次整体 passthrough + 线程投一条
+  `questionWebOnlyNotice` 双语系统行——判例来源 issue #12：claim 后拒收 = 活的宿主
+  Promise 搁浅（无控件/无 store 记录/sweep 不可见，legacy 模式永续 typing）。兜底：
+  open 拒收若因漂移再现，直调 cancelPort 取消所属 turn（拒收无记录，abandon 的
+  claim 路径无从工作），`discord_question_open_failed` warn 级
 - 权限预设三档 `read-only` / `workspace-write` / `danger-full-access`（沙箱+审批
   捆绑）。读 = `permissionPresets.catalog()` + `observeSession` 的 permissions
   投影 `{currentValue}`；写 = 宿主唯一认可的 `/permission` 命令路径：
