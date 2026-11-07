@@ -79,6 +79,14 @@ interface RegistryContext {
   questionRpcId: string
   action: 'select' | 'submit' | 'modal'
   questionId?: string | undefined
+  /**
+   * Option labels picked in the same select submission as the custom
+   * affordance (multi-select + Other). The modal submit merges them with the
+   * typed text; without this the ticked options were silently dropped —
+   * a multi-select answer of "A, B, and something else" reached DSH as
+   * "something else" alone (16.110, Kimaki `otherPicks` precedent).
+   */
+  otherPicks?: readonly string[] | undefined
 }
 
 function parseContext(context: Record<string, unknown>): RegistryContext | undefined {
@@ -87,10 +95,14 @@ function parseContext(context: Record<string, unknown>): RegistryContext | undef
   if (typeof questionRpcId !== 'string') return undefined
   if (action !== 'select' && action !== 'submit' && action !== 'modal') return undefined
   const questionId = context['questionId']
+  const otherPicks = context['otherPicks']
   return {
     questionRpcId,
     action,
     ...(typeof questionId === 'string' ? { questionId } : {}),
+    ...(Array.isArray(otherPicks) && otherPicks.every(pick => typeof pick === 'string')
+      ? { otherPicks }
+      : {}),
   }
 }
 
@@ -112,9 +124,26 @@ function resolveContext(
   return { context, record }
 }
 
+/**
+ * Discord caps a modal's single-line slots — the modal `title` and the
+ * text-input `label` — at 45 characters each. Questions are model-authored
+ * and routinely longer (and multi-line), so both go through here: whitespace
+ * is flattened to one line and the result is bounded. Over-long input is
+ * refused by the wire validator (50035), which drops the interaction and
+ * leaves the user with a dead select and no error — never ship a raw value.
+ */
+const MAX_MODAL_LINE_LENGTH = 45
+
+function modalLine(text: string, fallback: string): string {
+  const flat = text.replace(/\s+/gu, ' ').trim()
+  if (flat === '') return fallback
+  return flat.length <= MAX_MODAL_LINE_LENGTH
+    ? flat
+    : `${flat.slice(0, MAX_MODAL_LINE_LENGTH - 1)}…`
+}
+
 function modalTitle(question: string): string {
-  const title = question.length <= 45 ? question : `${question.slice(0, 44)}…`
-  return title
+  return modalLine(question, 'Your answer')
 }
 
 /**
@@ -201,14 +230,18 @@ export async function handleSelectInput(
   if (context.action !== 'select' || context.questionId === undefined) return { outcome: 'unknown-control' }
 
   // The reserved Other value opens the custom-text modal instead of
-  // recording a label answer.
+  // recording a label answer. Any other labels in the same submission are
+  // carried into the modal context and merged on submit — for a multi-select
+  // the user expects "A, B, plus my own text", not the text alone.
   if (input.values.includes(CUSTOM_ANSWER_VALUE)) {
     const question = record.questions.find(item => item.id === context.questionId)
     if (question === undefined) return { outcome: 'unknown-control' }
+    const picks = input.values.filter(value => value !== CUSTOM_ANSWER_VALUE)
     const customId = deps.registry.register({
       questionRpcId: context.questionRpcId,
       action: 'modal',
       questionId: question.id,
+      ...(picks.length === 0 ? {} : { otherPicks: picks }),
       expiresAtMs: record.expiresAtMs,
     })
     return {
@@ -217,7 +250,7 @@ export async function handleSelectInput(
         title: modalTitle(question.question),
         custom_id: customId,
         textInput: {
-          label: question.header ?? 'Your answer',
+          label: modalLine(question.header ?? '', 'Your answer'),
           min_length: 1,
           max_length: MAX_CUSTOM_LENGTH,
           required: true,
@@ -253,7 +286,9 @@ export async function handleModalSubmit(
 
   const verdict = deps.store.setDraft(context.questionRpcId, {
     id: context.questionId,
-    selected: [],
+    // Options ticked alongside Other ride in the modal context; a plain
+    // single-select Other carries none, so this stays empty there.
+    selected: [...(context.otherPicks ?? [])],
     custom: input.text,
   })
   return recordedOutcome(deps, context, verdict)

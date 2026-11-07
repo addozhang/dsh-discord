@@ -144,7 +144,8 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   绑定，Discord 永不可见）保持现状——2026-10-26 决策，issue #11 记录。
   **claim 有可渲染前提（16.107，2026-11-07）**：question store 的 fail-closed 拒收
   边界（每题必有 options、≤5 问、≤25 选项、标签 ≤100 字符——宿主工具 schema 里
-  options 可选、web 端出文本输入，无选项开放题是合法且高频的 ask 形态）在 claim
+  options 可选、web 端出文本输入，无选项开放题是合法且高频的 ask 形态——其中
+  "每题必有 options"一项已被 **16.108 取代**，无选项题现在原生渲染）在 claim
   **之前**由 `questionBoundsError()`/`questionItemsOf()` 预检（与 `open()` 共用同
   一纯函数，结构上不可漂移），不可渲染批次整体 passthrough + 线程投一条
   `questionWebOnlyNotice` 双语系统行——判例来源 issue #12：claim 后拒收 = 活的宿主
@@ -158,6 +159,22 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   拒收类删除，deflection 退守纯硬边界（>5 问 / >24 选项 / 标签 >100）。**Other
   槽位判例**：渲染器恒追加 custom 选项 → store 上限必须是 **24**（25 会 26 溢出
   撞 Discord 50035，twin 测不出——kimaki `MAX_OPTIONS = 24 // one is Other` 同款）
+  **16.109 修订（2026-11-07，真机回归）**：MODAL callback（type 9）的 `data.title`
+  是**必填**（1–45 字符）——wire 层自 Phase 3 起一直没发它，Discord 回 400 并把整个
+  交互丢弃，客户端表现是 select 点下去毫无反应（无 ephemeral 报错、无日志）。
+  16.108 把开放题整条路押在 modal 上之后，这个洞从"几乎没人点 Other"变成 100% 必现。
+  `ModalDescriptor.title` 一直算好了却没人转发，单测也只断言 descriptor、不查 wire。
+  两处围栏缺一不可：wire 上补 `title`，值侧过 45 字符**单行**限制（`modalLine()`：
+  折叠空白 + 45 截断，空文本退 `Your answer`），text-input `label` 走同一函数
+  （同样 45 上限，之前直接用原始 header）。twin 只校验 40060（重复 ack），不做表单
+  校验 → **wire 形状必须在 twin 测试里显式断言**（`data.title`），否则"测不出"重演。
+  **16.110 修订（2026-11-07）**：多选 + Other 会**丢掉同批勾选**——`handleModalSubmit`
+  硬编码 `selected: []` 且 `setDraft` 整条覆盖 draft，勾了 A、B 再选 Other 写 C 只剩 C。
+  Kimaki 判例（`otherPicks: Map<formID:key, labels>`）：开 modal 前把同一 submission 里的
+  非 custom 值记进 **registry context**（`otherPicks`，与 `questionId` 同级，仍走 opaque
+  custom_id 不上 wire），modal submit 时 `selected: [...otherPicks]`。单选取 Other 时
+  filter 后天然为空数组，无需分支。伪造的 picks 仍受 `validateDraftAnswer` 的 label
+  集合校验兜底，绕不过去。
 - 权限预设三档 `read-only` / `workspace-write` / `danger-full-access`（沙箱+审批
   捆绑）。读 = `permissionPresets.catalog()` + `observeSession` 的 permissions
   投影 `{currentValue}`；写 = 宿主唯一认可的 `/permission` 命令路径：

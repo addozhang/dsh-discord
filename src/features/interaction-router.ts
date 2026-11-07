@@ -1158,10 +1158,14 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
       const rest = await deps.rest()
       if (rest === undefined) return
       const modal = outcome.modal
-      await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, {
+      const posted = await rest.request('POST', `/interactions/${event.interactionId}/${interactionToken}/callback`, {
         type: 9,
         data: {
           custom_id: modal.custom_id,
+          // `title` is REQUIRED by the MODAL callback (1–45 chars). Omitting it
+          // fails form validation, Discord drops the interaction, and the
+          // select the user just clicked stays dead with no error shown.
+          title: modal.title,
           components: [{
             type: 1,
             components: [{
@@ -1176,6 +1180,15 @@ export function createInteractionRouter(deps: InteractionRouterDeps): {
           }],
         },
       })
+      // A rejected type-9 leaves the client with a silently dead select —
+      // Discord drops the interaction with no user-visible error, so the
+      // refusal must be on the record (title/label bounds are the usual
+      // cause).
+      if (posted.outcome !== 'completed') {
+        deps.warn('discord_question_modal_failed', posted.outcome === 'rejected'
+          ? `HTTP ${String(posted.status)} ${JSON.stringify(posted.error)}`
+          : `rest ${posted.reason}`)
+      }
       return
     }
     // Every other outcome settles as a deferred update plus an ephemeral

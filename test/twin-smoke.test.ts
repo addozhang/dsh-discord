@@ -1716,9 +1716,13 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
       values: [CUSTOM_ANSWER_VALUE],
     })
     await new Promise(resolve => { setTimeout(resolve, 300) })
-    const modal = interactionCallbacks.at(-1) as { data?: { custom_id?: string } } | undefined
+    const modal = interactionCallbacks.at(-1) as { data?: { custom_id?: string; title?: string } } | undefined
     const modalCustomId = modal?.data?.custom_id
     if (typeof modalCustomId !== 'string') throw new TypeError('modal callback missing custom_id')
+    // MODAL callbacks require `title` (1–45 chars). The twin accepts the body
+    // without form-validating it, so a missing title showed up only on a real
+    // Discord as a silent drop — assert the wire shape here.
+    expect(modal?.data?.title).toBe('部署策略怎么选')
 
     await discord.simulateModalSubmit({
       channelId: threadId, userId: USER, customId: modalCustomId,
@@ -1738,6 +1742,55 @@ describe('twin smoke: approval/question round trip with a STRICT fake DSH', () =
     expect(sent[0]).toMatchObject({
       kind: 'question',
       answer: { answers: [{ id: 'q1', selected: [], custom: '改为只读挂载' }] },
+    })
+  }, 20_000)
+
+  it('keeps the options ticked alongside Other in a multi-select modal answer', async () => {
+    askSink.onQuestionRequested({
+      sessionId: 'sess-1', threadId, rpcId: 'ask-multi-other', expiresAtMs: Date.now() + 600_000,
+      questions: [{
+        id: 'q1',
+        question: '部署方式怎么选',
+        options: [{ label: 'Option A' }, { label: 'Option B' }],
+        multiSelect: true,
+      }],
+    })
+    const scope = discord.channel(threadId)
+    const control = await scope.waitForMessage({
+      predicate: message => message.content.includes('部署方式怎么选'),
+    })
+    const rows = control.components as Array<{ components: Array<{ custom_id?: string }> }>
+    const selectCustomId = rows[0]?.components[0]?.custom_id
+    if (typeof selectCustomId !== 'string') throw new TypeError('select control missing custom_id')
+
+    // Option A stays ticked while the custom value opens the modal.
+    await discord.simulateSelectMenu({
+      channelId: threadId, userId: USER, messageId: control.id, customId: selectCustomId,
+      values: ['Option A', CUSTOM_ANSWER_VALUE],
+    })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+    const modal = interactionCallbacks.at(-1) as { data?: { custom_id?: string } } | undefined
+    const modalCustomId = modal?.data?.custom_id
+    if (typeof modalCustomId !== 'string') throw new TypeError('modal callback missing custom_id')
+
+    await discord.simulateModalSubmit({
+      channelId: threadId, userId: USER, customId: modalCustomId,
+      fields: [{ customId: 'answer', value: '改为只读挂载' }],
+    })
+    await new Promise(resolve => { setTimeout(resolve, 200) })
+
+    const submitCustomId = rows.at(-1)?.components[0]?.custom_id
+    if (typeof submitCustomId !== 'string') throw new TypeError('submit control missing custom_id')
+    await discord.simulateButtonClick({
+      channelId: threadId, userId: USER, messageId: control.id, customId: submitCustomId,
+    })
+    await new Promise(resolve => { setTimeout(resolve, 300) })
+
+    const sent = settleRecords.filter(record => record.key === 'ask-multi-other')
+    expect(sent).toHaveLength(1)
+    expect(sent[0]).toMatchObject({
+      kind: 'question',
+      answer: { answers: [{ id: 'q1', selected: ['Option A'], custom: '改为只读挂载' }] },
     })
   }, 20_000)
 

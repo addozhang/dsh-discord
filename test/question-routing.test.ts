@@ -36,14 +36,14 @@ function batch(overrides: Partial<QuestionBatch> = {}): QuestionBatch {
   }
 }
 
-function setup() {
+function setup(overrides: Partial<QuestionBatch> = {}) {
   let n = 0
   const registry: ComponentRegistry = createComponentRegistry({ idFactory: () => {
     n += 1
     return `opaque-${String(n)}`
   } })
   const store = createQuestionStore()
-  const batchValue = batch()
+  const batchValue = batch(overrides)
   store.open(batchValue)
   const respond = vi.fn((_input: Parameters<DshQuestionRespondPort['respond']>[0]): ReturnType<DshQuestionRespondPort['respond']> =>
     Promise.resolve({ outcome: 'confirmed' }))
@@ -122,6 +122,74 @@ describe('custom-answer modal flow', () => {
     expect(modal.custom_id).toMatch(/^dc:[A-Za-z0-9-]+$/u)
     expect(modal.textInput.max_length).toBe(1000)
     expect(modal.custom_id).not.toContain('MARKER')
+  })
+
+  it('bounds the modal title and text-input label to their 45-character wire slots', async () => {
+    // Discord form-validates both one-line slots at 45 chars; a refusal there
+    // drops the interaction and leaves the user staring at a dead select.
+    const { select } = setup({
+      questions: [{
+        id: 'q1',
+        question: 'Which database should we provision for the analytics stack?\nPlease weigh the read-heavy workload, the failover story, and the ops budget.',
+        header: 'Database choice — deployment topology and the failure mode you care about most',
+        options: [],
+        multiSelect: false,
+      }],
+    })
+
+    const outcome = await select('dc:opaque-1', [CUSTOM_ANSWER_VALUE])
+    expect(outcome.outcome).toBe('modal-requested')
+    if (outcome.outcome !== 'modal-requested') return
+    expect(outcome.modal.title.length).toBeLessThanOrEqual(45)
+    expect(outcome.modal.title).not.toContain('\n')
+    expect(outcome.modal.textInput.label.length).toBeLessThanOrEqual(45)
+    expect(outcome.modal.textInput.label).not.toContain('\n')
+  })
+
+  it('falls back to a readable title and label when the question carries no text', async () => {
+    const { select } = setup({
+      questions: [{ id: 'q1', question: '   ', options: [], multiSelect: false }],
+    })
+
+    const outcome = await select('dc:opaque-1', [CUSTOM_ANSWER_VALUE])
+    expect(outcome.outcome).toBe('modal-requested')
+    if (outcome.outcome !== 'modal-requested') return
+    expect(outcome.modal.title).toBe('Your answer')
+    expect(outcome.modal.textInput.label).toBe('Your answer')
+  })
+
+  it('keeps the options ticked alongside Other when the modal text lands', async () => {
+    const { registry, store, select } = setup()
+
+    // q2 is the multi-select: TypeScript is ticked, plus the custom value.
+    const outcome = await select('dc:opaque-2', ['TypeScript', CUSTOM_ANSWER_VALUE])
+    expect(outcome.outcome).toBe('modal-requested')
+    if (outcome.outcome !== 'modal-requested') return
+    // The modal context carries the remaining picks (opaque id hides them).
+    expect(outcome.modal.custom_id).not.toContain('TypeScript')
+
+    const submitted = await handleModalSubmit(
+      { registry, store, port: { respond: vi.fn() }, nowMs: () => 0, controls: { disable: async () => {} } },
+      { customId: 'dc:opaque-4', text: 'or a managed service', userId: 'user-owner', threadId: 'thread-1' },
+    )
+    expect(submitted).toEqual({ outcome: 'recorded', complete: false })
+    expect(store.get('qrpc-1')?.draft('q2')).toEqual({
+      id: 'q2',
+      selected: ['TypeScript'],
+      custom: 'or a managed service',
+    })
+  })
+
+  it('leaves selected empty when a single-select question goes to the modal', async () => {
+    const { registry, store, select } = setup()
+
+    await select('dc:opaque-1', [CUSTOM_ANSWER_VALUE])
+    await handleModalSubmit(
+      { registry, store, port: { respond: vi.fn() }, nowMs: () => 0, controls: { disable: async () => {} } },
+      { customId: 'dc:opaque-4', text: 'MariaDB', userId: 'user-owner', threadId: 'thread-1' },
+    )
+
+    expect(store.get('qrpc-1')?.draft('q1')).toEqual({ id: 'q1', selected: [], custom: 'MariaDB' })
   })
 
   it('records the custom text from the modal submit and completes the batch', async () => {
