@@ -480,6 +480,16 @@ CDP 驱动真机（rc 级验证要求）：
   `rm` 再 `add`，并 diff 校验安装副本
 - `dsh plugin add pkg@dist-tag` 可能解析到过期缓存版本——发版后一律用**精确
   版本号**安装，装完核对 node_modules 里的 version 字段
+- **发布被 Rekor 409 打断不是发版失败**（v0.6.8 实测）：npm 打印
+  `TLOG_CREATE_ENTRY_ERROR / an equivalent entry already exists in the
+  transparency log` 时，是签名 POST 的响应丢了、客户端重传被当成重复条目
+  （上游 npm/cli#10078、sigstore-js#1708，npm 未启用 `fetchOnConflict`），
+  **tarball 根本没进 registry**。判定顺序：先 `npm view pkg@ver` 确认 404，
+  再直接 `gh run rerun <id> --failed`——前两次 409、第三次 6 秒发布成功，
+  无需改版本号或改代码
+- **发布成功 ≠ 立刻可查**：registry 元数据写入有异步延迟（v0.6.8 约 60 秒），
+  `npm view` 在这段时间报 404。别据此判定失败并急着重发/跳版本；
+  轮询 `https://registry.npmjs.org/<pkg>/<ver>` 到 200 为准
 - compose 后 `lib/` 与源码可能不同步：`pnpm pack` 前必须 `pnpm build`
 - `exactOptionalPropertyTypes` 开启：可选属性不能显式赋 `undefined`
 - eslint：async 函数无 await（桩函数用 `() => Promise.resolve(...)`）、
