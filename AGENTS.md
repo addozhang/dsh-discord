@@ -500,6 +500,14 @@ CDP 驱动真机（rc 级验证要求）：
   `@deepseek-ai/dsh-web-app` npm `latest` 是死版本——精确版本号安装
 - 部署目标是 `~/.dsh/profiles/web`；凭据在 `~/.dsh/.credentials.yaml`
   （全局单槽，勿打印）；一次性 profile 用完清理
+- **真机测试借用生产 bot 后必须还原凭据槽**（2026-11-08 事故）：测试用另一个
+  bot 时把 `DSH_DISCORD_BOT_TOKEN` 换掉，测完忘了还原 → 桌面端重启后连的是测试
+  bot，而它不在用户服务器里，表现是「Discord 发消息完全没反应」（连 gateway
+  MESSAGE_CREATE 都收不到，日志干净得像个新装的插件）。收尾必做两步：
+  ① 从 `.credentials.yaml.bak-*` 还原并核对 `/users/@me` 的身份；
+  ② 用 `/users/@me/guilds` 确认该 bot 在 `cordis.patch.yml` 的
+  `allowedGuildIds` 里。凭据是启动时读入内存的，**改完必须重启宿主**
+  （桌面端由人手动重启：`open -a` 在自动化 shell 里静默失败，别反复试）
 
 ### Desktop 形态（2026-10-06 实测本机 /Applications/DeepSeek Harness.app）
 
