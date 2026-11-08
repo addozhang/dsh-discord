@@ -229,11 +229,15 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
 
 ### 全局态与多 profile（2026-09-24 实测）
 
-- `~/.dsh/sessions`（journal）、`~/.dsh/storages/dsh_discord.json`（三表）、
-  `~/.dsh/.credentials.yaml`（凭据**全局单槽**）跨 profile 共享——profile 只隔离
-  插件树与配置
+- `~/.dsh/sessions`（journal）、`~/.dsh/storages/dsh_discord.json`（三表）跨
+  profile 共享——profile 只隔离插件树与配置。凭据**默认**也是全局一份
+  （`~/.dsh/.credentials.yaml`），但 `dsh-credentials-local` 支持 `config.path`，
+  profile patch 可以指到自己的文件（2026-11-08 起 web-test 就这么做，见
+  「测试环境 web-test 清单」）——两套环境因此能用不同 bot 且同时在线
 - 同机双宿主 + 同 bot token = **gateway 互踢**（后连者顶掉前者）；三表并发写有
-  竞争风险。**单宿主假设**：起验证实例前先确认其它宿主没有 Discord 插件在跑
+  竞争风险。**同 bot 才是硬冲突**：一个 bot 两个 gateway 会互踢（后连者顶掉前者，
+  且宿主有"1006 后零重连"缺陷）；**不同 bot 可以并存**——2026-11-08 起正式（桌面端）
+  与测试（web-test）就是两个 bot 同时在线，只用 guild 白名单区分流量
 - 无效 token 的失败相位：REST 阶段（命令注册）失败时卡片只显示无 hint 的
   disconnected——invalid-token 判定依赖 gateway close 4004（UX 缺口）
 - rc.1+ 宿主有**插件精确版本兼容门**。0.2.0 判例（2026-10-06）：本插件
@@ -553,7 +557,7 @@ CDP 驱动真机（rc 级验证要求）：
   僵尸（删锁重试；重跑 add 不补登记 bundle 列表，按 README 手动登记）；
   `@deepseek-ai/dsh-web-app` npm `latest` 是死版本——精确版本号安装
 - 部署目标是 `~/.dsh/profiles/web`；凭据默认在 `~/.dsh/.credentials.yaml`
-  （全局单槽，勿打印）；一次性 profile 用完清理
+  （全局共享，勿打印；可按 profile 覆盖，见测试环境清单）；一次性 profile 用完清理
 - **正式 / 测试两套环境靠 profile 级凭据隔离**（2026-11-08 起）：配方与清单见
   「测试与联调约定 → 测试环境 web-test 清单」。一句话版本：web-test 的 patch 里把
   `id: credentials` 的 `path` 指到 `~/.dsh/profiles/web-test/.credentials.yaml`
