@@ -438,14 +438,15 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   `dsh --version`；不追 alpha/next（除非明确要求）
 - **环境三件套**：CLI 宿主 + `web-test` profile + 调试 Chrome（9222）；测试
   guild = **Bot Test Server**（1562450757805146123），bot = **DSH Test**
-  （app 1550676723773739048，token 不在全局凭据槽的常态，问用户拿，先
-  REST users/@me 验 app id 再写入）
+  （app 1550676723773739048）；token 读 profile 自己的凭据文件（见下节清单），
+  先 REST `users/@me` 验 app id 再用
 - **绝不碰 desktop profile**：desktop 是日用宿主（App 正在跑，改前先确认；
   它的 patch/插件目录/凭据一律不动；验证结束恢复 App 运行态）
 - **控制变量**：先装 npm **发布版**（精确版本号）验证配置基线（白名单/
   绑定频道/命令注册），基线通过后才换本地修复构建对比测试
-- **凭据槽是全局单槽**：换 DSH Test 前备份 `.credentials.yaml`，测完恢复；
-  桌面宿主运行中持有旧凭据直到它下次重连——换槽后注意互踢窗口
+- **凭据按 profile 隔离**：web-test 指自己的凭据文件，桌面端用全局那份，两套
+  bot 可同时在线、无需切换（配方见下节）；测完**不需要**还原槽位，但**装完
+  插件/换过 token 都要重启宿主**才算数
 - **别起独立 gateway 探针**：同 token identify 会踢掉宿主会话（1006），
   且宿主有"1006 后零重连"已知缺陷（10-31 判例）；需要旁证时先停宿主
 - **只配 allowedGuildIds ≠ 能用（2026-11-07 判例）**：消息路径不带
@@ -455,6 +456,59 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   gateway/投递问题；且 `discord_dispatch_rejected` warn 走 host logger，
   **不出现在 CLI stderr**——定位手段 = gateway/compose 临时 console.error
   仪表（验完即撤）。白名单配置 = guild 白名单 + 成员授权两项，缺一不可
+
+### 测试环境 web-test 清单（2026-11-08 定稿）
+
+正式与测试共用一台机器，靠 **profile + 独立凭据文件 + guild 白名单** 三件套隔离。
+桌面端（App）是正式环境，web-test 是插件的测试环境，两者可同时在线。
+
+| 项 | 正式 | 测试 |
+|---|---|---|
+| 宿主 | DSH 桌面端 App（`/Applications/DeepSeek Harness.app`） | `dsh --profile web-test --port 3081` |
+| profile | `~/.dsh/profiles/desktop` | `~/.dsh/profiles/web-test` |
+| guild | `Agents Hub` 1517134847850709032 | `Bot Test Server` 1562450757805146123 |
+| bot | `dsh` 1541450442419081316 | `DSH Test` 1550676723773739048 |
+| 凭据文件 | `~/.dsh/.credentials.yaml`（全局默认） | `~/.dsh/profiles/web-test/.credentials.yaml` |
+
+**为什么必须分文件**：插件在 `src/credential.ts` 硬编码 `DSH_DISCORD_BOT_TOKEN`，
+dsh-credentials 又是 store 优先、env 只兜底 → 单槽时两个环境互相覆盖，谁写谁生效
+（2026-11-08 事故就是这么把桌面端弄哑的）。`dsh-credentials-local` 的
+`resolveSpec` 支持 `config.path`，profile patch 可按 id 定向覆盖：
+
+```yaml
+# ~/.dsh/profiles/web-test/cordis.patch.yml（追加在数组末尾）
+- id: credentials
+  config:
+    path: /Users/addo/.dsh/profiles/web-test/.credentials.yaml
+```
+
+profile 凭据文件 = 全局文件的副本 + **只替换** `DSH_DISCORD_BOT_TOKEN`，权限必须
+`600`（provider 拒绝 group/other 可读的凭据文档，这是硬校验）。
+
+日常操作：
+
+```sh
+# 装/换插件版本（一律精确版本号，装完核对 node_modules 里的 version）
+dsh plugin --profile web-test rm @addozhang/dsh-discord
+dsh plugin --profile web-test add @addozhang/dsh-discord@0.6.8
+
+# 起测试宿主（trace 单独一个文件，便于脚本只扫本轮增量）
+DSH_DISCORD_TRACE=1 dsh --profile web-test --no-open --port 3081 >> /tmp/web-test.log 2>&1
+
+# 真机驱动：token 读 profile 那份，不是全局那份
+DISCORD_BOT_TOKEN=$(grep -m1 DSH_DISCORD_BOT_TOKEN ~/.dsh/profiles/web-test/.credentials.yaml \
+  | sed -E 's/^[^:]*: *//; s/^["'"'"']//; s/["'"'"']$//') \
+  node scripts/devtools-cdp-ask.mjs "用工具问我 1 个开放式问题" \
+    --channel 1562614126172184586 --answer "…" --expect modal --trace /tmp/web-test.log
+```
+
+- 换 token / 装插件后**必须重启宿主**（凭据与插件树都是启动时读入）
+- 回滚隔离：删掉 patch 末尾那段 `id: credentials` 覆盖，web-test 即回到全局槽
+- 桌面端不要改：它的 patch / 插件目录 / 凭据都是正式环境，验证完恢复 App 运行态
+- 排查「Discord 完全没反应」的顺序：`users/@me` 看身份 → `users/@me/guilds`
+  比 `allowedGuildIds` → 宿主是否重启过 → 最后才怀疑插件逻辑
+
+### 测试纪律
 
 - 纪律：行为变更先写失败测试（RED→GREEN）；wire 形状走 twin E2E，
   纯逻辑走模块单测
@@ -500,23 +554,10 @@ CDP 驱动真机（rc 级验证要求）：
   `@deepseek-ai/dsh-web-app` npm `latest` 是死版本——精确版本号安装
 - 部署目标是 `~/.dsh/profiles/web`；凭据默认在 `~/.dsh/.credentials.yaml`
   （全局单槽，勿打印）；一次性 profile 用完清理
-- **正式 / 测试两套环境用 profile 级凭据隔离**（2026-11-08 起）：
-  `dsh-credentials-local` 的 config 支持 `path`（`resolveSpec`：
-  `config.path ?? <dshHome>/.credentials.yaml`），profile patch 可以 id 定向覆盖，
-  所以 web-test 用自己那份文件，桌面端继续用全局那份，两个 bot 并存、互不影响：
-
-  ```yaml
-  # ~/.dsh/profiles/web-test/cordis.patch.yml
-  - id: credentials
-    config:
-      path: /Users/addo/.dsh/profiles/web-test/.credentials.yaml
-  ```
-
-  该文件必须是 **600**（provider 会拒绝 group/other 可读的凭据文档），内容为全局
-  文件的副本 + 只替换 `DSH_DISCORD_BOT_TOKEN`。分配：桌面端（正式）→ 全局文件、
-  `dsh` bot（Agents Hub 1517134847850709032）；web-test → profile 文件、`DSH Test`
-  bot（Bot Test Server 1562450757805146123）。测试脚本取 token 一律读
-  **profile 文件**，别读全局那份
+- **正式 / 测试两套环境靠 profile 级凭据隔离**（2026-11-08 起）：配方与清单见
+  「测试与联调约定 → 测试环境 web-test 清单」。一句话版本：web-test 的 patch 里把
+  `id: credentials` 的 `path` 指到 `~/.dsh/profiles/web-test/.credentials.yaml`
+  （600，全局文件副本 + 只换 discord token），桌面端继续用全局那份
 - **凭据是启动时读进内存的，换 token 必须重启宿主**（桌面端人工重启：
   `open -a` 在自动化 shell 里静默失败，要用 Finder 的 AppleScript 或让用户点）
 - 事故存档（2026-11-08）：上面这层隔离之前，测试时覆盖了全局槽位又忘了还原，
