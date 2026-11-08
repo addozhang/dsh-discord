@@ -25,10 +25,14 @@ pnpm pack --pack-destination /tmp
 
 ```sh
 pnpm build && pnpm pack --pack-destination /tmp
-dsh plugin --profile web rm @addozhang/dsh-discord     # 必须先 rm
-dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
+dsh plugin --profile web-test rm @addozhang/dsh-discord   # 必须先 rm
+dsh plugin --profile web-test add file:/tmp/addozhang-dsh-discord-<ver>.tgz
 # 重启宿主后生效；装完 diff 校验安装副本 == tarball
 ```
+
+本地构建只往 **`web-test`** 里装（测试环境）；桌面上跑的是 npm 发布版，属正式
+环境，联调不要动它——隔离配方与日常命令见「测试与联调约定 → 测试环境 web-test
+清单」。
 
 联调观测：`DSH_DISCORD_TRACE=1` 启动，stderr 输出 mux 帧、丢弃点与投递结果
 （默认静默）。启动形态：`dsh --profile <name> --no-open --port <n>`——
@@ -70,7 +74,7 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   需要收紧时再改
 - **控制频道（类目下 general）**不承载会话，也不参与 /session resume
 
-## Host 面事实（0.2.0-rc.2 线；2026-10-06 真机核实；0.1.7-rc.1 判例一并保留）
+## Host 面事实（0.2.2-rc.1 线；2026-10-06 起逐线真机核实；旧线判例保留）
 
 ### 服务与调用面
 
@@ -143,11 +147,11 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   审计对开始落盘（旧判例"补丁路径不写审计对"作废）。passthrough 方向（ask 发出后才
   绑定，Discord 永不可见）保持现状——2026-10-26 决策，issue #11 记录。
   **claim 有可渲染前提（16.107，2026-11-07）**：question store 的 fail-closed 拒收
-  边界（每题必有 options、≤5 问、≤25 选项、标签 ≤100 字符——宿主工具 schema 里
-  options 可选、web 端出文本输入，无选项开放题是合法且高频的 ask 形态——其中
-  "每题必有 options"一项已被 **16.108 取代**，无选项题现在原生渲染）在 claim
-  **之前**由 `questionBoundsError()`/`questionItemsOf()` 预检（与 `open()` 共用同
-  一纯函数，结构上不可漂移），不可渲染批次整体 passthrough + 线程投一条
+  边界（≤5 问 / ≤24 选项 / 标签 ≤100 字符；最初还有"每题必有 options"和 25 选项，
+  其中"每题必有 options"已被 **16.108** 取消、选项上限同批收窄到 24——宿主工具
+  schema 里 options 可选、web 端出文本输入，无选项开放题是合法且高频的 ask 形态）
+  在 claim **之前**由 `questionBoundsError()`/`questionItemsOf()` 预检（与 `open()`
+  共用同一纯函数，结构上不可漂移），不可渲染批次整体 passthrough + 线程投一条
   `questionWebOnlyNotice` 双语系统行——判例来源 issue #12：claim 后拒收 = 活的宿主
   Promise 搁浅（无控件/无 store 记录/sweep 不可见，legacy 模式永续 typing）。兜底：
   open 拒收若因漂移再现，直调 cancelPort 取消所属 turn（拒收无记录，abandon 的
@@ -191,7 +195,8 @@ dsh plugin --profile web add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   非 custom 值记进 **registry context**（`otherPicks`，与 `questionId` 同级，仍走 opaque
   custom_id 不上 wire），modal submit 时 `selected: [...otherPicks]`。单选取 Other 时
   filter 后天然为空数组，无需分支。伪造的 picks 仍受 `validateDraftAnswer` 的 label
-  集合校验兜底，绕不过去。
+  集合校验兜底，绕不过去。**版本锚点**：16.108 = 0.6.7；16.109 + 16.110 同船
+  发 **0.6.8**（issue #12 的修复就在这条船上）
 - 权限预设三档 `read-only` / `workspace-write` / `danger-full-access`（沙箱+审批
   捆绑）。读 = `permissionPresets.catalog()` + `observeSession` 的 permissions
   投影 `{currentValue}`；写 = 宿主唯一认可的 `/permission` 命令路径：
@@ -375,7 +380,7 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
 - 测试宿主端口换 3081 以外时记得同步 `real-machine-full.sh` 的 TRACE 默认值
   与 `devtools-chrome.sh` 的 HOST_URL
 
-**0.2.2-rc.1 审计（2026-11-04，next 通道；0.6.5 去依赖版矩阵已 bump 待发）**：
+**0.2.2-rc.1 审计（2026-11-04，next 通道；0.6.5 起依赖矩阵钉在 0.2.2-rc.1）**：
 
 - 审计 **51 OK 零漂移**；CLI（npm 全局 `/opt/homebrew`）已升 0.2.2-rc.1。注意 npm
   全局升级可能留 `.dsh-XXXX` 临时 bin 链接导致 `dsh` 命令消失——重装同版本即修
@@ -396,9 +401,13 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   **stable**——0.6.5→0.6.6 的 lib 代码零变化（仅 devDeps 矩阵/locale meta/详情页
   文档/图标），运行时唯一变化 schemastery 3.18.5→3.19.0 的 lib 逐字节相同，双宿主
   线（0.2.1 latest / 0.2.2 next）审计全绿 + 隔离冒烟双过——零行为风险；且 star
-  引流 CTA 的受众在 `latest` 通道，-rc 只上 `next` 到不了下载用户。**0.2.2 宿主的
-  全功能真机 CDP 验证仍欠着**（desktop profile 停机窗口），作为独立 follow-up 不
-  阻塞发版——若真机验证发现 0.2.2 线问题，按矩阵规则再发 0.6.7
+  引流 CTA 的受众在 `latest` 通道，-rc 只上 `next` 到不了下载用户。
+- **0.2.2 线真机现状（2026-11-08 更新）**：`real-machine-full.sh` 的**全功能矩阵**
+  仍停在 0.2.1-rc.5 那次（5/6 阶段 + mention 人工判）——0.2.2 线没重跑，这个欠账
+  还在；但**改动面已在 0.2.2-rc.1 上真机验过**（0.6.8 / web-test：select → 多选
+  勾选 + Other → modal 提交 → 批量整表退场 → 宿主续跑，每步断言，见 16.109/16.110
+  的真机块）。未覆盖的是会话/队列/中断这些**本次未动**的面——按矩阵规则，它们若
+  在重跑中暴露 0.2.2 线问题，走下一个 patch 版修，不回滚矩阵
 - **判例（2026-11-05 真机，desktop auto-update 到 0.2.2-rc.1 后触发）**：0.2.2 的
   插件管理器更新流会**热切换 fiber**（旧 fiber 卸载 → 新 fiber 同进程激活；0.2.1
   是重启制）——插件 `apply()` 里任何 `webServer.register()` **必须返回 disposer**
@@ -408,8 +417,19 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   实例：dsh-3d-model-viewer 0.4.1 的 exact route 无清理 → desktop 上更新被拒，
   0.4.2 返回 disposer 修复；本插件无此问题（installAdapterStatusRpc 走 ctx.effect）
 - **Desktop 已 auto-update 到 0.2.2-rc.1（2026-11-05 核实）**——README 配对表的
-  "0.2.1 线"表述滞后于真实桌面生态；0.6.6 在 0.2.2-rc.1 上隔离冒烟已过，desktop
-  真机全量验证仍待做
+  "0.2.1 线"表述当时滞后于真实桌面生态；2026-11-08 已把配对表改成
+  `0.6.8` / `0.2.2-rc.1`
+- **发版记录（0.6.7 stable，2026-11-07）**：16.108 取消"不可渲染就转 web"的
+  绕行——无选项开放题改为原生渲染（custom-text modal 承接），同时把选项上限
+  收到 24、删掉"每题必有 options"的前置假设。真机基线：web-test @ Bot Test
+  Server，无选项题当场出 modal
+- **发版记录（0.6.8 stable，2026-11-07）**：修 issue #12——type-9 回调漏发
+  `data.title`，Discord 直接 400 丢弃交互（无 modal、无 ephemeral 报错、无日志），
+  症状就是"点了没反应"；同时修多选 + Other 把已勾项吞掉。配套 `modalLine()`
+  兜住 45 字符上限（旧代码把 raw `question.header` 塞进 label，长标题同样会炸）。
+  真机验证走 `scripts/devtools-cdp-ask.mjs`（四条路径：多选 + Other、单选 Other、
+  长标题、无选项题），发布后又在 web-test 上装精确版 0.6.8 复验一次——**装发布版
+  复验**这一步不能省，twin 只建模 40060，表单校验它一概不测
 
 - **插件列表显示名/描述/图标（`locale/` meta 约定）**：宿主 `dsh-app-boot` 的
   `readPluginMeta`（`pluginPackages.metaOf`）不执行插件代码、只读静态资源——
@@ -436,7 +456,7 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
 
 ## 测试与联调约定
 
-真机测试铁律（2026-11-07 定稿，违反即重来）：
+### 真机测试铁律（2026-11-07 定稿，违反即重来）
 
 - **CLI = latest 稳定**：`npm view @deepseek-ai/dsh dist-tags` 的 `latest` 对齐
   `dsh --version`；不追 alpha/next（除非明确要求）
@@ -514,14 +534,14 @@ DISCORD_BOT_TOKEN=$(grep -m1 DSH_DISCORD_BOT_TOKEN ~/.dsh/profiles/web-test/.cre
 
 ### 测试纪律
 
-- 纪律：行为变更先写失败测试（RED→GREEN）；wire 形状走 twin E2E，
+- 行为变更先写失败测试（RED→GREEN）；wire 形状走 twin E2E，
   纯逻辑走模块单测
 - twin（discord-digital-twin）**不建模 Discord 表单校验**——nonce 长度这类
   wire 约束 twin 测不出来；wire 契约改动必须真机验证一次
 - twin 的 `waitForMessage` 扫频道全量历史：测试谓词必须跨用例唯一
 - 失败路径的日志必须可观测：失败形态事件升 warn（默认级别可见）
 
-CDP 驱动真机（rc 级验证要求）：
+### CDP 驱动真机（rc 级验证要求）
 
 - Chrome 带 `--remote-debugging-port=9222`；CDP 键盘事件需要页面焦点
   （`Emulation.setFocusEmulationEnabled` + `Page.bringToFront`）；`Input.insertText`
@@ -556,7 +576,8 @@ CDP 驱动真机（rc 级验证要求）：
   pnpm-workspace.yaml 设 `koffi: true`）；中断的 add 留 `package.json.lock`
   僵尸（删锁重试；重跑 add 不补登记 bundle 列表，按 README 手动登记）；
   `@deepseek-ai/dsh-web-app` npm `latest` 是死版本——精确版本号安装
-- 部署目标是 `~/.dsh/profiles/web`；凭据默认在 `~/.dsh/.credentials.yaml`
+- 部署目标是 `~/.dsh/profiles/web-test`（旧测试 profile `web` 停在 0.6.5，别再
+  往里装）；凭据默认在 `~/.dsh/.credentials.yaml`
   （全局共享，勿打印；可按 profile 覆盖，见测试环境清单）；一次性 profile 用完清理
 - **正式 / 测试两套环境靠 profile 级凭据隔离**（2026-11-08 起）：配方与清单见
   「测试与联调约定 → 测试环境 web-test 清单」。一句话版本：web-test 的 patch 里把
@@ -596,9 +617,12 @@ CDP 驱动真机（rc 级验证要求）：
      --remote-debugging-port=9223`（Electron 吃 Chrome 开关）→ **同一套 CDP
      脚本**驱动桌面窗口验证卡片/设置表单（窗口即 web app）；gateway/命令走
      REST + trace 同 CLI 流程
-  4. **单宿主红线加倍**：desktop profile 与 web profile 同用 `~/.dsh`（同凭据
-     槽、同三表）——两个 profile 同时装本插件 + 同 token = gateway 互踢 +
-     三表并发写。验证时只允许一个 profile 启用插件
+  4. **同 token 才是红线**：desktop profile 与 web profile 同用 `~/.dsh`（三表共享，
+     凭据默认也共享）——**同一个 bot token 起两个宿主 = gateway 互踢 + 三表并发写**。
+     自 2026-11-08 起凭据可按 profile 隔离，于是"两个 profile 各用各的 bot"合法且
+     已在正式/测试上常态运行；仍禁止的是同一 token 双启（互踢后宿主还有"1006 后
+     零重连"缺陷）。验证要求因此从"只允许一个 profile 启用插件"放宽为
+     "两个都启用时必须 bot 不同 + guild 白名单不重叠"
 
 ## dsh 官方版本升级 playbook
 
@@ -622,8 +646,9 @@ scripts/host-surface-audit.sh --latest            # 审计 stable
 
 ### 已固化的规则（0.1.6 迁移踩出来的）
 
-- **宿主接触面只允许出现在 3 个文件**：`host-face.ts`（RPC）、`host-events.ts`（事件）、
-  `host-asks.ts`（审批/提问）——新增接触点必须同步 startup.ts 契约探针
+- **宿主接触面只允许出现在 3 个文件**：`src/dsh/host-face.ts`（RPC）、
+  `src/dsh/host-events.ts`（事件）、`src/dsh/host-asks.ts`（审批/提问）——新增接触点
+  必须同步 startup.ts 契约探针
 - **方法签名不许凭类型推导**：signal 位置/必填性/返回形状逐个真机核实后记入上方事实表
 - **任何 `ctx.on` / `ctx.inject` 的运行时行为先探针后编码**（runtime inject 对已启动
   插件是静默 no-op；作用域 waterfall 对外部插件不可达）
@@ -645,6 +670,8 @@ scripts/host-surface-audit.sh --latest            # 审计 stable
 
 - 行为变更 = `tasks.md` 加编号条目（16.x，含决策人与理由）+ `design.md`
   对应章节 + `specs/<capability>/spec.md` 同步；`openspec/` 不入库（本地）
-- 提交遵循 conventional commits；发布 = `npm version <level> &&
-  git push --follow-tags`，GitHub Actions 自动 npm publish
+- 提交遵循 conventional commits；发布 = `npm version <level> -m "%s" &&
+  git push --follow-tags`（`-m "%s"` 不加会让提交/tag 注释带 `v` 前缀，与历史
+  `0.6.8` 这类消息不一致；tag 名本身仍是 `v<ver>`），GitHub Actions 自动
+  npm publish（OIDC，无 token）
 - README.md / README.zh.md 双语同步；命令表、已知限制随命令面变化更新
