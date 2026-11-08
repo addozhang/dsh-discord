@@ -498,16 +498,31 @@ CDP 驱动真机（rc 级验证要求）：
   pnpm-workspace.yaml 设 `koffi: true`）；中断的 add 留 `package.json.lock`
   僵尸（删锁重试；重跑 add 不补登记 bundle 列表，按 README 手动登记）；
   `@deepseek-ai/dsh-web-app` npm `latest` 是死版本——精确版本号安装
-- 部署目标是 `~/.dsh/profiles/web`；凭据在 `~/.dsh/.credentials.yaml`
+- 部署目标是 `~/.dsh/profiles/web`；凭据默认在 `~/.dsh/.credentials.yaml`
   （全局单槽，勿打印）；一次性 profile 用完清理
-- **真机测试借用生产 bot 后必须还原凭据槽**（2026-11-08 事故）：测试用另一个
-  bot 时把 `DSH_DISCORD_BOT_TOKEN` 换掉，测完忘了还原 → 桌面端重启后连的是测试
-  bot，而它不在用户服务器里，表现是「Discord 发消息完全没反应」（连 gateway
-  MESSAGE_CREATE 都收不到，日志干净得像个新装的插件）。收尾必做两步：
-  ① 从 `.credentials.yaml.bak-*` 还原并核对 `/users/@me` 的身份；
-  ② 用 `/users/@me/guilds` 确认该 bot 在 `cordis.patch.yml` 的
-  `allowedGuildIds` 里。凭据是启动时读入内存的，**改完必须重启宿主**
-  （桌面端由人手动重启：`open -a` 在自动化 shell 里静默失败，别反复试）
+- **正式 / 测试两套环境用 profile 级凭据隔离**（2026-11-08 起）：
+  `dsh-credentials-local` 的 config 支持 `path`（`resolveSpec`：
+  `config.path ?? <dshHome>/.credentials.yaml`），profile patch 可以 id 定向覆盖，
+  所以 web-test 用自己那份文件，桌面端继续用全局那份，两个 bot 并存、互不影响：
+
+  ```yaml
+  # ~/.dsh/profiles/web-test/cordis.patch.yml
+  - id: credentials
+    config:
+      path: /Users/addo/.dsh/profiles/web-test/.credentials.yaml
+  ```
+
+  该文件必须是 **600**（provider 会拒绝 group/other 可读的凭据文档），内容为全局
+  文件的副本 + 只替换 `DSH_DISCORD_BOT_TOKEN`。分配：桌面端（正式）→ 全局文件、
+  `dsh` bot（Agents Hub 1517134847850709032）；web-test → profile 文件、`DSH Test`
+  bot（Bot Test Server 1562450757805146123）。测试脚本取 token 一律读
+  **profile 文件**，别读全局那份
+- **凭据是启动时读进内存的，换 token 必须重启宿主**（桌面端人工重启：
+  `open -a` 在自动化 shell 里静默失败，要用 Finder 的 AppleScript 或让用户点）
+- 事故存档（2026-11-08）：上面这层隔离之前，测试时覆盖了全局槽位又忘了还原，
+  桌面端重启后连的是测试 bot，而它不在用户服务器里 → 表现是「Discord 发消息
+  完全没反应」（gateway 连 `MESSAGE_CREATE` 都收不到，日志干净得像插件没装）。
+  排查口径：先 `/users/@me` 看身份，再 `/users/@me/guilds` 比 `allowedGuildIds`
 
 ### Desktop 形态（2026-10-06 实测本机 /Applications/DeepSeek Harness.app）
 
