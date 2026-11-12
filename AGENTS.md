@@ -74,7 +74,7 @@ dsh plugin --profile web-test add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   需要收紧时再改
 - **控制频道（类目下 general）**不承载会话，也不参与 /session resume
 
-## Host 面事实（0.2.2-rc.1 线；2026-10-06 起逐线真机核实；旧线判例保留）
+## Host 面事实（0.2.2-rc.2 线；2026-10-06 起逐线真机核实；旧线判例保留）
 
 ### 服务与调用面
 
@@ -402,12 +402,13 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   文档/图标），运行时唯一变化 schemastery 3.18.5→3.19.0 的 lib 逐字节相同，双宿主
   线（0.2.1 latest / 0.2.2 next）审计全绿 + 隔离冒烟双过——零行为风险；且 star
   引流 CTA 的受众在 `latest` 通道，-rc 只上 `next` 到不了下载用户。
-- **0.2.2 线真机现状（2026-11-08 更新）**：`real-machine-full.sh` 的**全功能矩阵**
-  仍停在 0.2.1-rc.5 那次（5/6 阶段 + mention 人工判）——0.2.2 线没重跑，这个欠账
-  还在；但**改动面已在 0.2.2-rc.1 上真机验过**（0.6.8 / web-test：select → 多选
-  勾选 + Other → modal 提交 → 批量整表退场 → 宿主续跑，每步断言，见 16.109/16.110
-  的真机块）。未覆盖的是会话/队列/中断这些**本次未动**的面——按矩阵规则，它们若
-  在重跑中暴露 0.2.2 线问题，走下一个 patch 版修，不回滚矩阵
+- **0.2.2 线真机现状（2026-11-13 更新，欠账已清）**：`real-machine-full.sh`
+  **6/6 全功能矩阵已在 0.2.2-rc.2 上跑通**（REST smoke 9/9、ack ×3、bind 流、
+  mention E2E 线程→工具行→流式→finalize、trace hygiene 零失败形态），会话/队列/
+  中断面一并覆盖——此前停在 0.2.1-rc.5 那次（5/6 阶段 + mention 人工判）的欠账
+  就此结清，详见下方「0.2.2-rc.2 审计与真机验证」。0.6.8 的改动面（ask 全链路）
+  另在 rc.1 上真机验过（select → 多选勾选 + Other → modal 提交 → 批量整表退场 →
+  宿主续跑，每步断言，见 16.109/16.110 的真机块）
 - **判例（2026-11-05 真机，desktop auto-update 到 0.2.2-rc.1 后触发）**：0.2.2 的
   插件管理器更新流会**热切换 fiber**（旧 fiber 卸载 → 新 fiber 同进程激活；0.2.1
   是重启制）——插件 `apply()` 里任何 `webServer.register()` **必须返回 disposer**
@@ -430,6 +431,32 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   真机验证走 `scripts/devtools-cdp-ask.mjs`（四条路径：多选 + Other、单选 Other、
   长标题、无选项题），发布后又在 web-test 上装精确版 0.6.8 复验一次——**装发布版
   复验**这一步不能省，twin 只建模 40060，表单校验它一概不测
+
+**0.2.2-rc.2 审计与真机验证（2026-11-13，next 通道；CLI 已升 rc.2）**：
+
+- 版本判读：`latest` 仍 = 0.2.2-rc.1（11-04），最新发布 = 0.2.2-rc.2（11-12，
+  仅 `next`）。用户确认 CLI 保持 rc.2（例外见「真机测试铁律」），桌面端 App 不动
+  （asar 内嵌核心不随全局 CLI 变，仍 0.2.2-rc.1）
+- **升级踩坑（新判例）**：PATH 里的 `npm`/`node` 是 WorkBuddy 自带的 22.22.2
+  （prefix `~/.workbuddy/binaries/node/versions/22.22.2-6`），而 `dsh` 指向
+  `/opt/homebrew/bin/dsh`。直接 `npm i -g` 只装进 WorkBuddy prefix，
+  `dsh --version` 纹丝不动 → 必须 `/opt/homebrew/bin/npm i -g
+  @deepseek-ai/dsh@<ver>`；误装的副本要卸掉，否则 PATH 里两份 bin 链接。
+  rc.1/rc.2 的 engines 都是 `>=24.9.0`，node 22 只报 EBADENGINE（历史如此，
+  宿主实跑正常），**不是 rc.2 新增要求**
+- 审计 **51 OK 零漂移**（rc.2 与 `--latest` 双线）；依赖矩阵 rc.1→rc.2：内部包
+  整体 bump，cordis 4.1.0 / schemastery 3.19.0 不变；sessionController host 面
+  10 个方法签名逐字相同、事件帧计数一致；`client.js` 是内部 module-loader 重构
+  （src 零引用，插件只经 host-face 服务面）。门禁只查 `engines.dsh` /
+  `@deepseek-ai/dsh-*` peer，插件两者皆无（peer 仅 cordis ^4.0.3）
+- 本地 typecheck / lint / build / **841 测试**全绿；rc.2 CLI + web-test 0.6.8
+  实跑：零门禁/零 pending、`adapter.status` RPC 200（`token: configured,
+  connection: connected`）、REST smoke 9/9、`real-machine-full.sh` **6 passed /
+  0 failed**（ack 305/299/287ms）
+- **不发版结论（2026-11-13 用户确认）**：运行时代码零变化，0.6.5+ 去依赖化后
+  patch 级宿主 bump 不再触发门禁；配对表只做文档同步（README 双语），不产
+  0.6.9 空版本。发版触发条件 = 审计出现 MISSING/CHANGED、插件自身功能/修复、
+  或宿主跨 minor 线需重钉 devDeps 矩阵
 
 - **插件列表显示名/描述/图标（`locale/` meta 约定）**：宿主 `dsh-app-boot` 的
   `readPluginMeta`（`pluginPackages.metaOf`）不执行插件代码、只读静态资源——
@@ -460,6 +487,10 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
 
 - **CLI = latest 稳定**：`npm view @deepseek-ai/dsh dist-tags` 的 `latest` 对齐
   `dsh --version`；不追 alpha/next（除非明确要求）
+- **当前例外（2026-11-13 用户确认）**：为验证 dsh `0.2.2-rc.2`（`next` 通道）
+  兼容性，CLI **保持 rc.2**，不与 `latest`（rc.1）对齐，无需回退。桌面端 App
+  自带核心不受影响。回基线：`/opt/homebrew/bin/npm i -g
+  @deepseek-ai/dsh@0.2.2-rc.1`
 - **环境三件套**：CLI 宿主 + `web-test` profile + 调试 Chrome（9222）；测试
   guild = **Bot Test Server**（1562450757805146123），bot = **DSH Test**
   （app 1550676723773739048）；token 读 profile 自己的凭据文件（见下节清单），
