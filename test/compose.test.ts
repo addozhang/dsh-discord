@@ -171,6 +171,38 @@ describe('composed adapter runtime', () => {
     expect(admitMention).not.toHaveBeenCalled()
   })
 
+  it('ignores a thread-rename system message in an adapter-owned thread', async () => {
+    const { continueInThread, gatewaySocketRef } = setup('token-abc', {
+      workspaceForChannel: () => undefined,
+      sessionForThread: (_guildId, threadId) => threadId === '444444444444444444' ? 'sess-9' : undefined,
+    })
+    await vi.waitFor(() => { expect(gatewaySocketRef.current).toBeDefined() })
+    gatewaySocketRef.current?.onopen?.()
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({ op: 10, d: { heartbeat_interval: 30_000 } }))
+
+    // A rename carries content and an ordinary author; without the message-type
+    // filter the bound thread queues it as a continuation (issue #17).
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({
+      op: 0,
+      t: 'MESSAGE_CREATE',
+      s: 3,
+      d: dispatchMessage({ type: 4, content: 'Main' }).d,
+    }))
+    // A real follow-up proves the dispatch loop stayed healthy afterwards.
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({
+      op: 0,
+      t: 'MESSAGE_CREATE',
+      s: 4,
+      d: dispatchMessage({ id: '222222222222222223', content: 'real follow-up' }).d,
+    }))
+
+    await vi.waitFor(() => { expect(continueInThread).toHaveBeenCalledTimes(1) })
+    expect(continueInThread.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: 'sess-9',
+      prompt: 'real follow-up',
+    })
+  })
+
   it('admits an image-only mention: empty text with a supported attachment reaches the mainline', async () => {
     const { admitMention, gatewaySocketRef } = setup('token-abc', undefined)
     await vi.waitFor(() => { expect(gatewaySocketRef.current).toBeDefined() })

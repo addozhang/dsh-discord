@@ -23,6 +23,17 @@ const SUPPORTED_EVENTS = new Set(['MESSAGE_CREATE', 'INTERACTION_CREATE'])
 /** Interaction types the adapter consumes (2=command, 3=component, 4=autocomplete, 5=modal). */
 const SUPPORTED_INTERACTION_TYPES = new Set([2, 3, 4, 5])
 
+/**
+ * Discord's "basic messages": the only message types a member can actually
+ * author. Every other type is a channel/thread metadata event (renames, pin
+ * notices, join notices, boost tiers, AutoMod actions, …) that Discord still
+ * posts as a MESSAGE_CREATE with a non-empty `content` and a human-looking
+ * `author`. Compare Discord's Message Types table at
+ * https://docs.discord.com/developers/resources/message — 0 DEFAULT,
+ * 19 REPLY, 20 CHAT_INPUT_COMMAND, 23 CONTEXT_MENU_COMMAND.
+ */
+const USER_MESSAGE_TYPES: ReadonlySet<number> = new Set([0, 19, 20, 23])
+
 /** Raw untrusted dispatch: an event name plus its unvalidated payload. */
 export interface GatewayDispatch {
   t: string
@@ -30,7 +41,12 @@ export interface GatewayDispatch {
 }
 
 /** Why a dispatch was rejected; discrimination keeps rejection handling total. */
-export type IngestRejectReason = 'unsupported-event' | 'malformed-payload' | 'bot-authored' | 'non-guild-event'
+export type IngestRejectReason =
+  | 'unsupported-event'
+  | 'malformed-payload'
+  | 'bot-authored'
+  | 'non-guild-event'
+  | 'system-message'
 
 export type IngestResult =
   | { accepted: true; event: NormalizedMessage | NormalizedInteraction }
@@ -162,6 +178,17 @@ function extractImages(payload: Record<string, unknown>): DiscordImageAttachment
 }
 
 function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowflake): IngestResult {
+  // Discord system messages are channel metadata events, not member input.
+  // They carry `content` and a human `author`, so none of the guards below can
+  // catch them — a bound thread would otherwise submit a thread rename as a
+  // prompt (issue #17). A missing `type` stays acceptable for the internal
+  // fixtures/twin; Discord always sends the field on the real wire.
+  const messageType = payload['type']
+  if (messageType !== undefined) {
+    if (typeof messageType !== 'number') return { accepted: false, reason: 'malformed-payload' }
+    if (!USER_MESSAGE_TYPES.has(messageType)) return { accepted: false, reason: 'system-message' }
+  }
+
   // Webhook-authored messages are app-driven surfaces, not member input:
   // their author object need not carry `bot: true`, and anyone with
   // Manage Webhooks could otherwise drive prompts through one.

@@ -72,6 +72,15 @@ dsh plugin --profile web-test add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   按线程绑定授权（线程内任意 member 可操作当前 turn）——单人/小团队场景的
   共享驾驶舱模型，有意与 ask 流的 asker-or-thread-owner 不对称；多人 guild
   需要收紧时再改
+- **入站只认成员可撰写的基本消息（16.111，2026-11-14 决策，addo；issue #17）**：
+  `src/gateway/inbound.ts` 的 `parseMessage()` 按 `payload.type` 只放行 Discord basic
+  messages `{0 DEFAULT, 19 REPLY, 20 CHAT_INPUT_COMMAND, 23 CONTEXT_MENU_COMMAND}`，
+  其余 `system-message` 拒收，缺失 `type` 放行（内部 fixture / twin 兼容）。绑定线程在
+  `routeEvent` 里**不要求 mention**，而系统消息（改名 4 / 置顶 6 / 建线程 18 …）带
+  非空 content + 类人 author，旧守卫全放行 → 线程名会被当 prompt 跑一个 turn。
+  **21 THREAD_STARTER_MESSAGE 不是用户消息**：官方明确 never have content，真机 REST
+  抽样亦为 `type:21, content:"", author=bot`；issue 建议保留 21 无依据，其类型表还漏
+  23、把 18 误记成 auto-mod。规格见 `openspec/specs/discord-transport/spec.md`
 - **控制频道（类目下 general）**不承载会话，也不参与 /session resume
 
 ## Host 面事实（0.2.2-rc.2 线；2026-10-06 起逐线真机核实；旧线判例保留）
@@ -453,10 +462,36 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   实跑：零门禁/零 pending、`adapter.status` RPC 200（`token: configured,
   connection: connected`）、REST smoke 9/9、`real-machine-full.sh` **6 passed /
   0 failed**（ack 305/299/287ms）
-- **不发版结论（2026-11-13 用户确认）**：运行时代码零变化，0.6.5+ 去依赖化后
-  patch 级宿主 bump 不再触发门禁；配对表只做文档同步（README 双语），不产
-  0.6.9 空版本。发版触发条件 = 审计出现 MISSING/CHANGED、插件自身功能/修复、
-  或宿主跨 minor 线需重钉 devDeps 矩阵
+- **rc.2 那次不发版（2026-11-13 用户确认）**：运行时代码零变化，0.6.5+ 去依赖化
+  后 patch 级宿主 bump 不再触发门禁；配对表只做文档同步（README 双语），不产空
+  版本。发版触发条件 = 审计出现 MISSING/CHANGED、插件自身功能/修复、或宿主跨
+  minor 线需重钉 devDeps 矩阵（**2026-11-14 因 issue #17 运行时修复命中第一条，
+  已发 0.6.9**）
+
+**0.2.2-rc.3 审计与跟随（2026-11-14，next 通道；CLI 已升 rc.3）**：
+
+- dist-tags：`latest` 仍 rc.1、`next` = rc.3（11-13）。审计 rc.3 与 `--latest`
+  双线 **51 OK 零漂移**；宿主内部包整体 rc.1→rc.3，cordis 4.1.0 /
+  schemastery 3.19.0 不变
+- **跟随配方（16.112，2026-11-14，addo）**：devDependencies 7 个 dsh 类型包
+  rc.1 → rc.3，`zod` 由 `^4.4.3` 精确钉 **4.6.6**。判例：**宿主自 0.2.2-rc.2
+  起把 zod 从 4.4.3 升到 4.6.6**（rc.1 仍是 4.4.3）；插件不跟随会同时存在两份
+  `ZodType`，typecheck/build 报 TS2739「missing validate / validateAsync」
+  （`src/state/domain.ts` 的 `domainTable` 类型链）。11-13 只升 CLI 未跟随
+  devDeps 故未暴露。spiceflow/twin 自带 4.4.3 不参与类型链，无害
+- 本地 typecheck / lint / build / **845 测试**全绿
+- 真机（rc.3 CLI + web-test 装本地构建）：`real-machine-full.sh` **5/6**——
+  REST smoke 9/9、ack ×3 ~300ms、mention E2E 全链 + trace hygiene 零失败形态
+  均过；唯一 bind stage 是**环境幂等**：11-13 矩阵已把 `abctab-internal` 绑定，
+  脚本注释本就写明 `UNBOUND_CHANNEL ... it WILL be bound`，冷启动标签的
+  autocomplete 又读不到选项 → 非 rc.3 回归。绑定数据面核实 12 条
+  channel_bindings / 43 条 thread_bindings 正常加载
+- **issue #17 真机专项 PASS**：REST 重命名绑定会话线程 → Discord 真实推
+  `type:4` 系统消息（content = 新名字）→ 线程内除该条外零 bot 消息、trace
+  增量零 continuation/turn 帧，线程名已还原。注意用 bot token 改名时系统消息
+  author 就是 bot，**人改名的场景由单测覆盖**；连续 PATCH 会撞 Discord 429
+  （retry_after 可达 ~170s），专项脚本需带重试
+- **发版 0.6.9** = 系统消息过滤 + devDeps 矩阵跟随 rc.3 + zod 钉 4.6.6
 
 - **插件列表显示名/描述/图标（`locale/` meta 约定）**：宿主 `dsh-app-boot` 的
   `readPluginMeta`（`pluginPackages.metaOf`）不执行插件代码、只读静态资源——

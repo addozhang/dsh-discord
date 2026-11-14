@@ -90,6 +90,62 @@ describe('parseGatewayDispatch', () => {
     })
   })
 
+  // Discord posts channel-metadata events as messages that carry a non-empty
+  // `content` and a human-looking `author`, so every other guard lets them
+  // through. Only the four "basic message" types Discord defines as
+  // forwardable may reach the prompt path (issue #17).
+  it('rejects system message types before they can become prompts', () => {
+    const systemTypes: Array<[number, string]> = [
+      [1, 'RECIPIENT_ADD'],
+      [2, 'RECIPIENT_REMOVE'],
+      [3, 'CALL'],
+      [4, 'CHANNEL_NAME_CHANGE'],
+      [5, 'CHANNEL_ICON_CHANGE'],
+      [6, 'CHANNEL_PINNED_MESSAGE'],
+      [7, 'USER_JOIN'],
+      [8, 'GUILD_BOOST'],
+      [12, 'CHANNEL_FOLLOW_ADD'],
+      [18, 'THREAD_CREATED'],
+      [21, 'THREAD_STARTER_MESSAGE'],
+      [22, 'GUILD_INVITE_REMINDER'],
+      [24, 'AUTO_MODERATION_ACTION'],
+      [46, 'POLL_RESULT'],
+    ]
+    for (const [type, name] of systemTypes) {
+      const result = parseGatewayDispatch(
+        messageDispatch(messagePayload({ type, content: 'Main' })),
+        SELF_USER_ID,
+      )
+      expect(result, name).toEqual({ accepted: false, reason: 'system-message' })
+    }
+  })
+
+  it('keeps member-authored basic messages and fixtures that omit the type', () => {
+    const acceptedTypes: Array<[number | undefined, string]> = [
+      [0, 'DEFAULT'],
+      [19, 'REPLY'],
+      [20, 'CHAT_INPUT_COMMAND'],
+      [23, 'CONTEXT_MENU_COMMAND'],
+      [undefined, 'type omitted (legacy test fixtures)'],
+    ]
+    for (const [type, name] of acceptedTypes) {
+      const payload = type === undefined
+        ? messagePayload({ content: 'hello' })
+        : messagePayload({ type, content: 'hello' })
+      const result = parseGatewayDispatch(messageDispatch(payload), SELF_USER_ID)
+      if (!result.accepted) throw new Error(`${name} should be accepted, got ${result.reason}`)
+      expect(result.event.kind === 'message' && result.event.content).toBe('hello')
+    }
+  })
+
+  it('rejects a non-numeric message type as malformed', () => {
+    const result = parseGatewayDispatch(
+      messageDispatch(messagePayload({ type: '4' })),
+      SELF_USER_ID,
+    )
+    expect(result).toEqual({ accepted: false, reason: 'malformed-payload' })
+  })
+
   it('normalizes a reply reference when present and valid', () => {
     const result = parseGatewayDispatch(
       messageDispatch(messagePayload({
