@@ -82,6 +82,30 @@ dsh plugin --profile web-test add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   抽样亦为 `type:21, content:"", author=bot`；issue 建议保留 21 无依据，其类型表还漏
   23、把 18 误记成 auto-mod。规格见 `openspec/specs/discord-transport/spec.md`
 - **控制频道（类目下 general）**不承载会话，也不参与 /session resume
+- **单写者 Session 是产品定位，不是实现边界（16.113，2026-11-15 决策，addo；
+  issue #13/#16）**：dsh-discord 是**单人 DSH 的 adapter** —— 一个 bot token ↔ 一个
+  host fiber（同 token 双启会 gateway 互踢，见「凭据红线」），而 DSH 的 Session 模型
+  没有「用户」维度（`session.create({workspaceId, sessionId})` 无 userId；
+  `session.prompt` content parts 只有 text/image；`source.rpcId` 是幂等键不是身份；
+  per-Workspace ACL 是 Non-Goal；`openspec/.../2026-09-01-.../design.md:23` Goals
+  明写 "single-writer Session semantics"，但 specs 里无对应 requirement）。
+  **会话输入不携带 Discord 用户身份是设计前提，不是缺陷**：#16（多人线程分不清
+  发言人）与 #13（跟帖者不能代答 Allow once）同属圈外的「多人会话」，**勿按 bug 修，
+  更勿给 prompt 加名字前缀** —— 那等于承认多人共用合法，会逼出 owner 判定
+  （hostOperator / isGuildOwner / createdBy 三者互不等价，都不是 bot owner）、准入
+  （@ vs 线程内自动）、回应范围，以及最关键的「一 user 一 session 还是共享
+  session」（后者要 DSH 侧先有身份模型）。**但实现并未强制单写者**：
+  `policy/guard.ts` 只查 guild 白名单 + member 授权，`compose.ts:159-171` 绑定线程
+  分支不比较 `authorId` 与 `createdBy`，任意授权成员的 content 会**静默跑一个
+  turn**；`createdBy` 只用于 `threadOwner()` / `turnActors` / `joinThread()`。
+  三个身份面刻意不对称（写 prompt = 授权成员，答 ask = asker-or-thread-owner，
+  turn 控制 = 线程共享面）。若坚持单人定位应补路由层边界 + 非属主明确提示。
+  **回 issue 措辞**：不能直说「不支持多人」（实现确实允许多个 `memberUserIds` 在
+  同一线程发消息，报告者一句话可推翻），要说「按 single-writer 设计、多人共用不在
+  支持范围，实现边界缺失会补」。
+  README.md / README.zh.md 已统一措辞：共享面只指控制面（/steer、/stop、
+  /queue remove），会话输入按单写者设计、多人共用一个 Session 不在支持范围，
+  并如实标注路由层尚未强制边界；公开回复勿引 openspec 路径（gitignore）。
 
 ## Host 面事实（0.2.2-rc.2 线；2026-10-06 起逐线真机核实；旧线判例保留）
 
