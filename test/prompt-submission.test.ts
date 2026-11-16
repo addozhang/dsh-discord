@@ -146,3 +146,52 @@ describe('prompt submission with images (16.50)', () => {
     expect(submitFn).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('prompt submission with attached file text parts (16.114)', () => {
+  const A = '<<<DSH_ATTACHED_FILE_BEGIN>>>\nnotes.txt\nFILE-A\n<<<DSH_ATTACHED_FILE_END>>>'
+  const B = '<<<DSH_ATTACHED_FILE_BEGIN>>>\nnotes.txt\nFILE-B\n<<<DSH_ATTACHED_FILE_END>>>'
+
+  it('carries textParts to the port and does not invent an images key', async () => {
+    const { flow, submitFn } = setup(() => Promise.resolve({ outcome: 'accepted' }))
+    const result = await flow.submitOnce({ ...REQUEST, textParts: [A] })
+    expect(result).toEqual({ outcome: 'accepted' })
+    expect(submitFn.mock.calls[0]?.[0]).toEqual({
+      requestId: 'req-1',
+      sessionId: 'sess-1',
+      prompt: 'do the thing',
+      mode: 'queue',
+      textParts: [A],
+    })
+  })
+
+  it('dedupes a replay of the same id with the same file text', async () => {
+    const { flow, submitFn } = setup(() => Promise.resolve({ outcome: 'accepted' }))
+    await flow.submitOnce({ ...REQUEST, textParts: [A] })
+    expect(await flow.submitOnce({ ...REQUEST, textParts: [A] })).toEqual({ outcome: 'already-submitted' })
+    expect(submitFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('conflicts when the same id carries different file text', async () => {
+    const { flow, submitFn } = setup(() => Promise.resolve({ outcome: 'accepted' }))
+    await flow.submitOnce({ ...REQUEST, textParts: [A] })
+    expect(await flow.submitOnce({ ...REQUEST, textParts: [B] })).toEqual({ outcome: 'conflict' })
+    expect(submitFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('propagates the Host rejection code so a modality refusal can be explained', async () => {
+    const { flow } = setup(() => Promise.resolve({
+      outcome: 'rejected', reason: 'model does not support image input', code: 'session/attachment-invalid',
+    }))
+    expect(await flow.submitOnce(REQUEST)).toEqual({ outcome: 'rejected', code: 'session/attachment-invalid' })
+  })
+
+  it('propagates the rejection detail through the at-most-once boundary', async () => {
+    const { flow } = setup(() => Promise.resolve({
+      outcome: 'rejected', reason: 'attachment-invalid',
+      code: 'session/attachment-invalid', detail: 'INVALID_IMAGE',
+    }))
+    expect(await flow.submitOnce(REQUEST)).toEqual({
+      outcome: 'rejected', code: 'session/attachment-invalid', detail: 'INVALID_IMAGE',
+    })
+  })
+})

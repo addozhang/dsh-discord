@@ -23,8 +23,30 @@ export interface MainlineWireImage {
   contentType: string
 }
 
+/** Declared text-file metadata as carried on the normalized wire message (16.114). */
+export interface MainlineWireFile {
+  url: string
+  filename: string
+  declaredSize: number
+  contentType: string
+}
+
 /** One collected image, ready for submission. */
 export type MainlineImage = PromptRequestImage
+
+/**
+ * The bounded text-file collection boundary (16.114): declared metadata in,
+ * labelled text parts out. The composition root implements it over the
+ * allowlisted download boundary; this layer never touches the network.
+ */
+export interface MainlineFileCollector {
+  collect(request: {
+    attachments: ReadonlyArray<MainlineWireFile>
+  }): Promise<
+    | { outcome: 'collected'; texts: ReadonlyArray<string> }
+    | { outcome: 'failed'; reason: string }
+  >
+}
 
 /**
  * The bounded collection boundary (design.md §12, 16.50): declared wire
@@ -47,6 +69,7 @@ export interface SessionMainlineDeps {
   prompts: ReturnType<typeof createPromptSubmissionFlow>
   turns: TurnTracker
   images: MainlineImageCollector
+  files: MainlineFileCollector
 }
 
 export type MentionMainlineResult =
@@ -55,9 +78,10 @@ export type MentionMainlineResult =
   | { outcome: 'thread-failed' }
   | { outcome: 'session-rejected' }
   | { outcome: 'session-unknown' }
-  | { outcome: 'prompt-rejected' }
+  | { outcome: 'prompt-rejected'; code?: string; detail?: string }
   | { outcome: 'prompt-unknown' }
   | { outcome: 'image-failed'; reason: string }
+  | { outcome: 'file-failed'; reason: string }
 
 export interface MentionMainlineRequest {
   applicationId: string
@@ -70,15 +94,18 @@ export interface MentionMainlineRequest {
   prompt: string
   /** Declared image attachments (16.50); omitted for text-only mentions. */
   images?: ReadonlyArray<MainlineWireImage>
+  /** Declared text-file attachments (16.114); omitted when none. */
+  files?: ReadonlyArray<MainlineWireFile>
 }
 
 export type ContinuationMainlineResult =
   | { outcome: 'queued' }
   | { outcome: 'already-submitted' }
   | { outcome: 'conflict' }
-  | { outcome: 'rejected' }
+  | { outcome: 'rejected'; code?: string; detail?: string }
   | { outcome: 'unknown' }
   | { outcome: 'image-failed'; reason: string }
+  | { outcome: 'file-failed'; reason: string }
 
 export interface ContinuationMainlineRequest {
   applicationId: string
@@ -89,6 +116,8 @@ export interface ContinuationMainlineRequest {
   prompt: string
   /** Declared image attachments (16.50); omitted for text-only messages. */
   images?: ReadonlyArray<MainlineWireImage>
+  /** Declared text-file attachments (16.114); omitted when none. */
+  files?: ReadonlyArray<MainlineWireFile>
 }
 
 /**
@@ -110,7 +139,29 @@ function mapSubmission(result: PromptSubmissionResult): ContinuationMainlineResu
   if (result.outcome === 'already-submitted') return { outcome: 'already-submitted' }
   if (result.outcome === 'conflict') return { outcome: 'conflict' }
   if (result.outcome === 'unconfirmed') return { outcome: 'unknown' }
-  return result.outcome === 'rejected' ? { outcome: 'rejected' } : { outcome: 'unknown' }
+  if (result.outcome === 'rejected') {
+    return {
+      outcome: 'rejected',
+      ...(result.code === undefined ? {} : { code: result.code }),
+      ...(result.detail === undefined ? {} : { detail: result.detail }),
+    }
+  }
+  return { outcome: 'unknown' }
+}
+
+/**
+ * Collect the request's declared text files through the bounded boundary.
+ * A text-only request never touches the collector; a failed collection is a
+ * first-class outcome so no silently degraded submission is sent.
+ */
+async function collectRequestFiles(
+  deps: SessionMainlineDeps,
+  files: ReadonlyArray<MainlineWireFile>,
+): Promise<{ outcome: 'collected'; texts: ReadonlyArray<string> } | { outcome: 'file-failed'; reason: string }> {
+  if (files.length === 0) return { outcome: 'collected', texts: [] }
+  const collected = await deps.files.collect({ attachments: files })
+  if (collected.outcome !== 'collected') return { outcome: 'file-failed', reason: collected.reason }
+  return collected
 }
 
 /**
@@ -137,16 +188,19 @@ export function createSessionMainline(deps: SessionMainlineDeps): {
   return {
     async admitMention(request) {
       const declaredImages = request.images ?? []
+      const declaredFiles = request.files ?? []
       const images = await collectRequestImages(deps, declaredImages)
       if (images.outcome !== 'collected') return images
+      const files = await collectRequestFiles(deps, declaredFiles)
+      if (files.outcome !== 'collected') return files
 
       // The source message id is the durable intent: one thread per message,
       // deterministic recovery on redelivery (design.md §4, §10). An
-      // image-only mention names the thread after its first image's filename.
-      const title = request.prompt !== '' ? request.prompt : (declaredImages[0]?.filename ?? '')
+      // attachment-only mention names the thread after its first file's name.
+      const title = request.prompt !== '' ? request.prompt : (declaredImages[0]?.filename ?? declaredFiles[0]?.filename ?? '')
       const thread: ThreadCreationResult = await deps.threads.ensureThread({
         sourceMessageId: request.messageId,
-        contentHash: await hashPayload({ prompt: request.prompt, images: declaredImages }),
+        contentHash: await hashPayload({ prompt: request.prompt, images: declaredImages, files: declaredFiles }),
         guildId: request.guildId,
         parentChannelId: request.channelId,
         threadName: safeTitle(title),
@@ -175,6 +229,7 @@ export function createSessionMainline(deps: SessionMainlineDeps): {
         sessionId,
         prompt: request.prompt,
         ...(images.images.length > 0 ? { images: images.images } : {}),
+        ...(files.texts.length > 0 ? { textParts: files.texts } : {}),
       })
       if (submitted.outcome === 'accepted') {
         ownTurn(deps, { sessionId, requestId, threadId })
@@ -193,12 +248,21 @@ export function createSessionMainline(deps: SessionMainlineDeps): {
         return { outcome: 'prompt-unknown' }
       }
       if (submitted.outcome === 'conflict') return { outcome: 'thread-conflict' }
-      return submitted.outcome === 'rejected' ? { outcome: 'prompt-rejected' } : { outcome: 'prompt-unknown' }
+      if (submitted.outcome === 'rejected') {
+        return {
+          outcome: 'prompt-rejected',
+          ...(submitted.code === undefined ? {} : { code: submitted.code }),
+          ...(submitted.detail === undefined ? {} : { detail: submitted.detail }),
+        }
+      }
+      return { outcome: 'prompt-unknown' }
     },
 
     async continueInThread(request) {
       const images = await collectRequestImages(deps, request.images ?? [])
       if (images.outcome !== 'collected') return images
+      const files = await collectRequestFiles(deps, request.files ?? [])
+      if (files.outcome !== 'collected') return files
 
       const requestId = requestIdFor(request.messageId)
       const submitted = await deps.prompts.submitOnce({
@@ -206,6 +270,7 @@ export function createSessionMainline(deps: SessionMainlineDeps): {
         sessionId: request.sessionId,
         prompt: request.prompt,
         ...(images.images.length > 0 ? { images: images.images } : {}),
+        ...(files.texts.length > 0 ? { textParts: files.texts } : {}),
       })
       if (submitted.outcome === 'accepted') {
         ownTurn(deps, { sessionId: request.sessionId, requestId, threadId: request.threadId })

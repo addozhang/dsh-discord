@@ -38,15 +38,18 @@ export interface SessionMainlinePort {
     prompt: string
     /** Declared image attachments carried by the message (16.50). */
     images: ReadonlyArray<{ url: string; filename: string; declaredSize: number; contentType: string }>
+    /** Declared text-file attachments (16.114); serialized into text parts. */
+    files: ReadonlyArray<{ url: string; filename: string; declaredSize: number; contentType: string }>
   }): Promise<
     | { outcome: 'admitted'; threadId: string; sessionId: string }
     | { outcome: 'thread-conflict' }
     | { outcome: 'thread-failed' }
     | { outcome: 'session-rejected' }
     | { outcome: 'session-unknown' }
-    | { outcome: 'prompt-rejected' }
+    | { outcome: 'prompt-rejected'; code?: string }
     | { outcome: 'prompt-unknown' }
     | { outcome: 'image-failed'; reason: string }
+    | { outcome: 'file-failed'; reason: string }
   >
   continueInThread(request: {
     applicationId: string
@@ -57,13 +60,16 @@ export interface SessionMainlinePort {
     prompt: string
     /** Declared image attachments carried by the message (16.50). */
     images: ReadonlyArray<{ url: string; filename: string; declaredSize: number; contentType: string }>
+    /** Declared text-file attachments (16.114); serialized into text parts. */
+    files: ReadonlyArray<{ url: string; filename: string; declaredSize: number; contentType: string }>
   }): Promise<
     | { outcome: 'queued' }
     | { outcome: 'already-submitted' }
     | { outcome: 'conflict' }
-    | { outcome: 'rejected' }
+    | { outcome: 'rejected'; code?: string }
     | { outcome: 'unknown' }
     | { outcome: 'image-failed'; reason: string }
+    | { outcome: 'file-failed'; reason: string }
   >
 }
 
@@ -112,6 +118,16 @@ export interface CompositionDeps {
     audience: 'administrator' | 'member'
   }) => void | Promise<void>
   /**
+   * Thread-visible feedback for attachments the adapter cannot carry
+   * (16.114). Without this, a binary-only message vanished with zero logs,
+   * zero replies and zero warnings — the user could not tell a drop from a
+   * hung bot. `channelId` is the thread (or channel) the message came from.
+   */
+  attachmentNotice?: (request: {
+    channelId: string
+    filenames: ReadonlyArray<string>
+  }) => void | Promise<void>
+  /**
    * Runs once per READY: the reconciliation sweep — which also self-heals
    * the adapter's guild surface (category, control channel, bound home
    * channels) — and the trigger for startup mapping verification preceding
@@ -152,8 +168,25 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
   if (event.kind === 'message') {
     const prompt = event.content.trim()
     const images = event.images
-    // Text and images are independent task carriers: either alone admits.
-    const hasTask = prompt !== '' || images.length > 0
+    // Text files are a third independent task carrier (16.114): a file-only
+    // message MUST reach the mainline instead of being silently dropped.
+    const files = event.files
+      .filter(file => file.textCapable)
+      .map(({ url, filename, declaredSize, contentType }) => ({ url, filename, declaredSize, contentType }))
+    const unsupported = event.files.filter(file => !file.textCapable)
+    const hasTask = prompt !== '' || images.length > 0 || files.length > 0
+
+    // An attachment we cannot carry is never allowed to disappear silently.
+    // This runs whether or not the rest of the message forms a task, so a
+    // mixed message also tells the user which files were left behind.
+    if (unsupported.length > 0) {
+      void Promise.resolve(deps.attachmentNotice?.({
+        channelId: event.channelId,
+        filenames: unsupported.map(file => file.filename),
+      })).catch((cause: unknown) => {
+        deps.logger?.warn('discord_attachment_notice_failed', { cause: String(cause) })
+      })
+    }
 
     // Adapter-owned thread: ordinary continuation, no mention required.
     const sessionId = deps.bindings.sessionForThread(event.guildId, event.channelId)
@@ -167,10 +200,11 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
         messageId: event.messageId,
         prompt,
         images,
+        files,
       }
       void deps.mainline.continueInThread(request)
         .then((result) => {
-          if (result.outcome === 'rejected' || result.outcome === 'unknown' || result.outcome === 'image-failed') {
+          if (result.outcome === 'rejected' || result.outcome === 'unknown' || result.outcome === 'image-failed' || result.outcome === 'file-failed') {
             deps.logger?.warn('discord_continuation_not_queued', { ...result, messageId: event.messageId })
           }
         })
@@ -210,6 +244,7 @@ export function routeEvent(deps: CompositionDeps, event: NormalizedInboundEvent,
       workspaceId,
       prompt,
       images,
+      files,
     })
       .then((result) => {
         if (result.outcome !== 'admitted') {

@@ -9,6 +9,7 @@
 ## Highlights
 
 - **@mention starts a session** — mention the bot in a channel or thread and the turn begins; streaming renders, tool lines, finalized transcripts, and zero replay across host restarts
+- **Thread attachments reach the model** — images as image parts; txt / JSON / YAML / source files as labelled text parts, so a file-only message starts a real turn and unsupported types get a visible notice
 - **Approval & question buttons** — host approval cards mirror into Discord as buttons; web and Discord race, first answer wins
 - **9 slash commands** — `/project bind`, `/permission set`, `/model select`, `/stop`, `/steer`, `/queue remove`, `/session resume`, `/guild forget`, `/info`
 - **deny-first, three tiers** — the guild allowlist is the outer boundary; member < workspace-admin < host-operator tighten step by step

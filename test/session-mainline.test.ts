@@ -7,7 +7,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 
-import { createSessionMainline, type MainlineImageCollector } from '../src/features/session-mainline.js'
+import { createSessionMainline, type MainlineFileCollector, type MainlineImageCollector } from '../src/features/session-mainline.js'
 import { createThreadCreationFlow, type DiscordThreadPort } from '../src/features/thread-creation.js'
 import { createSessionCreationFlow, type DshSessionPort } from '../src/features/session-creation.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from '../src/features/prompt-submission.js'
@@ -28,8 +28,10 @@ interface Fixture {
     prompt: string
     mode: string
     images?: ReadonlyArray<{ mediaType: string; base64: string }>
+    textParts?: ReadonlyArray<string>
   }>
   collectCalls: Array<{ attachments: ReadonlyArray<{ url: string; declaredSize: number; contentType: string }> }>
+  fileCalls: Array<{ attachments: ReadonlyArray<{ url: string; filename: string; declaredSize: number; contentType: string }> }>
   threadRequests: Array<{ threadName: string }>
   threadBindings: Map<string, ThreadBinding>
   turnTracker: ReturnType<typeof createTurnTracker>
@@ -42,6 +44,7 @@ function createFixture(options: {
   createSession?: DshSessionPort['createSession']
   submit?: DshPromptPort['submit']
   collect?: MainlineImageCollector['collect']
+  collectFiles?: MainlineFileCollector['collect']
 } = {}): Fixture {
   const intents = createIntentStore(createKvTableStub())
   const threadTable = createKvTableStub<ThreadBinding>()
@@ -64,6 +67,7 @@ function createFixture(options: {
     prompt: string
     mode: string
     images?: ReadonlyArray<{ mediaType: string; base64: string }>
+    textParts?: ReadonlyArray<string>
   }> = []
   const prompts: DshPromptPort = {
     submit: (request) => {
@@ -79,6 +83,15 @@ function createFixture(options: {
       return Promise.resolve({ outcome: 'collected', images: [{ mediaType: 'image/png', base64: 'cG5n' }] })
     }),
   }
+  const fileCalls: Array<{ attachments: ReadonlyArray<{ url: string; filename: string; declaredSize: number; contentType: string }> }> = []
+  const files: MainlineFileCollector = {
+    collect: options.collectFiles ?? (request => {
+      fileCalls.push(request)
+      // Include the filename so a different attached file produces a
+      // different submitted text part (and therefore a different hash).
+      return Promise.resolve({ outcome: 'collected', texts: request.attachments.map(attachment => `FILE-TEXT:${attachment.filename}`) })
+    }),
+  }
   const turnTracker = createTurnTracker()
   const mainline = createSessionMainline({
     threads: createThreadCreationFlow({ intents, discord: threads, nowMs: () => 1_000 }),
@@ -90,10 +103,12 @@ function createFixture(options: {
     prompts: createPromptSubmissionFlow({ prompts, intents, nowMs: () => 1_000 }),
     turns: turnTracker,
     images,
+    files,
   })
   return {
     promptCalls,
     collectCalls,
+    fileCalls,
     threadRequests,
     threadBindings: threadTable as unknown as Map<string, ThreadBinding>,
     turnTracker,
@@ -238,6 +253,124 @@ describe('session mainline', () => {
     // Ownership stays with the FIRST submitted turn.
     expect(f.turnTracker.active('preallocated-1')?.requestId).toBe('discord:m-1')
     expect(f.promptCalls).toHaveLength(3)
+  })
+})
+
+describe('session mainline with text files (16.114)', () => {
+  const WIRE_FILE = {
+    url: 'https://cdn.discordapp.com/attachments/1/2/notes.txt?ex=abc',
+    filename: 'notes.txt',
+    declaredSize: 249,
+    contentType: 'text/plain; charset=utf-8',
+  }
+
+  it('admits a file-only mention: collects the file and submits it as a text part', async () => {
+    const f = createFixture()
+    const result = await f.mainline.admitMention({
+      applicationId: APP,
+      guildId: GUILD,
+      channelId: 'channel-1',
+      messageId: 'm-file-1',
+      authorId: 'member-1',
+      workspaceId: 'ws-1',
+      prompt: '',
+      files: [WIRE_FILE],
+    })
+
+    expect(result).toEqual({ outcome: 'admitted', threadId: 'thread-1', sessionId: 'preallocated-1' })
+    // The filename survives into the collector — the prompt labels the file.
+    expect(f.fileCalls).toEqual([{ attachments: [WIRE_FILE] }])
+    expect(f.promptCalls).toEqual([{
+      requestId: 'discord:m-file-1',
+      sessionId: 'preallocated-1',
+      prompt: '',
+      mode: 'queue',
+      textParts: ['FILE-TEXT:notes.txt'],
+    }])
+    expect(f.threadRequests[0]?.threadName).toBe('notes.txt')
+  })
+
+  it('submits file text parts on a continuation too', async () => {
+    const f = createFixture()
+    const result = await f.mainline.continueInThread({
+      applicationId: APP,
+      guildId: GUILD,
+      threadId: 'thread-1',
+      sessionId: 'sess-1',
+      messageId: 'm-file-2',
+      prompt: 'read this',
+      files: [WIRE_FILE],
+    })
+    expect(result).toEqual({ outcome: 'queued' })
+    expect(f.promptCalls[0]).toMatchObject({ textParts: ['FILE-TEXT:notes.txt'] })
+  })
+
+  it('short-circuits before thread creation when file collection fails', async () => {
+    const f = createFixture({
+      collectFiles: () => Promise.resolve({ outcome: 'failed', reason: 'decode-failed' }),
+    })
+    const result = await f.mainline.admitMention({
+      applicationId: APP,
+      guildId: GUILD,
+      channelId: 'channel-1',
+      messageId: 'm-file-3',
+      authorId: 'member-1',
+      workspaceId: 'ws-1',
+      prompt: 'check the attachment',
+      files: [WIRE_FILE],
+    })
+    expect(result).toEqual({ outcome: 'file-failed', reason: 'decode-failed' })
+    expect(f.threadRequests).toHaveLength(0)
+    expect(f.promptCalls).toHaveLength(0)
+  })
+
+  it('carries the attachment rejection detail through to the notice layer', async () => {
+    const f = createFixture({
+      submit: () => Promise.resolve({
+        outcome: 'rejected', reason: 'attachment-invalid',
+        code: 'session/attachment-invalid', detail: 'INVALID_IMAGE',
+      }),
+    })
+    const result = await f.mainline.continueInThread({
+      applicationId: APP,
+      guildId: GUILD,
+      threadId: 'thread-1',
+      sessionId: 'sess-1',
+      messageId: 'm-invalid-image',
+      prompt: 'look at this',
+    })
+    expect(result).toEqual({
+      outcome: 'rejected', code: 'session/attachment-invalid', detail: 'INVALID_IMAGE',
+    })
+  })
+
+  it('never calls either collector for a text-only message', async () => {
+    const f = createFixture()
+    await f.mainline.continueInThread({
+      applicationId: APP,
+      guildId: GUILD,
+      threadId: 'thread-1',
+      sessionId: 'sess-1',
+      messageId: 'm-plain-2',
+      prompt: 'plain text',
+    })
+    expect(f.collectCalls).toHaveLength(0)
+    expect(f.fileCalls).toHaveLength(0)
+    expect(f.promptCalls[0]).not.toHaveProperty('textParts')
+  })
+
+  it('includes files in the intent hash: the same id with a different file conflicts', async () => {
+    const f = createFixture()
+    await f.mainline.continueInThread({
+      applicationId: APP, guildId: GUILD, threadId: 'thread-1', sessionId: 'sess-1',
+      messageId: 'm-file-4', prompt: 'read this', files: [WIRE_FILE],
+    })
+    const replay = await f.mainline.continueInThread({
+      applicationId: APP, guildId: GUILD, threadId: 'thread-1', sessionId: 'sess-1',
+      messageId: 'm-file-4', prompt: 'read this', files: [{ ...WIRE_FILE, filename: 'other.txt' }],
+    })
+    expect(replay).toEqual({ outcome: 'conflict' })
+    expect(f.promptCalls).toHaveLength(1)
   })
 })
 

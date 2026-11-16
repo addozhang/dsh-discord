@@ -75,6 +75,13 @@ export interface NormalizedMessage {
    * allowlisted fetch boundary.
    */
   images: DiscordImageAttachment[]
+  /**
+   * DECLARED non-image attachments (16.114). Every attachment that is not a
+   * supported image survives here with a `textCapable` flag: text files are
+   * downloaded and serialized into prompt text parts, while binary files are
+   * only ever used to explain to the user why they were not delivered.
+   */
+  files: DiscordFileAttachment[]
 }
 
 /** One supported image attachment, as declared by the wire. */
@@ -83,6 +90,16 @@ export interface DiscordImageAttachment {
   filename: string
   declaredSize: number
   contentType: string
+}
+
+/** One non-image attachment, as declared by the wire. */
+export interface DiscordFileAttachment {
+  url: string
+  filename: string
+  declaredSize: number
+  contentType: string
+  /** Whether the declared media type is safe to decode as UTF-8 text. */
+  textCapable: boolean
 }
 
 /** A validated guild interaction with its actor identity. */
@@ -149,8 +166,39 @@ const SUPPORTED_IMAGE_TYPES: ReadonlySet<string> = new Set([
   'image/gif',
 ])
 
+/**
+ * Non-image media types whose bytes are meaningful as UTF-8 text (16.114).
+ * Discord often appends parameters (`text/plain; charset=utf-8`), so the
+ * comparison always runs on the normalized base type.
+ */
+const TEXT_CAPABLE_TYPES: ReadonlySet<string> = new Set([
+  'application/json',
+  'application/ld+json',
+  'application/x-ndjson',
+  'application/xml',
+  'application/yaml',
+  'application/x-yaml',
+  'application/javascript',
+  'application/typescript',
+  'application/sql',
+  'application/graphql',
+  'application/toml',
+])
+
 /** Discord's per-message attachment cap; a defensive bound on untrusted input. */
 const MAX_MESSAGE_IMAGES = 10
+const MAX_MESSAGE_FILES = 10
+
+/** Strip media-type parameters and case (`text/plain; charset=utf-8` → `text/plain`). */
+export function normalizeMediaType(contentType: string): string {
+  return contentType.split(';')[0]?.trim().toLowerCase() ?? ''
+}
+
+/** Whether a declared media type is carried as a downloadable text file. */
+export function isTextCapableMediaType(contentType: string): boolean {
+  const normalized = normalizeMediaType(contentType)
+  return normalized.startsWith('text/') || TEXT_CAPABLE_TYPES.has(normalized)
+}
 
 /**
  * Narrow untrusted `attachments` onto declared image metadata. Entries that
@@ -171,10 +219,37 @@ function extractImages(payload: Record<string, unknown>): DiscordImageAttachment
     if (typeof url !== 'string' || url === '') continue
     if (typeof filename !== 'string' || filename === '') continue
     if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) continue
-    if (typeof contentType !== 'string' || !SUPPORTED_IMAGE_TYPES.has(contentType)) continue
+    if (typeof contentType !== 'string' || !SUPPORTED_IMAGE_TYPES.has(normalizeMediaType(contentType))) continue
     images.push({ url, filename, declaredSize: size, contentType })
   }
   return images
+}
+
+/**
+ * Narrow untrusted `attachments` onto declared NON-IMAGE file metadata
+ * (16.114). Unlike `extractImages`, nothing is silently dropped here: an
+ * unsupported binary type is still carried with `textCapable: false`, so the
+ * routing layer can tell the user why the file did not reach DSH.
+ */
+function extractFiles(payload: Record<string, unknown>): DiscordFileAttachment[] {
+  const raw = payload['attachments']
+  if (!Array.isArray(raw)) return []
+  const files: DiscordFileAttachment[] = []
+  for (const entry of raw) {
+    if (files.length >= MAX_MESSAGE_FILES) break
+    if (!isRecord(entry)) continue
+    const url = entry['url']
+    const filename = entry['filename']
+    const size = entry['size']
+    const contentType = entry['content_type']
+    if (typeof url !== 'string' || url === '') continue
+    if (typeof filename !== 'string' || filename === '') continue
+    if (typeof size !== 'number' || !Number.isFinite(size) || size < 0) continue
+    if (typeof contentType !== 'string' || normalizeMediaType(contentType) === '') continue
+    if (SUPPORTED_IMAGE_TYPES.has(normalizeMediaType(contentType))) continue
+    files.push({ url, filename, declaredSize: size, contentType, textCapable: isTextCapableMediaType(contentType) })
+  }
+  return files
 }
 
 function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowflake): IngestResult {
@@ -243,6 +318,7 @@ function parseMessage(payload: Record<string, unknown>, selfUserId: DiscordSnowf
       mentionedBot: stripped.mentioned,
       repliedToId,
       images: extractImages(payload),
+      files: extractFiles(payload),
     },
   }
 }

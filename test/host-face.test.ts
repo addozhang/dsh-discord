@@ -246,14 +246,42 @@ describe('promptSession', () => {
     await expect(promptSession(face(undefined, () => Promise.reject(remoteError('session/agent-busy', 'prompt rejected'))), {
       sessionId: 's-1',
       prompt: 'hi',
-    })).resolves.toEqual({ outcome: 'rejected', reason: 'agent-busy' })
+    })).resolves.toEqual({ outcome: 'rejected', reason: 'agent-busy', code: 'session/agent-busy' })
   })
 
   it('passes non-session namespaces through verbatim', async () => {
     await expect(promptSession(face(undefined, () => Promise.reject(remoteError('gateway/bad-request', 'empty content'))), {
       sessionId: 's-1',
       prompt: 'hi',
-    })).resolves.toEqual({ outcome: 'rejected', reason: 'gateway/bad-request' })
+    })).resolves.toEqual({ outcome: 'rejected', reason: 'gateway/bad-request', code: 'gateway/bad-request' })
+  })
+
+  it('carries the attachment rejection detail so an invalid image is not called a model limit', async () => {
+    const error = Object.assign(new Error('Image bytes are not decodable'), {
+      code: 'session/attachment-invalid',
+      details: { reason: 'INVALID_IMAGE' },
+    })
+    await expect(promptSession(face(undefined, () => Promise.reject(error)), {
+      sessionId: 's-1',
+      prompt: 'hi',
+    })).resolves.toEqual({
+      outcome: 'rejected', reason: 'attachment-invalid',
+      code: 'session/attachment-invalid', detail: 'INVALID_IMAGE',
+    })
+  })
+
+  it('carries the modality detail when the Host really gates image input', async () => {
+    const error = Object.assign(new Error('Model "m" does not support image input.'), {
+      code: 'session/attachment-invalid',
+      details: { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
+    })
+    await expect(promptSession(face(undefined, () => Promise.reject(error)), {
+      sessionId: 's-1',
+      prompt: 'hi',
+    })).resolves.toEqual({
+      outcome: 'rejected', reason: 'attachment-invalid',
+      code: 'session/attachment-invalid', detail: 'MODEL_DOES_NOT_SUPPORT_IMAGES',
+    })
   })
 
   it('maps a host fault (non-Remote throw) onto unknown, never rejected', async () => {
@@ -307,6 +335,48 @@ describe('promptSession', () => {
       { type: 'text', text: 'what is this' },
       { type: 'image', mediaType: 'image/png', data: 'cG5n' },
       { type: 'image', mediaType: 'image/gif', data: 'Z2lm' },
+    ])
+  })
+
+  it('encodes attached files as ordered text parts after the user prose (16.114)', async () => {
+    const f = face(undefined, () => Promise.resolve({ accepted: true }))
+    await promptSession(f, {
+      sessionId: 's-1',
+      prompt: 'read the notes',
+      textParts: ['FILE-ONE', 'FILE-TWO'],
+    })
+    const seen = f.session.promptCalls[0] as { content?: unknown }
+    expect(seen.content).toEqual([
+      { type: 'text', text: 'read the notes' },
+      { type: 'text', text: 'FILE-ONE' },
+      { type: 'text', text: 'FILE-TWO' },
+    ])
+  })
+
+  it('omits an empty first text part for a file-only message', async () => {
+    const f = face(undefined, () => Promise.resolve({ accepted: true }))
+    await promptSession(f, {
+      sessionId: 's-1',
+      prompt: '',
+      textParts: ['FILE-ONE'],
+    })
+    const seen = f.session.promptCalls[0] as { content?: unknown }
+    expect(seen.content).toEqual([{ type: 'text', text: 'FILE-ONE' }])
+  })
+
+  it('keeps text + image + file parts in that order', async () => {
+    const f = face(undefined, () => Promise.resolve({ accepted: true }))
+    await promptSession(f, {
+      sessionId: 's-1',
+      prompt: 'check everything',
+      textParts: ['FILE-ONE'],
+      images: [{ mediaType: 'image/png', base64: 'cG5n' }],
+    })
+    const seen = f.session.promptCalls[0] as { content?: unknown }
+    expect(seen.content).toEqual([
+      { type: 'text', text: 'check everything' },
+      { type: 'text', text: 'FILE-ONE' },
+      { type: 'image', mediaType: 'image/png', data: 'cG5n' },
     ])
   })
 })

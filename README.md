@@ -18,7 +18,7 @@ No extra process: the adapter is a DSH plugin that mounts straight onto your `ds
 
 ## Features
 
-- **Mention-driven sessions** — an authorized `@bot <task>` in a bound channel anchors a thread (your message becomes the first post), creates the DSH session, and submits the prompt at most once. Follow-ups inside the thread queue without a mention. Attached images ride along: they are downloaded from the Discord CDN within strict size/host bounds and submitted as image parts for multimodal models.
+- **Mention-driven sessions** — an authorized `@bot <task>` in a bound channel anchors a thread (your message becomes the first post), creates the DSH session, and submits the prompt at most once. Follow-ups inside the thread queue without a mention. Attached images ride along: they are downloaded from the Discord CDN within strict size/host bounds and submitted as image parts for multimodal models. Text-capable files (`text/*` plus JSON, XML, YAML, NDJSON, JS/TS, SQL, GraphQL and TOML) ride along as labelled text parts — a file-only message starts a real turn instead of being silently dropped; unsupported binary attachments get a visible notice.
 - **Stream rendering** — typing indicator, one head message edited in place, per-tool activity rows, fenced long-answer splitting, one-time finalize; the activity message is deleted when the turn ends.
 - **Approvals & questions (dual surface)** — DSH asks become buttons, select menus, and a free-text modal, mirrored to the web/desktop panel at the same time: the first surface to answer wins and the other auto-retires (Discord carries the ask alone when no web client is connected). Ownership is enforced (the asker — or the thread owner on later turns — clicks), expiry sweeps fail closed, and settled controls grey out in place.
 - **Session control** — `/steer`, `/stop`, and `/queue list|remove` authorized by the thread binding (the shared control surface); `/project bind|list|info` and `/session resume` for guild↔workspace binding and history; `/guild forget` for operator cleanup.
@@ -40,12 +40,13 @@ Each adapter release follows the dsh host surface it was actually verified again
 
 | Channel | Adapter | dsh CLI | Install |
 |---|---|---|---|
-| **stable (0.2.2 line)** | `0.6.9` — npm `latest` | `0.2.2-rc.1` — npm `latest`; `0.2.2-rc.3` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
-| **prerelease (0.2.2 line)** | npm `next` still holds `0.6.5-rc.1`, which `0.6.9` supersedes — pin an exact version when you need a prerelease | `0.2.2-rc.1` — npm `latest`; `0.2.2-rc.3` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord@0.6.5-rc.1` |
+| **stable (0.2.2 line)** | `0.6.10` — npm `latest` | `0.2.2-rc.1` — npm `latest`; `0.2.2-rc.3` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
+| **prerelease (0.2.2 line)** | npm `next` still holds `0.6.5-rc.1`, which `0.6.10` supersedes — pin an exact version when you need a prerelease | `0.2.2-rc.1` — npm `latest`; `0.2.2-rc.3` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord@0.6.5-rc.1` |
 | Legacy (0.1.7 line) | `0.5.0` — exact version | `0.1.7-rc.1` — exact version | `dsh plugin --profile web add @addozhang/dsh-discord@0.5.0` |
 
 - **Adapter `0.6.5+` ships no dsh-internal packages.** The `dsh-storage-domain` declaration helpers (`defineDomain`/`domainTable`) are mirrored inside the plugin, and the host's `storageDomain` service is consumed through a structural contract. Upgrading the dsh CLI or Desktop within the 0.2.x line (including the exact-version plugin gate introduced in `0.2.1-rc.5`) therefore no longer disables this plugin. The host API surface is still guarded by the startup probe — a host lacking a required service surface refuses activation with one actionable diagnostic.
 - **Adapter `0.6.9` is verified against dsh `0.2.2-rc.3`** (host-surface audit and real-machine matrix, 2026-11-14). It also fixes system messages inside bound threads being ingested as prompts — rename, pin and thread-created notices are now rejected at ingress (issue #17). A patch-level host bump inside the 0.2.2 line needs no adapter release by itself, and `0.6.5+` carries no dsh-internal packages for the exact-version gate to trip.
+- **Adapter `0.6.10` carries thread attachments end to end** (2026-11-16): non-image text files are downloaded from the Discord CDN and submitted as text parts, pure-attachment messages are no longer dropped, unsupported binaries receive a visible notice, and Host `session/attachment-invalid` notices are split by `details.reason` (only `MODEL_DOES_NOT_SUPPORT_IMAGES` points at model configuration). Verified on a real machine against dsh `0.2.2-rc.3` with text, text+file, invalid PNG and valid PNG cases.
 - **Existing installs of adapter `0.6.1`–`0.6.4`:** those versions carried `dsh-storage-domain@0.2.1-rc.3` as a runtime dependency. Since dsh `0.2.1-rc.5` the host disables any profile-tree plugin row whose version does not exactly match the runtime — the carried copy shadows the host's own, the `storageDomain` service vanishes, and the plugin stays pending (no workspaces or sessions in the UI; data is untouched). Upgrade the adapter to `0.6.5+` to fix it. If you manually added a `@deepseek-ai/dsh-storage-domain` entry to the profile's `package.json` as a stopgap, remove it too — it will trip the same gate on the next host upgrade.
 - Earlier pairings are unchanged: adapter `0.6.0-rc.1` ↔ dsh `0.2.0-rc.2` (both sides are exact-version installs now that the dist-tags moved to 0.2.1), and adapter `0.5.0` pins the `0.1.7-rc.1` line symmetrically. Adapter `>=0.5.0-rc.4` (including `0.5.0`) speaks the 0.1.7 profile-backed settings forms and controller services and will not load on older hosts (the startup probe refuses with one actionable diagnostic); `0.5.0-rc.1`–`rc.3` target dsh `0.1.6-alpha`; adapter `0.4.x` talks to the former `apiProxy` surface, which `0.1.6-alpha` removed — it remains the pairing for the dsh `0.1.5` stable line, reachable by exact version (e.g. `@addozhang/dsh-discord@0.4.0`).
 - To switch the dsh CLI line: `npm install -g @deepseek-ai/dsh@latest` (0.2.2-rc.1, pairs with adapter 0.6.5+), `npm install -g @deepseek-ai/dsh@0.2.2-rc.3` (npm `next`, also pairs with 0.6.5+), or `npm install -g @deepseek-ai/dsh@0.1.7-rc.1` (pairs with adapter 0.5.0).
@@ -149,13 +150,13 @@ The settings card exposes the three high-frequency fields (guild allowlist, auto
 - **`/preset`, `/skill`, and `/host` stay deregistered** — their control modules are implemented and unit-tested and return when the router wires them (the `/preset` thread-context guard rides along).
 - **Verbosity is a single global setting** (the DSH ecosystem has per-channel precedent).
 - **Deferred after a Kimaki parity pass**: reconcile-interactions wiring, typing pause during ask waits, fail-closed binding/session-owner store wiring, and credential-rotation watching.
-- **Known tension**: the 250ms minimum stream-edit interval against Discord's edit budget under heavy load (429s self-heal), and typing has no duration-capped watchdog.
+- **Attachment scope**: only images and text-capable files are delivered to the model. Text files are capped at 256 KiB each / 512 KiB per message (max 10), must be strict UTF-8, and are read as plain text — PDFs, office documents, archives and other binaries are not parsed; they only produce a notice. Images keep their own 8 MiB per-file / 24 MiB aggregate bounds.
 
 ## Development
 
 ```sh
 pnpm install --ignore-scripts
-pnpm test          # 825 tests incl. gateway/REST twin E2E
+pnpm test          # 891 tests incl. gateway/REST twin E2E
 pnpm typecheck
 pnpm lint
 pnpm build         # lib + client bundle

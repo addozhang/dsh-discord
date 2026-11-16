@@ -18,7 +18,7 @@
 
 ## 功能
 
-- **@提及驱动会话** — 在已绑定的频道中，被授权的 `@机器人 <任务>` 会锚定一个线程（你的消息成为首帖）、创建 DSH 会话，并且至多提交一次。线程内的后续消息无需 @ 即可排队。消息附带的图片会一并送达：在严格的大小与主机白名单约束下从 Discord CDN 下载，并作为 image parts 提交给多模态模型。
+- **@提及驱动会话** — 在已绑定的频道中，被授权的 `@机器人 <任务>` 会锚定一个线程（你的消息成为首帖）、创建 DSH 会话，并且至多提交一次。线程内的后续消息无需 @ 即可排队。消息附带的图片会一并送达：在严格的大小与主机白名单约束下从 Discord CDN 下载，并作为 image parts 提交给多模态模型。文本类文件（`text/*` 及 JSON、XML、YAML、NDJSON、JS/TS、SQL、GraphQL、TOML）会作为带标签的 text part 一并送达——只发文件也会真正起一个 turn，不再被静默丢弃；不支持的二进制附件会给出可见提示。
 - **流式渲染** — typing 指示、单条头消息原地编辑、逐工具活动行、代码围栏感知的长文分段、一次性收尾；Turn 结束时活动消息会被删除。
 - **审批与提问（双面）** — DSH 的 ask 渲染为按钮、下拉菜单与自由文本弹窗，并同时镜像到 web/桌面端：两端先答先得，另一端的控件与卡片自动失效（无 web 客户端时 Discord 单独承载）。所有权强制校验（提问者——或后续 Turn 的线程属主——才能点击），超时清扫 fail-closed，结算后的控件原地置灰。
 - **会话控制** — `/steer`、`/stop`、`/queue list|remove` 按线程绑定授权（共享控制面）；`/project bind|list|info` 与 `/session resume` 管理 Guild↔工作区绑定与历史会话；`/guild forget` 供操作员清理。
@@ -40,12 +40,13 @@
 
 | 通道 | 适配器 | dsh CLI | 安装命令 |
 |---|---|---|---|
-| **stable（0.2.2 线）** | `0.6.9` — npm `latest` | `0.2.2-rc.1` — npm `latest`；`0.2.2-rc.3` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
-| **预发布（0.2.2 线）** | npm `next` 仍指向 `0.6.5-rc.1`，已被 `0.6.9` 取代——需要预发布版时用精确版本号 | `0.2.2-rc.1` — npm `latest`；`0.2.2-rc.3` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord@0.6.5-rc.1` |
+| **stable（0.2.2 线）** | `0.6.10` — npm `latest` | `0.2.2-rc.1` — npm `latest`；`0.2.2-rc.3` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
+| **预发布（0.2.2 线）** | npm `next` 仍指向 `0.6.5-rc.1`，已被 `0.6.10` 取代——需要预发布版时用精确版本号 | `0.2.2-rc.1` — npm `latest`；`0.2.2-rc.3` — npm `next` | `dsh plugin --profile web add @addozhang/dsh-discord@0.6.5-rc.1` |
 | 旧线（0.1.7） | `0.5.0` — 精确版本号 | `0.1.7-rc.1` — 精确版本号 | `dsh plugin --profile web add @addozhang/dsh-discord@0.5.0` |
 
 - **适配器 `0.6.5+` 不再随包携带任何 dsh 内部包**：`dsh-storage-domain` 的声明辅助（`defineDomain`/`domainTable`）已内联进插件，宿主的 `storageDomain` 服务按结构化契约消费。因此 dsh CLI / Desktop 在 0.2.x 线内升级（含 `0.2.1-rc.5` 起生效的插件精确版本兼容门）不会再禁用本插件。宿主 API 面仍由 startup 探针守护——宿主缺少所需服务面时拒绝激活并给出一条可操作诊断。
 - **适配器 `0.6.9` 已在 dsh `0.2.2-rc.3` 上完成接触面审计与真机验证**（2026-11-14），并修复线程内系统消息被当作 prompt 提交的问题——重命名、置顶、建线程等通知现在在 ingress 边界就被拒收（issue #17）。0.2.2 线内单纯的 patch 级宿主升级本身不需要适配器发版，且 `0.6.5+` 不携带 dsh 内部包，精确版本兼容门无从触发。
+- **适配器 `0.6.10` 打通线程附件链路**（2026-11-16）：非图片文本类文件从 Discord CDN 下载后以 text part 提交、纯附件消息不再被丢弃、不支持的二进制附件给出可见提示，宿主 `session/attachment-invalid` 按 `details.reason` 分流提示（只有 `MODEL_DOES_NOT_SUPPORT_IMAGES` 才指向模型配置）。已在 dsh `0.2.2-rc.3` 上用纯文本、文字+文件、无效 PNG、有效 PNG 四真机场景验证。
 - **适配器 `0.6.1`–`0.6.4` 的存量安装注意：** 这些版本把 `dsh-storage-domain@0.2.1-rc.3` 作为运行时依赖随包携带。dsh `0.2.1-rc.5` 起宿主会禁用 profile 树中与运行时版本不精确匹配的插件行——被携带的副本盖住宿主副本后，`storageDomain` 服务随之消失，插件保持 pending（UI 里既无工作区也无会话，数据无损）。把适配器升级到 `0.6.5+` 即修复；若曾在 profile 的 `package.json` 里手工添加过 `@deepseek-ai/dsh-storage-domain` 条目（一种临时缓解），请一并移除——否则下一次宿主升级它会自己撞上同一道门禁。
 - 更早的配对关系不变：适配器 `0.6.0-rc.1` ↔ dsh `0.2.0-rc.2`（dist-tags 已移到 0.2.1，两侧都只能精确版本号安装），适配器 `0.5.0` 同理反向钉在 `0.1.7-rc.1` 线；适配器 `>=0.5.0-rc.4`（含 `0.5.0`）使用 0.1.7 的 profile-backed settings forms 与控制器服务，在更旧的宿主上无法加载（startup 探针会给出一条可操作的诊断后拒绝激活）；`0.5.0-rc.1`–`rc.3` 对应 dsh `0.1.6-alpha`；适配器 `0.4.x` 使用旧版 `apiProxy` 宿主面（该面已在 `0.1.6-alpha` 中移除）——它仍是 dsh `0.1.5` stable 线的配对，可用精确版本号安装（如 `@addozhang/dsh-discord@0.4.0`）。
 - 切换 dsh CLI 通道：`npm install -g @deepseek-ai/dsh@latest`（0.2.2-rc.1，配适配器 0.6.5+）、`npm install -g @deepseek-ai/dsh@0.2.2-rc.3`（npm `next`，同样配 0.6.5+）或 `npm install -g @deepseek-ai/dsh@0.1.7-rc.1`（配适配器 0.5.0）。
@@ -150,13 +151,13 @@ dsh-discord:
 - **`/preset`、`/skill`、`/host` 保持注销状态** — 控制模块已实现并通过单元测试，待路由接线时回归（`/preset` 的会话线程守卫一并处理）。
 - **verbosity 为全局设置**（DSH 生态有按频道设置的先例）。
 - **经 Kimaki 对齐后有意推迟**：reconcile-interactions 接线、ask 等待期暂停 typing、fail-closed 绑定/会话属主 store 接线、凭据轮换监听。
-- **已知张力**：流式编辑 250ms 下限与高负载下 Discord 编辑预算的冲突（429 自愈），以及 typing 缺少时长上限看门狗。
+- **附件范围**：仅图片与文本类文件会送达模型。文本文件单文件上限 256 KiB、单条消息合计 512 KiB、最多 10 个，必须是严格 UTF-8，内容按纯文本读取——PDF、Office 文档、压缩包等二进制不做解析，只会给出提示。图片沿用各自的单文件 8 MiB / 合计 24 MiB 上限。
 
 ## 开发
 
 ```sh
 pnpm install --ignore-scripts
-pnpm test          # 825 tests incl. gateway/REST twin E2E
+pnpm test          # 891 tests incl. gateway/REST twin E2E
 pnpm typecheck
 pnpm lint
 pnpm build         # lib + client bundle

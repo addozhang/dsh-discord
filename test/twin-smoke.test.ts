@@ -114,6 +114,13 @@ describe('twin smoke: mention mainline over the real wire', () => {
         images: request.attachments.map((_attachment, index) => ({ mediaType: 'image/png', base64: `img-${String(index)}` })),
       }),
     }
+    /** No network in the twin: text files are collected deterministically. */
+    const files = {
+      collect: (request: { attachments: ReadonlyArray<unknown> }) => Promise.resolve({
+        outcome: 'collected' as const,
+        texts: request.attachments.map((_attachment, index) => `file-text-${String(index)}`),
+      }),
+    }
     const mainline = createSessionMainline({
       threads: createThreadCreationFlow({ intents, discord: threadPort, nowMs: () => Date.now() }),
       sessions: createSessionCreationFlow({
@@ -124,6 +131,7 @@ describe('twin smoke: mention mainline over the real wire', () => {
       prompts: createPromptSubmissionFlow({ prompts, intents, nowMs: () => Date.now() }),
       turns: createTurnTracker(),
       images,
+      files,
     })
 
     runtime = startDiscordAdapter({
@@ -228,6 +236,54 @@ describe('twin smoke: mention mainline over the real wire', () => {
       prompt: 'and what is in this picture?',
       mode: 'queue',
       images: [{ mediaType: 'image/png', base64: 'img-0' }],
+    })
+  }, 20_000)
+
+  it('carries a text file through the wire into the prompt as text parts (16.114)', async () => {
+    const scope = discord.channel(CHANNEL)
+    const thread = await scope.waitForThread({ timeout: 10_000, predicate: t => t.name === 'hello world' })
+
+    await discord.thread(thread.id).user(USER).sendMessage({
+      content: 'read the attached notes',
+      attachments: [{
+        id: '999999999999999998',
+        filename: 'notes.txt',
+        content_type: 'text/plain; charset=utf-8',
+        size: 249,
+        url: 'https://cdn.discordapp.com/attachments/1/2/notes.txt?ex=abc',
+      } as never],
+    })
+    await vi.waitFor(() => { expect(promptCalls).toHaveLength(4) })
+    expect(promptCalls[3]).toMatchObject({
+      sessionId: 'sess-twin-1',
+      prompt: 'read the attached notes',
+      mode: 'queue',
+      textParts: ['file-text-0'],
+    })
+  }, 20_000)
+
+  it('admits a file-only thread message instead of dropping it silently (16.114)', async () => {
+    const scope = discord.channel(CHANNEL)
+    const thread = await scope.waitForThread({ timeout: 10_000, predicate: t => t.name === 'hello world' })
+
+    // The real-machine repro shape: type 0, empty content, one text/plain
+    // attachment. Before 16.114 this produced zero DSH calls.
+    await discord.thread(thread.id).user(USER).sendMessage({
+      content: '',
+      attachments: [{
+        id: '999999999999999997',
+        filename: 'notes-only.txt',
+        content_type: 'text/plain; charset=utf-8',
+        size: 249,
+        url: 'https://cdn.discordapp.com/attachments/1/2/notes-only.txt?ex=abc',
+      } as never],
+    })
+    await vi.waitFor(() => { expect(promptCalls).toHaveLength(5) })
+    expect(promptCalls[4]).toMatchObject({
+      sessionId: 'sess-twin-1',
+      prompt: '',
+      mode: 'queue',
+      textParts: ['file-text-0'],
     })
   }, 20_000)
 })
@@ -1030,6 +1086,9 @@ describe('twin smoke: stream rendering over the real wire (fake DSH mux)', () =>
       turns: createTurnTracker(),
       images: {
         collect: () => Promise.resolve({ outcome: 'collected' as const, images: [] }),
+      },
+      files: {
+        collect: () => Promise.resolve({ outcome: 'collected' as const, texts: [] }),
       },
     })
 

@@ -266,9 +266,18 @@ export interface ApiProxyFaceOptions {
  * `RemoteError` ({code, message}) for every admission refusal. Anything else
  * in a catch is a host fault, not a business verdict.
  */
-function remoteRejectionOf(error: unknown): { code: string } | undefined {
+function remoteRejectionOf(error: unknown): { code: string; detail?: string } | undefined {
   const code = (error as { code?: unknown } | null | undefined)?.code
-  return typeof code === 'string' && code !== '' ? { code } : undefined
+  if (typeof code !== 'string' || code === '') return undefined
+  // `session/attachment-invalid` carries `details.reason`. Without it every
+  // attachment refusal (bad bytes, oversize, unstaged upload) looks like a
+  // model modality gate. Most other codes have no useful detail, so stay
+  // optional and keep their outcome shapes untouched.
+  const details = (error as { details?: unknown } | null | undefined)?.details
+  const detail = isRecord(details) && typeof details.reason === 'string' && details.reason !== ''
+    ? details.reason
+    : undefined
+  return detail === undefined ? { code } : { code, detail }
 }
 
 /** Defensive record probe: the wire is untrusted regardless of declared types. */
@@ -454,7 +463,7 @@ export async function readWorkspaceDetail(
 
 export type PromptOutcome =
   | { outcome: 'accepted' }
-  | { outcome: 'rejected'; reason: string }
+  | { outcome: 'rejected'; reason: string; code?: string; detail?: string }
   | { outcome: 'unknown' }
 
 /**
@@ -466,7 +475,8 @@ export type PromptOutcome =
  * durable user message (`source.rpcId`) and de-duplicates on — the 0.1.6
  * admission layer replays `{accepted: true}` for a repeated id, keeping the
  * at-most-once discipline observable. Images (16.50) encode as ordered
- * `image` parts after the text part.
+ * `image` parts after the text part; attached files (16.114) encode as extra
+ * `text` parts, because the Host content union has no file/document part.
  */
 export async function promptSession(
   dsh: DshHostFace,
@@ -474,6 +484,8 @@ export async function promptSession(
     sessionId: string
     prompt: string
     images?: ReadonlyArray<{ mediaType: string; base64: string }>
+    /** Serialized attached-file text parts (16.114). */
+    textParts?: ReadonlyArray<string>
   },
   options: ApiProxyFaceOptions & { rpcId?: string } = {},
 ): Promise<PromptOutcome> {
@@ -499,6 +511,8 @@ async function submitPromptTurn(
     prompt: string
     mode: 'queue' | 'steer'
     images?: ReadonlyArray<{ mediaType: string; base64: string }>
+    /** Serialized attached-file text parts (16.114). */
+    textParts?: ReadonlyArray<string>
   },
   options: ApiProxyFaceOptions & { rpcId?: string },
 ): Promise<PromptOutcome> {
@@ -512,7 +526,10 @@ async function submitPromptTurn(
         sessionId: request.sessionId,
         mode: request.mode,
         content: [
-          { type: 'text', text: request.prompt },
+          // A file-only message has no user prose; an empty first text part
+          // would add nothing and would echo as a blank line.
+          ...(request.prompt !== '' ? [{ type: 'text' as const, text: request.prompt }] : []),
+          ...(request.textParts ?? []).map(text => ({ type: 'text' as const, text })),
           ...(request.images ?? []).map(image => ({ type: 'image' as const, mediaType: image.mediaType, data: image.base64 })),
         ],
       }, per.signal),
@@ -530,9 +547,18 @@ async function submitPromptTurn(
     if (rejection !== undefined) {
       log?.('discord_prompt_submit_rejected', {
         code: rejection.code,
+        ...(rejection.detail === undefined ? {} : { detail: rejection.detail }),
         sessionId: request.sessionId,
       })
-      return { outcome: 'rejected', reason: rejectionReason(cause) }
+      // Carry the Host error code AND its `details.reason` so the Discord
+      // notice can tell a model image-modality gate apart from a rejected
+      // image file instead of blaming the model for both.
+      return {
+        outcome: 'rejected',
+        reason: rejectionReason(cause),
+        code: rejection.code,
+        ...(rejection.detail === undefined ? {} : { detail: rejection.detail }),
+      }
     }
     log?.('discord_prompt_submit_threw', { cause: String(cause), sessionId: request.sessionId })
     return { outcome: 'unknown' }

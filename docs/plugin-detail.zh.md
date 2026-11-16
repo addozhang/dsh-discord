@@ -9,6 +9,7 @@
 ## 亮点
 
 - **@mention 即会话** — 频道或线程里 mention bot 立刻起 turn；流式渲染、工具行、成文归档，宿主重启零重放
+- **线程附件直达模型** — 图片作为 image part；txt / JSON / YAML / 代码等文本类文件作为带标签的 text part，只发文件也照常起 turn，不支持的类型给出可见提示
 - **审批 / 提问按钮流** — 宿主审批卡同步进 Discord，按钮裁决；Web 与 Discord 两端先答先得
 - **9 个斜杠命令** — `/project bind`、`/permission set`、`/model select`、`/stop`、`/steer`、`/queue remove`、`/session resume`、`/guild forget`、`/info`
 - **deny-first 三级授权** — guild 白名单是外层边界，member < workspace-admin < host-operator 逐级收紧

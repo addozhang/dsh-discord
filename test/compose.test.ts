@@ -33,9 +33,17 @@ function makeSocket(url = 'wss://gateway.discord.gg/?v=10&encoding=json') {
 function setup(
   token: string | undefined,
   bindings: { workspaceForChannel: (id: string) => string | undefined; sessionForThread: (guildId: string, threadId: string) => string | undefined } | undefined,
-  hooks: { unboundNotice?: CompositionDeps['unboundNotice'] } = {},
+  hooks: {
+    unboundNotice?: CompositionDeps['unboundNotice']
+    attachmentNotice?: CompositionDeps['attachmentNotice']
+  } = {},
 ) {
   const socket = makeSocket()
+  // Always a spy so every test can assert both "called" and "not called";
+  // an injected hook is forwarded through it.
+  const attachmentNotice = vi.fn((request: { channelId: string; filenames: ReadonlyArray<string> }) => {
+    void hooks.attachmentNotice?.(request)
+  })
   const admitMention = vi.fn((request: { guildId: string; channelId: string; messageId: string; workspaceId: string; prompt: string }): Promise<{ outcome: 'admitted'; threadId: string; sessionId: string }> => {
     return Promise.resolve({ outcome: 'admitted', threadId: `thread-${request.messageId}`, sessionId: 'sess-1' })
   })
@@ -73,9 +81,10 @@ function setup(
     questions: createQuestionStore(),
     status,
     ...(hooks.unboundNotice === undefined ? {} : { unboundNotice: hooks.unboundNotice }),
+    attachmentNotice,
   }
   const runtime = startDiscordAdapter(deps)
-  return { runtime, admitMention, continueInThread, status, socket, gatewaySocketRef }
+  return { runtime, admitMention, continueInThread, status, socket, gatewaySocketRef, attachmentNotice }
 }
 
 /** Minimal valid deps with overridable lifecycle seams (lifecycle-race tests). */
@@ -143,6 +152,7 @@ describe('composed adapter runtime', () => {
       workspaceId: 'ws-1',
       prompt: 'deploy the service',
       images: [],
+      files: [],
     })
     expect(runtime.started).toBe(true)
   })
@@ -167,6 +177,7 @@ describe('composed adapter runtime', () => {
       messageId: '222222222222222222',
       prompt: 'plain follow-up, no mention',
       images: [],
+      files: [],
     })
     expect(admitMention).not.toHaveBeenCalled()
   })
@@ -240,6 +251,107 @@ describe('composed adapter runtime', () => {
         declaredSize: 2048,
         contentType: 'image/png',
       }],
+      files: [],
+    })
+  })
+
+  it('routes a text-file-only thread message into the mainline (16.114)', async () => {
+    const { continueInThread, attachmentNotice, gatewaySocketRef } = setup('token-abc', {
+      workspaceForChannel: () => undefined,
+      sessionForThread: (_guildId, threadId) => threadId === '444444444444444444' ? 'sess-9' : undefined,
+    })
+    await vi.waitFor(() => { expect(gatewaySocketRef.current).toBeDefined() })
+    gatewaySocketRef.current?.onopen?.()
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({ op: 10, d: { heartbeat_interval: 30_000 } }))
+
+    // The exact shape of the real-machine repro (2026-11-16): type 0, empty
+    // content, one `text/plain; charset=utf-8` attachment. It used to vanish
+    // here with zero logs and zero replies.
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({
+      op: 0, t: 'MESSAGE_CREATE', s: 5,
+      d: dispatchMessage({
+        content: '',
+        type: 0,
+        attachments: [{
+          id: '999999999999999999',
+          filename: 'notes.txt',
+          content_type: 'text/plain; charset=utf-8',
+          size: 249,
+          url: 'https://cdn.discordapp.com/attachments/1/2/notes.txt?ex=abc',
+        }],
+      }).d,
+    }))
+
+    await vi.waitFor(() => { expect(continueInThread).toHaveBeenCalledTimes(1) })
+    expect(continueInThread.mock.calls[0]?.[0]).toMatchObject({
+      prompt: '',
+      images: [],
+      files: [{
+        filename: 'notes.txt',
+        contentType: 'text/plain; charset=utf-8',
+        declaredSize: 249,
+      }],
+    })
+    expect(attachmentNotice).not.toHaveBeenCalled()
+  })
+
+  it('answers a binary-only attachment with a visible notice and never calls DSH', async () => {
+    const { continueInThread, attachmentNotice, gatewaySocketRef } = setup('token-abc', {
+      workspaceForChannel: () => undefined,
+      sessionForThread: (_guildId, threadId) => threadId === '444444444444444444' ? 'sess-9' : undefined,
+    })
+    await vi.waitFor(() => { expect(gatewaySocketRef.current).toBeDefined() })
+    gatewaySocketRef.current?.onopen?.()
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({ op: 10, d: { heartbeat_interval: 30_000 } }))
+
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({
+      op: 0, t: 'MESSAGE_CREATE', s: 6,
+      d: dispatchMessage({
+        content: '',
+        type: 0,
+        attachments: [{
+          id: '999999999999999999',
+          filename: 'paper.pdf',
+          content_type: 'application/pdf',
+          size: 4096,
+          url: 'https://cdn.discordapp.com/attachments/1/2/paper.pdf?ex=abc',
+        }],
+      }).d,
+    }))
+
+    await vi.waitFor(() => { expect(attachmentNotice).toHaveBeenCalledTimes(1) })
+    expect(attachmentNotice.mock.calls[0]?.[0]).toEqual({
+      channelId: '444444444444444444',
+      filenames: ['paper.pdf'],
+    })
+    expect(continueInThread).not.toHaveBeenCalled()
+  })
+
+  it('still submits the text file when a message mixes text and unsupported attachments', async () => {
+    const { continueInThread, attachmentNotice, gatewaySocketRef } = setup('token-abc', {
+      workspaceForChannel: () => undefined,
+      sessionForThread: (_guildId, threadId) => threadId === '444444444444444444' ? 'sess-9' : undefined,
+    })
+    await vi.waitFor(() => { expect(gatewaySocketRef.current).toBeDefined() })
+    gatewaySocketRef.current?.onopen?.()
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({ op: 10, d: { heartbeat_interval: 30_000 } }))
+
+    gatewaySocketRef.current?.onmessage?.(JSON.stringify({
+      op: 0, t: 'MESSAGE_CREATE', s: 7,
+      d: dispatchMessage({
+        content: 'read the notes',
+        attachments: [
+          { id: '999999999999999998', filename: 'notes.txt', content_type: 'text/plain', size: 10, url: 'https://cdn.discordapp.com/attachments/1/2/notes.txt' },
+          { id: '999999999999999999', filename: 'paper.pdf', content_type: 'application/pdf', size: 10, url: 'https://cdn.discordapp.com/attachments/1/2/paper.pdf' },
+        ],
+      }).d,
+    }))
+
+    await vi.waitFor(() => { expect(continueInThread).toHaveBeenCalledTimes(1) })
+    expect(continueInThread.mock.calls[0]?.[0]).toMatchObject({ files: [{ filename: 'notes.txt' }] })
+    expect(attachmentNotice.mock.calls[0]?.[0]).toEqual({
+      channelId: '444444444444444444',
+      filenames: ['paper.pdf'],
     })
   })
 

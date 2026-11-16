@@ -97,9 +97,13 @@ const zh = {
   mainlineSessionUnknown: '⚠️ 会话创建结果未知；请到 DSH Web 确认后再重试，不会自动重复创建。',
   mainlinePromptRejected: '⚠️ DSH 拒绝了任务提交。',
   mainlineImageFailed: '⚠️ 附件图片获取失败，任务未提交；请重试或改用文字描述。',
+  mainlineFileFailed: '⚠️ 附件文件读取失败，任务未提交；请重试或改用文字描述。',
   mainlinePromptUnknown: '⚠️ 任务提交结果未知；为避免重复执行不会自动重发，请确认后重试。',
   continuationRejected: '⚠️ 消息提交被 DSH 拒绝。',
   continuationUnknown: '⚠️ 消息提交结果未知；不会自动重发，请确认后重试。',
+  attachmentUnsupported: '⚠️ 以下附件未送达（暂不支持该类型）；目前仅支持图片与文本类文件：',
+  imageModalityRejected: '⚠️ 当前模型不支持图片输入；请在「设置 → 模型」中为该模型开启图片输入类型。',
+  attachmentRejected: '⚠️ 附件被 DSH 拒绝，任务未提交；请检查文件格式与大小后重试。',
 
   // ── unbound-channel mention affordance ───────────────────────────────
   unboundNoticeAdministrator: '💡 此频道未绑定工作区。工作区管理员可运行 `/project bind` 创建并绑定项目频道。',
@@ -271,9 +275,13 @@ const en: CopyTable = {
   mainlineSessionUnknown: '⚠️ Session creation outcome unknown; confirm on the DSH web console before retrying. It will not be resubmitted automatically.',
   mainlinePromptRejected: '⚠️ DSH rejected the task submission.',
   mainlineImageFailed: '⚠️ Could not fetch the attached image(s); the task was not submitted. Retry or describe it in text.',
+  mainlineFileFailed: '⚠️ Could not read the attached file(s); the task was not submitted. Retry or describe it in text.',
   mainlinePromptUnknown: '⚠️ Task submission outcome unknown; it will not be resent automatically to avoid double execution. Confirm and retry.',
   continuationRejected: '⚠️ The message submission was rejected by DSH.',
   continuationUnknown: '⚠️ Message submission outcome unknown; it will not be resent automatically. Confirm and retry.',
+  attachmentUnsupported: '⚠️ These attachment(s) were not delivered (unsupported type). Currently only images and text files are supported:',
+  imageModalityRejected: '⚠️ The current model does not accept image input. Enable image input for this model in Settings → Models.',
+  attachmentRejected: '⚠️ DSH rejected the attachment and the task was not submitted. Check the file format and size, then retry.',
 
   unboundNoticeAdministrator: '💡 This channel is not bound to a workspace. A workspace administrator can run `/project bind` to create and bind the project channel.',
   unboundNoticeMember: '💡 This channel is not bound to a workspace; ask a workspace administrator to run `/project bind`.',
@@ -364,6 +372,27 @@ const en: CopyTable = {
 /** Discord-visible copy for the configured language. */
 export function createCopy(language: Language): CopyTable {
   return language === 'en' ? en : zh
+}
+
+/**
+ * Pick the Discord notice for a Host `session/attachment-invalid` rejection.
+ * Only `MODEL_DOES_NOT_SUPPORT_IMAGES` is a model-capability problem; every
+ * other reason (INVALID_IMAGE, IMAGE_TOO_LARGE, IMAGE_TYPE_MISMATCH,
+ * FILE_NOT_STAGED, …) is a file problem. Treating the whole error code as a
+ * modality gate tells users to change a model setting that is already correct
+ * (16.114 real-machine finding: a 1×1 PNG was rejected as an invalid image).
+ * @returns the notice, or `undefined` when the failure is not an attachment
+ * rejection and the caller should use its generic outcome copy.
+ */
+export function attachmentRejectionCopy(
+  code: string | undefined,
+  detail: string | undefined,
+  copy: CopyTable,
+): string | undefined {
+  if (code !== 'session/attachment-invalid') return undefined
+  return detail === 'MODEL_DOES_NOT_SUPPORT_IMAGES'
+    ? copy.imageModalityRejected
+    : copy.attachmentRejected
 }
 
 /**

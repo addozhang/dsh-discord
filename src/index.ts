@@ -28,7 +28,7 @@ import { createQuestionStore, questionBoundsError } from './features/question-st
 import { createTrailingSingleFlight } from './features/single-flight.js'
 import { ADAPTER_VERSION } from './version.js'
 import { handleSelectInput, handleModalSubmit, type QuestionRoutingDeps } from './features/question-routing.js'
-import { createCopy, permissionPresetLabel, type CopyTable } from './i18n.js'
+import { attachmentRejectionCopy, createCopy, permissionPresetLabel, type CopyTable } from './i18n.js'
 import type { DshApprovalRespondPort } from './features/approval-routing.js'
 import { createInteractionRouter } from './features/interaction-router.js'
 import { channelBindingKey, parseChannelBindingKey, threadBindingKey, parseThreadBindingKey, discordDomainSpec, CHANNEL_BINDINGS_TABLE, THREAD_BINDINGS_TABLE, INTENTS_TABLE } from './state/domain.js'
@@ -46,8 +46,10 @@ import { createThreadCreationFlow, type DiscordThreadPort } from './features/thr
 import { createSessionCreationFlow, type DshSessionPort } from './features/session-creation.js'
 import { createResumeCandidatesPort } from './features/session-resume.js'
 import { createPromptSubmissionFlow, type DshPromptPort } from './features/prompt-submission.js'
-import { createSessionMainline, requestIdFor, type MainlineImageCollector } from './features/session-mainline.js'
+import { createSessionMainline, requestIdFor, type MainlineFileCollector, type MainlineImageCollector } from './features/session-mainline.js'
 import { collectImages, createSafeImageDownloadPort } from './features/image-collection.js'
+import { collectFiles, stripAttachedFileBlocks } from './features/file-collection.js'
+import { createHttpFetchPort } from './features/image-download.js'
 import { startLiveRender } from './stream/live.js'
 import type { ChannelBinding, ThreadBinding } from './state/records.js'
 import type { PolicyTable } from './policy/authorization.js'
@@ -407,6 +409,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
             sessionId: request.sessionId,
             prompt: request.prompt,
             ...(request.images === undefined ? {} : { images: request.images }),
+            ...(request.textParts === undefined ? {} : { textParts: request.textParts }),
           },
           { log: rpcLog, rpcId: request.requestId },
         )
@@ -440,6 +443,26 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         }
       },
     }
+    /**
+     * Bounded text-file collection (16.114): the same CDN allowlist as
+     * images, stricter byte caps, strict UTF-8 decoding, and labelled text
+     * parts that the echo redactor strips back out.
+     */
+    const FILE_DOWNLOAD_TIMEOUT_MS = 10_000
+    const fileCollector: MainlineFileCollector = {
+      collect: async ({ attachments }) => {
+        const result = await collectFiles(createHttpFetchPort(), {
+          nowMs: Date.now(),
+          timeoutMs: FILE_DOWNLOAD_TIMEOUT_MS,
+          attachments,
+        })
+        if (result.outcome !== 'collected') {
+          const reason = result.outcome === 'too-large' ? `too-large:${result.reason}` : result.outcome
+          return { outcome: 'failed', reason }
+        }
+        return { outcome: 'collected', texts: result.texts }
+      },
+    }
     const composedMainline = createSessionMainline({
       threads: createThreadCreationFlow({
         intents,
@@ -458,6 +481,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       }),
       turns: turnTracker,
       images: imageCollector,
+      files: fileCollector,
     })
     /** Mainline outcome → copy key; the string resolves live per language. */
     const MAINLINE_FAILURE_KEYS = {
@@ -468,6 +492,7 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       'prompt-rejected': 'mainlinePromptRejected',
       'prompt-unknown': 'mainlinePromptUnknown',
       'image-failed': 'mainlineImageFailed',
+      'file-failed': 'mainlineFileFailed',
     } as const satisfies Record<string, keyof CopyTable>
     const mainline = {
       admitMention: async (request: Parameters<typeof composedMainline.admitMention>[0]) => {
@@ -479,7 +504,9 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           rpcLog('discord_mention_admitted', { messageId: request.messageId, threadId: result.threadId, sessionId: result.sessionId })
         } else {
           rpcLog('discord_mention_not_admitted', { messageId: request.messageId, outcome: result.outcome })
-          const notice = copy[MAINLINE_FAILURE_KEYS[result.outcome]]
+          const notice = result.outcome === 'prompt-rejected'
+            ? (attachmentRejectionCopy(result.code, result.detail, copy) ?? copy[MAINLINE_FAILURE_KEYS[result.outcome]])
+            : copy[MAINLINE_FAILURE_KEYS[result.outcome]]
           void withRest(rest => rest.request('POST', `/channels/${request.channelId}/messages`, { content: notice, flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, allowed_mentions: ALLOWED_MENTIONS_NONE }))
             .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
         }
@@ -487,13 +514,15 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
       },
       continueInThread: async (request: Parameters<typeof composedMainline.continueInThread>[0]) => {
         const result = await composedMainline.continueInThread(request)
-        if (result.outcome === 'rejected' || result.outcome === 'unknown' || result.outcome === 'image-failed') {
+        if (result.outcome === 'rejected' || result.outcome === 'unknown' || result.outcome === 'image-failed' || result.outcome === 'file-failed') {
           rpcLog('discord_continuation_not_queued', { messageId: request.messageId, outcome: result.outcome })
           const notice = result.outcome === 'rejected'
-            ? copy.continuationRejected
+            ? (attachmentRejectionCopy(result.code, result.detail, copy) ?? copy.continuationRejected)
             : result.outcome === 'image-failed'
               ? copy.mainlineImageFailed
-              : copy.continuationUnknown
+              : result.outcome === 'file-failed'
+                ? copy.mainlineFileFailed
+                : copy.continuationUnknown
           void withRest(rest => rest.request('POST', `/channels/${request.threadId}/messages`, { content: notice, flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, allowed_mentions: ALLOWED_MENTIONS_NONE }))
             .catch((cause: unknown) => { rpcLog('discord_mainline_notice_failed', String(cause)) })
         }
@@ -1151,6 +1180,24 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
           rpcLog('discord_unbound_notice_threw', String(cause))
         })
       },
+      // 16.114: a binary-only attachment used to vanish with zero logs and
+      // zero replies. Filenames come off the untrusted wire, so strip mention
+      // syntax before echoing them into a channel.
+      attachmentNotice: (request) => {
+        const names = request.filenames
+          .map(name => name.replace(/[<>@]/g, '').slice(0, 80))
+          .slice(0, 10)
+          .join(', ')
+        const content = `${copy.attachmentUnsupported} ${names}`
+        void withRest(async (rest) => {
+          const sent = await rest.request('POST', `/channels/${request.channelId}/messages`, { content, flags: DISCORD_SUPPRESS_NOTIFICATIONS_FLAG, allowed_mentions: ALLOWED_MENTIONS_NONE })
+          if (sent.outcome !== 'completed') {
+            rpcLog('discord_attachment_notice_send_failed', sent.outcome === 'rejected' ? `HTTP ${String(sent.status)}` : sent.reason)
+          }
+        }).catch((cause: unknown) => {
+          rpcLog('discord_attachment_notice_threw', String(cause))
+        })
+      },
       approvals: approvalsStore,
       questions: questionsStore,
       status: statusTracker,
@@ -1286,10 +1333,10 @@ export function apply(ctx: Context, config: Config = DEFAULT_DISCORD_SETTINGS): 
         nonText: copy.userInputNonText,
         truncated: copy.userInputTruncated,
       }),
-      // Echo-redaction seam (review D4, decision A): identity until the
-      // redaction policy lands — the hook is the single place it will
-      // occupy.
-      echoRedact: text => text,
+      // Echo-redaction seam (review D4, decision A): attached-file blocks
+      // are model input, not user prose — never mirror their contents back
+      // into the Discord thread on top of the user's own upload.
+      echoRedact: text => stripAttachedFileBlocks(text),
       permissionLineCopy: () => ({ line: presetKey => copy.permissionSystemLine(permissionPresetLabel(presetKey, copy)) }),
       onQueueSnapshot: (sessionId, items) => {
         // An empty snapshot means the queue drained: drop the cache entry

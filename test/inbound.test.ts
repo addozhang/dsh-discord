@@ -86,6 +86,7 @@ describe('parseGatewayDispatch', () => {
         mentionedBot: true,
         repliedToId: undefined,
         images: [],
+        files: [],
       },
     })
   })
@@ -334,5 +335,99 @@ describe('message image attachments (16.50)', () => {
   it('normalizes to an empty list when the message carries no usable attachments field', () => {
     expect(parsedImages({})).toEqual([])
     expect(parsedImages({ attachments: 'garbage' })).toEqual([])
+  })
+})
+
+describe('message non-image attachments (16.114)', () => {
+  const TXT_URL = 'https://cdn.discordapp.com/attachments/1/2/notes.txt?ex=abc'
+
+  function attachment(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: '999999999999999999',
+      filename: 'notes.txt',
+      content_type: 'text/plain; charset=utf-8',
+      size: 249,
+      url: TXT_URL,
+      ...overrides,
+    }
+  }
+
+  function parsedFiles(payload: Record<string, unknown>) {
+    const result = parseGatewayDispatch(messageDispatch(messagePayload(payload)), SELF_USER_ID)
+    if (!result.accepted || result.event.kind !== 'message') throw new Error('expected an accepted message')
+    return result.event.files
+  }
+
+  it('carries a text/plain attachment with parameters as a text-capable file', () => {
+    // Real-machine evidence (2026-11-16): Discord declares .txt as
+    // `text/plain; charset=utf-8`, so a naive `text/plain` allowlist misses it.
+    expect(parsedFiles({ attachments: [attachment()] })).toEqual([{
+      url: TXT_URL,
+      filename: 'notes.txt',
+      declaredSize: 249,
+      contentType: 'text/plain; charset=utf-8',
+      textCapable: true,
+    }])
+  })
+
+  it('classifies text-like media types and marks binary types as unsupported', () => {
+    const files = parsedFiles({
+      attachments: [
+        attachment({ filename: 'data.json', content_type: 'application/json' }),
+        attachment({ filename: 'page.html', content_type: 'text/html; charset=utf-8' }),
+        attachment({ filename: 'paper.pdf', content_type: 'application/pdf' }),
+        attachment({ filename: 'clip.mov', content_type: 'video/quicktime' }),
+        attachment({ filename: 'raw', content_type: 'application/octet-stream' }),
+      ],
+    })
+    expect(files.map(entry => [entry.filename, entry.textCapable])).toEqual([
+      ['data.json', true],
+      ['page.html', true],
+      ['paper.pdf', false],
+      ['clip.mov', false],
+      ['raw', false],
+    ])
+  })
+
+  it('never puts supported images into the file list', () => {
+    expect(parsedFiles({
+      attachments: [
+        attachment({ filename: 'chart.png', content_type: 'image/png' }),
+        attachment({ filename: 'photo.jpeg', content_type: 'image/jpeg; charset=binary' }),
+      ],
+    })).toEqual([])
+  })
+
+  it('keeps a content-less, file-only message accepted with its task carrier', () => {
+    // Regression for the silent drop: a pure attachment message is a valid
+    // type-0 member message and must survive normalization with its file.
+    const result = parseGatewayDispatch(
+      messageDispatch(messagePayload({ content: '', type: 0, attachments: [attachment()] })),
+      SELF_USER_ID,
+    )
+    expect(result.accepted).toBe(true)
+    if (!result.accepted || result.event.kind !== 'message') return
+    expect(result.event.content).toBe('')
+    expect(result.event.files).toHaveLength(1)
+    expect(result.event.files[0]?.textCapable).toBe(true)
+  })
+
+  it('skips malformed entries without rejecting the message', () => {
+    expect(parsedFiles({
+      attachments: [
+        'not-a-record',
+        attachment({ url: '' }),
+        attachment({ size: '249' }),
+        attachment({ size: -1 }),
+        attachment({ content_type: 42 }),
+        { id: '888888888888888888' },
+        attachment(),
+      ],
+    })).toHaveLength(1)
+  })
+
+  it('normalizes to an empty list when the field is absent or malformed', () => {
+    expect(parsedFiles({})).toEqual([])
+    expect(parsedFiles({ attachments: 'garbage' })).toEqual([])
   })
 })

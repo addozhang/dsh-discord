@@ -238,7 +238,20 @@ dsh plugin --profile web-test add file:/tmp/addozhang-dsh-discord-<ver>.tgz
   `command/done` 审计对，切换产生 durable `permission/preset` 事件（渲染层出系统行）
 - 图片 modality 门：`inputModalities` / `MODEL_DOES_NOT_SUPPORT_IMAGES` /
   `RemoteError('session/attachment-invalid')`；settings.yaml `input: [text, image]`
-  解锁方式有效
+  解锁方式有效（pi-ai 路由用 `input`/`modelOverrides`；DeepSeek 直连
+  `llm-deepseek-api-key` 用 `inputModalities`/`models`，且该路由的
+  `resolveListedCatalog` 硬编码 `overrides: {}`，不接受 modelOverrides）
+- **`session/attachment-invalid` ≠ 「模型不支持图片」（16.114，2026-11-16 真机判例）**：
+  `details.reason` 至少有 `MODEL_DOES_NOT_SUPPORT_IMAGES` / `INVALID_IMAGE` /
+  `IMAGE_TYPE_MISMATCH` / `IMAGE_TOO_LARGE` / `TOO_MANY_IMAGES` / `IMAGES_TOO_LARGE` /
+  `FILE_NOT_STAGED`（见宿主 `dsh-client-ui-conversation/src/client/image-labels.ts`），
+  只有第一个该提示改模型，其余都是文件问题。插件曾按 `code` 分流，把 1×1 探针
+  PNG 的 `INVALID_IMAGE` 误报成 modality 门，白查了一轮 profile 配置 ——
+  现在 `RemoteError.details.reason` 从 `host-face.ts` 透传到组合根并写进 trace。
+  `deepseek-official/deepseek-flash`（0.2.2-rc.3）在内置目录与官方 `/models`
+  listing 里都声明 `[text, image]`，**不需要 profile 覆盖**；真机图片探针必须用
+  正常尺寸素材（256×256），1×1 / 70 B PNG 会被判无效。判据：换真实图能跑通
+  + trace 的 `detail` 才是权威，别拿错误码当原因
 
 ### settings / Config 模型（0.1.7 profile-backed forms）
 
@@ -464,6 +477,17 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   真机验证走 `scripts/devtools-cdp-ask.mjs`（四条路径：多选 + Other、单选 Other、
   长标题、无选项题），发布后又在 web-test 上装精确版 0.6.8 复验一次——**装发布版
   复验**这一步不能省，twin 只建模 40060，表单校验它一概不测
+- **发版记录（0.6.10 stable，2026-11-16）**：16.114 打通线程附件——非图片文本
+  文件在 ingress 保留（`NormalizedMessage.files`）、经独立
+  `file-collection.ts` 边界（256/512 KiB、严格 UTF-8、CDN allowlist）文本化后
+  作为 `text` part 提交，`hasTask` 纳入 files 使纯附件消息不再静默，
+  二进制附件与收集失败各有可见提示，`contentHash` 覆盖附件文本，
+  `echoRedact` 阻止文件内容回显。真机五组（纯文本 / 纯 txt / 文字+txt /
+  1×1 无效 PNG / 256×256 有效 PNG）全通过，93 files / 891 tests。
+  **判例**：图片 modality 门本来就是通的，`session/attachment-invalid` 的
+  `details.reason` 必须透传后按 reason 分流（详见 16.114 判例条）；
+  曾误按 code 报「模型不支持图片」，白查一轮 profile 配置。
+  README / plugin-detail 双语、OpenSpec 16.114 与两份 spec 同步
 
 **0.2.2-rc.2 审计与真机验证（2026-11-13，next 通道；CLI 已升 rc.2）**：
 

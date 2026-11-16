@@ -20,9 +20,11 @@ export interface DshPromptPort {
     mode: 'queue'
     /** Collected images (16.50); omitted for text-only prompts so legacy shapes are untouched. */
     images?: ReadonlyArray<PromptRequestImage>
+    /** Serialized attached-file text parts (16.114); omitted when none. */
+    textParts?: ReadonlyArray<string>
   }): Promise<
     | { outcome: 'accepted' }
-    | { outcome: 'rejected'; reason: string }
+    | { outcome: 'rejected'; reason: string; code?: string; detail?: string }
     | { outcome: 'unknown' }
   >
 }
@@ -41,7 +43,7 @@ export interface PromptSubmissionDeps {
 
 export type PromptSubmissionResult =
   | { outcome: 'accepted' }
-  | { outcome: 'rejected' }
+  | { outcome: 'rejected'; code?: string; detail?: string }
   | { outcome: 'unknown' }
   | { outcome: 'already-submitted' }
   | { outcome: 'unconfirmed' }
@@ -53,6 +55,8 @@ export interface PromptRequest {
   prompt: string
   /** Collected images (16.50); omitted for text-only prompts. */
   images?: ReadonlyArray<PromptRequestImage>
+  /** Serialized attached-file text parts (16.114); omitted when none. */
+  textParts?: ReadonlyArray<string>
 }
 
 export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
@@ -61,10 +65,12 @@ export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
 } {
   async function submit(requestId: string, request: PromptRequest): Promise<PromptSubmissionResult> {
     const images = request.images ?? []
+    const textParts = request.textParts ?? []
     const contentHash = await hashPayload({
       sessionId: request.sessionId,
       prompt: request.prompt,
       ...(images.length > 0 ? { images } : {}),
+      ...(textParts.length > 0 ? { textParts } : {}),
     })
     const claim = await deps.intents.claim({
       messageId: requestId,
@@ -93,6 +99,7 @@ export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
       prompt: request.prompt,
       mode: 'queue',
       ...(images.length > 0 ? { images } : {}),
+      ...(textParts.length > 0 ? { textParts } : {}),
     })
 
     if (submitted.outcome === 'accepted') {
@@ -101,7 +108,11 @@ export function createPromptSubmissionFlow(deps: PromptSubmissionDeps): {
     }
     if (submitted.outcome === 'rejected') {
       await deps.intents.resolve(requestId, 'failed', deps.nowMs())
-      return { outcome: 'rejected' }
+      return {
+        outcome: 'rejected',
+        ...(submitted.code === undefined ? {} : { code: submitted.code }),
+        ...(submitted.detail === undefined ? {} : { detail: submitted.detail }),
+      }
     }
     await deps.intents.resolve(requestId, 'unknown', deps.nowMs())
     return { outcome: 'unknown' }

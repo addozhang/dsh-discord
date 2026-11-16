@@ -42,6 +42,13 @@ export function validateImageUrl(rawUrl: string): ImageUrlValidation {
   return { ok: true, url }
 }
 
+/**
+ * The same allowlist for non-image attachments (16.114). The URL rules are
+ * host/protocol rules, not media rules — text files must not be able to
+ * reach a foreign server either.
+ */
+export const validateAttachmentUrl = validateImageUrl
+
 /** The fetch surface the downloader uses (no redirect following built in). */
 export interface HttpFetchPort {
   fetch(url: string): Promise<{
