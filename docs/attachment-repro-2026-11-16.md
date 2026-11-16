@@ -155,11 +155,46 @@ C 组明明带了一个附件，`content` 仍只有**一个 text part**，没有
 `pnpm build` / `pnpm pack` 全绿；安装副本与 tarball `diff -rq` 一致；
 `dsh plugin --profile web-test rm/add` 后重启宿主复验。
 
+## 发版与发布版复验（0.6.10 stable，2026-11-16）
+
+- 提交：`99f3227 feat: deliver thread attachments to DSH sessions (16.114)`
+  （24 文件）；版本提交 `f6a461c 0.6.10` + tag `v0.6.10`；
+  `git push --follow-tags` 触发 GitHub Actions OIDC publish（无 token）。
+- 发版前同步：README.md / README.zh.md（附件范围、版本表、891 tests）、
+  `docs/plugin-detail.*` 双语亮点、AGENTS.md 发版记录与判例；本地 OpenSpec
+  新增 change `2026-11-16-thread-attachments`（design/tasks 的 16.114），
+  并同步 `specs/discord-transport/spec.md` 与 `specs/session-control/spec.md`
+  （`openspec/` 按约定不入库）。
+- CI：publish workflow `43794459563` 全绿（build / typecheck / lint / test /
+  publish / create release），main 的 CI `43794459435` 亦全绿；GitHub Release
+  <https://github.com/addozhang/dsh-discord/releases/tag/v0.6.10>。
+- **registry 元数据延迟（AGENTS.md 判例复现）**：workflow 成功后首轮
+  `npm view @addozhang/dsh-discord@0.6.10` 仍报 404、`latest` 仍是 `0.6.9`；
+  但 Publish 日志已有 `+ @addozhang/dsh-discord@0.6.10` 与 provenance 签名，
+  说明是异步传播而非 Rekor 409。轮询版本专属 endpoint 第 4 次返回 200，
+  随后 packument 的 `latest` 更新为 `0.6.10`；**没有 rerun、没有跳版本**。
+- 发布版安装：`dsh plugin --profile web-test rm` →
+  `add @addozhang/dsh-discord@0.6.10`（精确版本号），安装副本
+  `package.json.version = 0.6.10`；registry tarball 与安装副本 `diff -rq`
+  逐文件一致，sha512 integrity 与 packument 记录吻合，新代码
+  （`collectFiles` / `attachmentRejectionCopy`）在位。
+- 发布版真机复验（trace `/tmp/web-test-release-verify.log`）：
+
+  | 组 | 输入 | 结果 |
+  |---|---|---|
+  | R1 | 纯文本 | `收到` |
+  | R2 | 只发 txt | 模型读到 marker `DSH_ATTACH_PROBE_9C21=ALPHA-BRAVO-42` |
+  | R3 | 文字 + txt | 精确输出 marker（原为 `NO_FILE`） |
+  | R4 | 1×1 PNG | 新文案「检查文件格式与大小」+ trace `detail: INVALID_IMAGE` |
+  | R5 | 256×256 PNG | 正常 turn；模型描述「256×256，四色渐变背景加中央白色方块」；Discord 把上传转码为 `image/webp`，MIME 归一化判定正确 |
+
 ## 环境与遗留
 
-- web-test 宿主仍在 3081 运行；**desktop 正式环境全程未动**。
+- web-test 宿主仍在 3081 运行（当前 trace `/tmp/web-test-release-verify.log`）；
+  **desktop 正式环境全程未动**。
 - `/Users/addo/.dsh/profiles/web-test/cordis.patch.yml` 已移除无效的
   `llm-pi-ai` 覆盖，最终**不需要任何模型能力配置**；备份留在
   `cordis.patch.yml.bak-attach-20261116` / `.bak-before-image-fix`。
-- 本地构建版本号仍是 0.6.9（未发版）；本次改动尚未提交，发版需用户确认。
-- 测试痕迹：目标 thread 内本轮新增 5 条真人消息 + 5 条 bot 消息。
+- 已发布 `0.6.10`（npm `latest`），代码与文档均已提交推送；工作区干净。
+- 测试痕迹：目标 thread 内本轮发布版复验新增 5 条真人消息 + 7 条 bot 消息
+  （含两组 thinking 占位消息）。
