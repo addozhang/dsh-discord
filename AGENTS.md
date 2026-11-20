@@ -541,6 +541,20 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   （retry_after 可达 ~170s），专项脚本需带重试
 - **发版 0.6.9** = 系统消息过滤 + devDeps 矩阵跟随 rc.3 + zod 钉 4.6.6
 
+**0.2.2-rc.5 审计与真机验证（2026-11-20，latest/next 双线对齐；CLI 已升 rc.5）**：
+
+- dist-tags：`latest` / `next` 均已移至 `0.2.2-rc.5`（`alpha` = `0.2.2-alpha.3`）。
+  审计 **51 OK / 0 CHANGED / 0 MISSING** 零漂移；依赖矩阵：`cordis 4.1.0`、
+  `schemastery 3.19.0`、`dsh-storage-domain` 依赖 `zod 4.6.6` 均与插件一致。
+- devDependencies 7 个 `@deepseek-ai/dsh-*` 类型包同步 `0.2.2-rc.3` → `0.2.2-rc.5`；
+  本地 typecheck / lint / build / **93 files / 891 tests** 全绿。
+- 真机（rc.5 CLI + `web-test` 0.6.10）：零门禁/零 pending，`adapter.status` RPC 200
+  （`token: configured, connection: connected`）；`real-machine-full.sh` **5/6**
+  （REST smoke 9/9、ack 310/312/295ms、mention E2E 全链 + trace hygiene 零失败形态；
+  bind stage 同样是 `abctab-internal` 已绑定的环境幂等，非回归）。
+- **不发版（用户确认）**：运行时代码零变化，0.6.5+ 去依赖化后 patch 级宿主升级
+  不触发门禁，仅同步 devDeps 与 README 配对表。
+
 - **插件列表显示名/描述/图标（`locale/` meta 约定）**：宿主 `dsh-app-boot` 的
   `readPluginMeta`（`pluginPackages.metaOf`）不执行插件代码、只读静态资源——
   标题回退链 = `locale/<lang>.json` 的 `meta.title` → package.json `name` →
