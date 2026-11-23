@@ -586,13 +586,13 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
 - **构建期钉版**：跟随 alpha 线时 schemastery 须 `3.19.0` → `3.20.0-alpha.1`，
   否则 `pnpm build` 报 TS2742（typecheck 过、build 才暴露）；devDeps 7 包 → `0.2.3-alpha.2`、cordis → `4.2.0-alpha.1` 后 typecheck / lint / **93
   files / 891 tests** 全绿，`zod 4.6.6` 不变；运行时双实例不咬人
-- **桌面 App 已 auto-update 到 0.2.3-alpha.2（2026-11-23 核实）**：desktop
-  profile 仍是发布版 0.6.10 + `enabled: true` → 同一代码在同一版本宿主上必撞同一
-  探针，**正式环境此刻多半加载不了**（隔离 profile 已复现；未在桌面直接观测）
+- **桌面 App 已 auto-update 到 0.2.3-alpha.2（2026-11-23）**：desktop profile 曾是
+  发布版 0.6.10（同代码必撞同一探针）；经用户授权用 `plugin_manager
+  install_bundle` 热装 `~/.dsh/local-bundles/…-alpha-compat.tgz`（16.115 构建），
+  fiber active、无需重启。**依赖别留 /tmp**（重启即清）
 - **Node**：alpha 起 `engines.node = ^24.22.3 || >=26.13.1`；本机 v26.0.0 偏低，
   仅 EBADENGINE 警告、宿主能启动，官方要求升级 Node（未执行）
-- upgrade guide（`v0.2.2-rc.5` + `v0.2.3-alpha.1`）：`inspectSession` 移除 / Action
-  cards 跨 turn / 图片字节上限 / `system/message` 章节累计 / 压缩摘要预览——零引用
+- upgrade guide（`v0.2.2-rc.5` + `v0.2.3-alpha.1`）各项：插件零引用
 - **插件列表显示名/描述/图标（`locale/` meta 约定）**：宿主 `dsh-app-boot` 的
   `readPluginMeta`（`pluginPackages.metaOf`）不执行插件代码、只读静态资源——
   标题回退链 = `locale/<lang>.json` 的 `meta.title` → package.json `name` →
@@ -624,14 +624,15 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   `dsh --version`；不追 alpha/next（除非明确要求）
 - **当前例外（2026-11-23，用户要求）**：为验证 `0.2.3-alpha.2`，CLI **在
   alpha.2**，不与 `latest`（rc.5）对齐。alpha 上发布版 0.6.10 拒活，真机须装补丁
-  构建；node v26.0.0 低于 alpha engines（仅警告）；桌面 App 同日已自行升到
-  alpha.2。回基线：`/opt/homebrew/bin/npm i -g @deepseek-ai/dsh@0.2.2-rc.5`
+  构建；node v26.0.0 低于 alpha engines（仅警告）。回基线：`/opt/homebrew/bin/npm i -g
+  @deepseek-ai/dsh@0.2.2-rc.5`
 - **环境三件套**：CLI 宿主 + `web-test` profile + 调试 Chrome（9222）；测试
   guild = **Bot Test Server**（1562450757805146123），bot = **DSH Test**
   （app 1550676723773739048）；token 读 profile 自己的凭据文件（见下节清单），
   先 REST `users/@me` 验 app id 再用
 - **绝不碰 desktop profile**：desktop 是日用宿主（App 正在跑，改前先确认；
-  它的 patch/插件目录/凭据一律不动；验证结束恢复 App 运行态）
+  它的 patch/插件目录/凭据一律不动；验证结束恢复 App 运行态）。例外须用户明示
+  授权（2026-11-23 热装补丁包一次；`plugin_manager` 可免停宿主）
 - **控制变量**：先装 npm **发布版**（精确版本号）验证配置基线（白名单/
   绑定频道/命令注册），基线通过后才换本地修复构建对比测试
 - **凭据按 profile 隔离**：web-test 指自己的凭据文件，桌面端用全局那份，两套
