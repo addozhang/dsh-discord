@@ -40,10 +40,13 @@ const REQUIRED_CONTRACT_MEMBERS: Record<HostServiceName, readonly string[]> = {
   credentials: ['resolve', 'describe', 'set', 'unset'],
   settings: ['describe', 'update'],
   storageDomain: ['open'],
-  // requestRejection fences the adapter-status RPC before any handler
-  // runs; webServer.register is the supported registration path (the
-  // connection's own rpc.handle is scoped out of external plugins).
-  connection: ['rpc', 'requestRejection'],
+  // `rpc` anchors the connection service; the adapter-status route is
+  // registered on the webServer (the connection's own rpc.handle is scoped
+  // out of external plugins). Its request fence is host-generation dependent
+  // and deliberately NOT probed: through 0.2.2 the adapter calls
+  // `requestRejection` itself; from 0.2.3-alpha.1 that member is gone and the
+  // webServer authenticates the route (`auth: 'required'`) before the handler.
+  connection: ['rpc'],
   webServer: ['register'],
   commands: ['execute'],
   permissionPresets: ['catalog'],

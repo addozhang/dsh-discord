@@ -117,6 +117,44 @@ describe('adapter status rpc', () => {
     expect(mismatch.result.error.code).toBe('gateway/bad-request')
   })
 
+  it('declares the route as authenticated for hosts that fence it themselves', async () => {
+    // dsh 0.2.3-alpha.1+ dropped `connection.requestRejection`: the webServer
+    // authenticates the route before the handler runs. The adapter must then (a)
+    // declare the route `auth: 'required'` explicitly rather than rely on the
+    // carrier default, and (b) serve admitted requests instead of throwing on
+    // the absent fence member (that throw surfaced as a bare 400 per request).
+    let routeHandler: ((req: unknown, res: unknown) => Promise<void>) | undefined
+    const registered: Array<{ auth?: string }> = []
+    const webServer = {
+      register: (route: { auth?: string; handler: (req: unknown, res: unknown) => Promise<void> }) => {
+        registered.push(route)
+        routeHandler = route.handler
+        return () => undefined
+      },
+    }
+    const connection = { rpc: { handle: () => () => {} } }
+    const ctx = { get: (name: string) => ({ webServer, connection })[name], effect: (execute: () => unknown) => execute() as () => void }
+    installAdapterStatusRpc(ctx, createAdapterStatusTracker())
+
+    expect(registered[0]?.auth).toBe('required')
+
+    const state: { status?: number; body?: string } = {}
+    await routeHandler?.(
+      {
+        method: 'POST',
+        url: `${DISCORD_RPC_CHANNEL}/${STATUS_ENDPOINT}`,
+        headers: { 'content-type': 'application/json' },
+        on(event: string, listener: (arg?: unknown) => void) {
+          if (event === 'data') listener(Buffer.from(JSON.stringify({ type: 'client-request', rpcId: 'r-3', method: STATUS_ENDPOINT, payload: {} })))
+          if (event === 'end') listener()
+        },
+      },
+      { writeHead: (status: number) => { state.status = status }, end: (body: string) => { state.body = body } },
+    )
+    expect(state.status).toBe(200)
+    expect((JSON.parse(state.body ?? '') as { result: { ok: boolean } }).result.ok).toBe(true)
+  })
+
   it('exposes the channel constant the client must call', () => {
     expect(DISCORD_RPC_CHANNEL).toBe('/dsh-discord')
     expect(STATUS_ENDPOINT).toBe('adapter.status')

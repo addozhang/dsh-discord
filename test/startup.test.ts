@@ -91,6 +91,16 @@ describe('host capability boundary', () => {
     expect(() => { validateHostCapabilities(name => services[name]); }).not.toThrow()
   })
 
+  it('activates on a host whose webServer authenticates routes itself (no requestRejection)', () => {
+    // dsh 0.2.3-alpha.1 removed `connection.requestRejection`: the webServer now
+    // authenticates registered routes (`auth` defaults to required) before any
+    // handler runs, so the adapter-side fence member is no longer part of the
+    // contract. Refusing to activate here is what kept 0.6.10 off 0.2.3-alpha.2.
+    const services = validServices()
+    services.connection = { rpc: { handle: () => () => {} } }
+    expect(() => { validateHostCapabilities(name => services[name]); }).not.toThrow()
+  })
+
   it('apply refuses a context whose required services are absent', () => {
     const ctx = { get: () => undefined, logger: { debug: () => {} } }
     expect(() => { apply(ctx as never); }).toThrow(/sessionController/)

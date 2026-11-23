@@ -211,9 +211,13 @@ interface ChannelResponse {
   end(body?: string): void
 }
 
-/** The connection service's request fence: 401/403 verdicts, undefined = admitted. */
+/**
+ * The adapter-side request fence of hosts through 0.2.2: 401/403 verdicts,
+ * undefined = admitted. Absent from 0.2.3-alpha.1, where the webServer
+ * authenticates the registered route itself before any handler runs.
+ */
 interface FenceConnection {
-  requestRejection(request: ChannelRequest): number | undefined
+  requestRejection?(request: ChannelRequest): number | undefined
 }
 
 /** The webServer registry our own context may register a prefix route on. */
@@ -221,6 +225,8 @@ interface RouteWebServer {
   register(route: {
     kind: 'prefix'
     path: string
+    /** Authentication demand of 0.2.3+ hosts; older hosts ignore the field. */
+    auth?: 'required'
     handler: (request: ChannelRequest, response: ChannelResponse) => Promise<void>
   }): unknown
 }
@@ -262,8 +268,9 @@ function badRequest(response: ChannelResponse, rpcId: string, message: string): 
 }
 
 /**
- * Serve one channel request: the connection service's fence first (the
- * browser-auth + trusted-host verdict), then the host's channel wire
+ * Serve one channel request: the adapter-side fence first where the host
+ * provides one (browser-auth + trusted-host verdict; on hosts without it the
+ * webServer has already authenticated the `auth: 'required'` route), then the
  * protocol — POST + JSON `client-request` envelope whose method must match
  * the endpoint, answered with a `server-response` envelope.
  */
@@ -273,7 +280,7 @@ async function serveChannel(
   request: ChannelRequest,
   response: ChannelResponse,
 ): Promise<void> {
-  const rejection = connection.requestRejection(request)
+  const rejection = connection.requestRejection?.(request)
   if (rejection !== undefined) {
     response.writeHead(rejection)
     response.end(rejection === 401 ? 'unauthorized' : 'forbidden')
@@ -328,6 +335,12 @@ async function serveChannel(
  * ctx.inject wrapper never fires on an already-started plugin, so the
  * sanctioned shape is: our prefix route, the connection service's fence
  * method, and the channel envelope replicated verbatim.
+ *
+ * 0.2.3-alpha.1+ moved the fence into the carrier: the webServer authenticates
+ * a route declared `auth: 'required'` before the handler runs, and
+ * `requestRejection` is gone. Its successor `admit()` is NOT a drop-in: it
+ * reads `connection.authentication` through the caller's context, so from an
+ * external plugin it throws (surfacing as a bare 400 on every request).
  */
 export function installAdapterStatusRpc(
   ctx: HostChannelContext,
@@ -340,6 +353,7 @@ export function installAdapterStatusRpc(
   const disposer = ctx.effect(() => webServer.register({
     kind: 'prefix',
     path: DISCORD_RPC_CHANNEL,
+    auth: 'required',
     handler: (request, response) => serveChannel(connection, handler, request, response),
   }), 'dsh-discord management channel')
   return () => {
