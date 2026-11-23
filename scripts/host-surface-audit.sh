@@ -149,6 +149,34 @@ actual=$(check_grep "$PRESETS_DIR" "permission/preset")
 check "durable permission/preset event" "FOUND" "$actual"
 echo ""
 
+# ── 4c. adapter status channel fence ────────────────────────────────────────
+echo "── 4c. Adapter status channel fence ──"
+# The plugin's management channel must be authenticated before any handler
+# runs. Through 0.2.2 the adapter applied `connection.requestRejection`
+# itself and the webServer had no route-auth concept. 0.2.3-alpha.1 moved the
+# fence into the carrier: requestRejection is gone and a registered route's
+# `auth` defaults to required. 0.6.10 refused to activate on 0.2.3-alpha.2
+# while this audit still said 51 OK — the member was not on the list.
+FENCE_CONN_DIR="$DEEPSEEK_DIR/dsh-client-connection"
+FENCE_WEB_JS="$DEEPSEEK_DIR/dsh-host-webserver/lib/index.js"
+FENCE_CORE="$(echo "$HOST_VER" | sed 's/-.*$//')"
+if [[ "$(printf '%s\n0.2.3\n' "$FENCE_CORE" | sort -V | head -1)" == "0.2.3" ]]; then
+  # Carrier-auth generation: the adapter-side fence must be gone (a host that
+  # keeps it is fine to call, but its return means the model changed again)
+  # and the webServer must own the route fence.
+  actual=$(check_grep "$FENCE_CONN_DIR" "requestRejection")
+  check "carrier-auth host: connection.requestRejection retired" "NOT_FOUND" "$actual"
+  actual=$(check_grep "$FENCE_WEB_JS" 'auth ?? "required"')
+  check "carrier-auth host: webServer route auth defaults to required" "FOUND" "$actual"
+else
+  # Adapter-fence generation: the member the adapter calls must exist.
+  actual=$(check_grep "$FENCE_CONN_DIR" "requestRejection")
+  check "adapter-fence host: connection.requestRejection present" "FOUND" "$actual"
+  actual=$(check_grep "$FENCE_WEB_JS" 'auth ?? ')
+  check "adapter-fence host: webServer route auth not yet owned" "NOT_FOUND" "$actual"
+fi
+echo ""
+
 # ── 5. settings exports ─────────────────────────────────────────────────────
 echo "── 5. Settings exports ──"
 SETTINGS_JS="$DEEPSEEK_DIR/dsh-settings/lib/index.js"

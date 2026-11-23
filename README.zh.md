@@ -41,12 +41,13 @@
 | 通道 | 适配器 | dsh CLI | 安装命令 |
 |---|---|---|---|
 | **stable（0.2.2 线）** | `0.6.10` — npm `latest` | `0.2.2-rc.5` — npm `latest` / `next` | `dsh plugin --profile web add @addozhang/dsh-discord` |
-| **预发布（0.2.2 线）** | npm `next` 仍指向 `0.6.5-rc.1`，已被 `0.6.10` 取代——需要预发布版时用精确版本号 | `0.2.2-rc.5` — npm `latest` / `next` | `dsh plugin --profile web add @addozhang/dsh-discord@0.6.5-rc.1` |
+| **预发布（0.2.3 线）** | `0.6.11-rc.1` — npm `next`（0.2.2 线同样可用） | `0.2.3-alpha.2` — npm `alpha` | `dsh plugin --profile web add @addozhang/dsh-discord@0.6.11-rc.1` |
 | 旧线（0.1.7） | `0.5.0` — 精确版本号 | `0.1.7-rc.1` — 精确版本号 | `dsh plugin --profile web add @addozhang/dsh-discord@0.5.0` |
 
 - **适配器 `0.6.5+` 不再随包携带任何 dsh 内部包**：`dsh-storage-domain` 的声明辅助（`defineDomain`/`domainTable`）已内联进插件，宿主的 `storageDomain` 服务按结构化契约消费。因此 dsh CLI / Desktop 在 0.2.x 线内升级（含 `0.2.1-rc.5` 起生效的插件精确版本兼容门）不会再禁用本插件。宿主 API 面仍由 startup 探针守护——宿主缺少所需服务面时拒绝激活并给出一条可操作诊断。
 - **适配器 `0.6.9` 已在 dsh `0.2.2-rc.3` 上完成接触面审计与真机验证**（2026-11-14），并修复线程内系统消息被当作 prompt 提交的问题——重命名、置顶、建线程等通知现在在 ingress 边界就被拒收（issue #17）。0.2.2 线内单纯的 patch 级宿主升级本身不需要适配器发版，且 `0.6.5+` 不携带 dsh 内部包，精确版本兼容门无从触发。
 - **适配器 `0.6.10` 打通线程附件链路**（2026-11-16）：非图片文本类文件从 Discord CDN 下载后以 text part 提交、纯附件消息不再被丢弃、不支持的二进制附件给出可见提示，宿主 `session/attachment-invalid` 按 `details.reason` 分流提示（只有 `MODEL_DOES_NOT_SUPPORT_IMAGES` 才指向模型配置）。已在 dsh `0.2.2-rc.3`（2026-11-16）与 `0.2.2-rc.5`（2026-11-20；51/51 接触面审计 + CDP 真机矩阵）上完成验证。
+- **dsh `0.2.3-alpha.1` 及以上必须使用适配器 `0.6.11-rc.1`**（2026-11-23）。宿主把注册路由的鉴权移进了 webServer 并移除了 `connection.requestRejection`，因此适配器 `0.6.10` 及更早版本在新宿主上会以 `connection lacks 'requestRejection'` 拒绝激活——而 Desktop 的自动更新会静默换到新宿主线。适配器现在把自己的管理通道声明为需鉴权路由，并在宿主提供围栏时照旧调用，同一个构建可同时运行在 0.2.2 与 0.2.3 线上。已在 dsh `0.2.3-alpha.2`（CDP 矩阵 + 审批/提问流）与 `0.2.2-rc.5` 上完成真机验证。
 - **适配器 `0.6.1`–`0.6.4` 的存量安装注意：** 这些版本把 `dsh-storage-domain@0.2.1-rc.3` 作为运行时依赖随包携带。dsh `0.2.1-rc.5` 起宿主会禁用 profile 树中与运行时版本不精确匹配的插件行——被携带的副本盖住宿主副本后，`storageDomain` 服务随之消失，插件保持 pending（UI 里既无工作区也无会话，数据无损）。把适配器升级到 `0.6.5+` 即修复；若曾在 profile 的 `package.json` 里手工添加过 `@deepseek-ai/dsh-storage-domain` 条目（一种临时缓解），请一并移除——否则下一次宿主升级它会自己撞上同一道门禁。
 - 更早的配对关系不变：适配器 `0.6.0-rc.1` ↔ dsh `0.2.0-rc.2`（dist-tags 已移到 0.2.1，两侧都只能精确版本号安装），适配器 `0.5.0` 同理反向钉在 `0.1.7-rc.1` 线；适配器 `>=0.5.0-rc.4`（含 `0.5.0`）使用 0.1.7 的 profile-backed settings forms 与控制器服务，在更旧的宿主上无法加载（startup 探针会给出一条可操作的诊断后拒绝激活）；`0.5.0-rc.1`–`rc.3` 对应 dsh `0.1.6-alpha`；适配器 `0.4.x` 使用旧版 `apiProxy` 宿主面（该面已在 `0.1.6-alpha` 中移除）——它仍是 dsh `0.1.5` stable 线的配对，可用精确版本号安装（如 `@addozhang/dsh-discord@0.4.0`）。
 - 切换 dsh CLI 通道：`npm install -g @deepseek-ai/dsh@latest`（0.2.2-rc.5，配适配器 0.6.5+）或 `npm install -g @deepseek-ai/dsh@0.1.7-rc.1`（配适配器 0.5.0）。
