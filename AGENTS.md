@@ -569,15 +569,16 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   `this.ctx` 绑到**调用方**，未 inject 即抛 `cannot get property
   "connection.authentication" without inject`。症状：已鉴权请求一律 **400 空体**
   （webServer 兜底 catch，warn 不出 stderr）。**别拿 admit 替代**
-- **修复已入库（16.115，2026-11-23，未发版）**：探针改 `connection: ['rpc']`；围栏
-  `connection.requestRejection?.(request)`；路由显式 `auth: 'required'`。RED→GREEN
-  两条测试，93 files / 893 tests；同一构建在 rc.5 与 alpha.2 行为一致。发版待
-  0.2.3 进 rc。遗留：审计脚本应补 `requestRejection` 检查项
+- **发版 0.6.11-rc.1（16.115，2026-11-23；npm `next`，`latest` 仍 0.6.10）**：探针改
+  `connection: ['rpc']`；围栏 `connection.requestRejection?.(request)`；路由显式
+  `auth: 'required'`。RED→GREEN 两条测试，93 files / 893 tests。发布版复验：alpha.2
+  web-test 套件 5/6 + 设置卡片 Connected，rc.5 空 home 冒烟一致；审计补围栏项
 - **真机（2026-11-23，alpha.2 CLI + `web-test` 装补丁构建，测后已还原）**：
   `real-machine-full.sh` **5/6**，与 rc.5 基线一致（REST 9/9、ack ~300ms、mention
   全链 + trace 零失败；bind 段仍是 `abctab-internal` 已绑定的环境幂等）。补测均
   PASS：开放题、多选 + Other（合并语义成立）、单选普通选项、**审批**（Allow
-  once → `allowed-once` → 命令执行 → 按钮退休）。未验：浏览器内设置卡片、图片附件
+  once → `allowed-once` → 命令执行 → 按钮退休）。未验：图片附件（设置卡片在发版
+  复验时已补：Settings → Discord 显示 Connected）
 - **真机判例**：① 指向线程 `1574016375746199585` 的 `50001` 是**正式 bot** 的
   绑定（三表跨 profile 共享），非回归；②「Waiting for approval…」状态行在提问
   挂起时也会出现（`setApprovalWait` 共用）；③ `ask.mjs --pre` 只适用
@@ -588,8 +589,8 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   files / 891 tests** 全绿，`zod 4.6.6` 不变；运行时双实例不咬人
 - **桌面 App 已 auto-update 到 0.2.3-alpha.2（2026-11-23）**：desktop profile 曾是
   发布版 0.6.10（同代码必撞同一探针）；经用户授权用 `plugin_manager
-  install_bundle` 热装 `~/.dsh/local-bundles/…-alpha-compat.tgz`（16.115 构建），
-  fiber active、无需重启。**依赖别留 /tmp**（重启即清）
+  install_bundle` 热装本地包，发布后换回 npm `0.6.11-rc.1`，fiber active、无需重启。
+  **依赖别留 /tmp**（重启即清）
 - **Node**：alpha 起 `engines.node = ^24.22.3 || >=26.13.1`；本机 v26.0.0 偏低，
   仅 EBADENGINE 警告、宿主能启动，官方要求升级 Node（未执行）
 - upgrade guide（`v0.2.2-rc.5` + `v0.2.3-alpha.1`）各项：插件零引用
@@ -623,8 +624,8 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
 - **CLI = latest 稳定**：`npm view @deepseek-ai/dsh dist-tags` 的 `latest` 对齐
   `dsh --version`；不追 alpha/next（除非明确要求）
 - **当前例外（2026-11-23，用户要求）**：为验证 `0.2.3-alpha.2`，CLI **在
-  alpha.2**，不与 `latest`（rc.5）对齐。alpha 上发布版 0.6.10 拒活，真机须装补丁
-  构建；node v26.0.0 低于 alpha engines（仅警告）。回基线：`/opt/homebrew/bin/npm i -g
+  alpha.2**，不与 `latest`（rc.5）对齐。alpha 上须用 0.6.11-rc.1（0.6.10 拒活）；
+  node v26.0.0 低于 alpha engines（仅警告）。回基线：`/opt/homebrew/bin/npm i -g
   @deepseek-ai/dsh@0.2.2-rc.5`
 - **环境三件套**：CLI 宿主 + `web-test` profile + 调试 Chrome（9222）；测试
   guild = **Bot Test Server**（1562450757805146123），bot = **DSH Test**
@@ -827,8 +828,8 @@ scripts/host-surface-audit.sh --latest            # 审计 stable
 10 inject 服务（+commands、permissionPresets）+ 10 sessionController 方法
 （+resolveAgent）+ 6 workspaceController 方法 +
 2 ask 服务入口 + 5 项权限面检查 + 4 settings 面检查（+2 已删符号确认未复活）+
-4 client 类型包（+2 已死包确认未复活）+ 双层事件信封与 snapshot 帧 = 当前
-**51 项检查**（脚本随迁移增补；0.2.1-rc.2 基线全绿；installSection
+4 client 类型包（+2 已死包确认未复活）+ 通道围栏双语义项 + 双层事件信封与
+snapshot 帧 = 当前 **53 项检查**（脚本随迁移增补；0.2.1-rc.2 基线全绿；installSection
 检查语义已随 Config 迁移完成翻转——缺席=正确，回归出现才告警；dsh-client-ui-slots
 检查语义已随 0.2.1 翻转——宿主树缺席=正确、registry 在册为准，脚本按宿主版本
 感知切换新旧语义；baseline() 内部一元存在与否均 OK，仅记录形态）
