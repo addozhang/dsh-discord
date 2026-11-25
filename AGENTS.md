@@ -696,7 +696,9 @@ DISCORD_BOT_TOKEN=$(grep -m1 DSH_DISCORD_BOT_TOKEN ~/.dsh/profiles/web-test/.cre
 
 - 换 token / 装插件后**必须重启宿主**（凭据与插件树都是启动时读入）
 - 回滚隔离：删掉 patch 末尾那段 `id: credentials` 覆盖，web-test 即回到全局槽
-- 桌面端不要改：它的 patch / 插件目录 / 凭据都是正式环境，验证完恢复 App 运行态
+- **provider 配置（2026-11-25）**：patch 的 `llm-pi-ai`（zai-coding-cn、quotamux）与
+  `agent-default-model`（glm-5.4）两行自 desktop 同步，桌面改后需手动再同步；凭据的
+  provider refs 两边相同，**不同步** Discord token 与远程连接会话密钥
 - 排查「Discord 完全没反应」的顺序：`users/@me` 看身份 → `users/@me/guilds`
   比 `allowedGuildIds` → 宿主是否重启过 → 最后才怀疑插件逻辑
 
@@ -753,10 +755,8 @@ DISCORD_BOT_TOKEN=$(grep -m1 DSH_DISCORD_BOT_TOKEN ~/.dsh/profiles/web-test/.cre
   （600，全局文件副本 + 只换 discord token），桌面端继续用全局那份
 - **凭据是启动时读进内存的，换 token 必须重启宿主**（桌面端人工重启：
   `open -a` 在自动化 shell 里静默失败，要用 Finder 的 AppleScript 或让用户点）
-- 事故存档（2026-11-08）：上面这层隔离之前，测试时覆盖了全局槽位又忘了还原，
-  桌面端重启后连的是测试 bot，而它不在用户服务器里 → 表现是「Discord 发消息
-  完全没反应」（gateway 连 `MESSAGE_CREATE` 都收不到，日志干净得像插件没装）。
-  排查口径：先 `/users/@me` 看身份，再 `/users/@me/guilds` 比 `allowedGuildIds`
+- 事故存档（2026-11-08）：凭据隔离前测试覆盖了全局槽位又忘还原 → 桌面端连的是
+  测试 bot（不在用户服务器）→「Discord 完全没反应」。排查顺序见上
 
 ### Desktop 形态（2026-10-06 实测本机 /Applications/DeepSeek Harness.app）
 
