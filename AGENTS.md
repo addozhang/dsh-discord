@@ -378,9 +378,9 @@ typecheck 唯一触点 = 测试 fixture 的 `mode` 字段（settings type 面删
   secret 段形状不能做有效性判据（新版就是 38 字符）。**先 REST users/@me 验证再落盘**；
   可靠路径不变：门户 Reset 后从页面 DOM 读出（`/tmp/portal-token-read2.mjs` 模式：
   通用 token 正则 + REST 200 + guild 成员校验后才写）
-- **隔离 CLI 的新 profile 会从共享 hoisted 根解析旧线 bundles**（`~/.dsh/profiles/
-  node_modules` 全 0.2.0-rc.2）→ 混合树假象。干净线做法：profile dependencies 显式
-  钉 `dsh-base`/`dsh-web-app` 精确版本，pnpm 把冲突版本落 profile 本地
+- **隔离 CLI 跑真实 home 的 profile 会从共享 hoisted 根解析 bundles**（`~/.dsh/
+  profiles/node_modules`，2026-11-27 核实为 alpha.2 整树）→ 混合树。干净线做法：隔离
+  `DSH_HOME`，并拷入真实 `storages/workspace.json`（否则无 workspace 可 bind）
 - pnpm 11 `allowBuilds`：install 后 workspace yaml 自动生成占位（"set this to true
   or false"），koffi/node-pty/protobufjs/dsh-subprocess-local/@google/genai 全设 true
   重装；**卡死形态**（0 CPU 无子进程）= `rm -rf node_modules` 重装即愈
