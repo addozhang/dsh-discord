@@ -15,16 +15,24 @@
  *     packages only ever appear as devDependencies for types and drift tests).
  *  2. `src/` imports of `@deepseek-ai/dsh-*` are `import type`/`export type`
  *     only — erased at build time, never resolved from the profile tree.
+ *
+ * A third guard (16.116) pins the supported dsh range: `engines.dsh` is what
+ * the host evaluates at install and activation, with semver's
+ * `includePrerelease` (dsh-app-boot `satisfies`). Without it the plugin loads
+ * on every host and only its own startup probe objects — which is how 0.6.10
+ * reached dsh 0.2.3-alpha.2 users in a state that refused to activate.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { satisfies, validRange } from 'semver'
 import { describe, expect, it } from 'vitest'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
   dependencies?: Record<string, string>
+  engines?: { dsh?: unknown }
 }
 
 const DSH_INTERNAL = /^@deepseek-ai\/dsh-/
@@ -38,6 +46,33 @@ describe('host-internal packages stay out of the published dependency set', () =
         'trip the exact-version compatibility gate on every host upgrade; ' +
         'move them to devDependencies and consume the service instead',
     ).toEqual([])
+  })
+})
+
+/** The host's own admission test: dsh-app-boot calls semver with includePrerelease. */
+function hostAdmits(runtime: string): boolean {
+  const range = pkg.engines?.dsh
+  return typeof range === 'string' && validRange(range) !== null && satisfies(runtime, range, { includePrerelease: true })
+}
+
+describe('declares the dsh versions the adapter supports (engines.dsh)', () => {
+  it('is a non-empty semver range', () => {
+    expect(typeof pkg.engines?.dsh, 'engines.dsh is missing: without it the host loads the plugin on every dsh version').toBe('string')
+    expect(validRange(pkg.engines?.dsh as string), 'an empty or invalid range rejects every dsh version').not.toBeNull()
+  })
+
+  it('admits every dsh line the adapter was real-machine verified on', () => {
+    const verified = ['0.2.1-rc.2', '0.2.1-rc.5', '0.2.2-rc.1', '0.2.2-rc.5', '0.2.3-alpha.1', '0.2.3-alpha.2']
+    expect(verified.filter((version) => !hostAdmits(version))).toEqual([])
+  })
+
+  it('refuses hosts below the verified floor and the next minor line, prereleases included', () => {
+    // A bare `<0.3.0` upper bound ADMITS 0.3.0-alpha.1 under includePrerelease;
+    // the caret form desugars to `<0.3.0-0`, which keeps it out. Pin that
+    // property of the host's matcher so this test can never pass vacuously.
+    expect(satisfies('0.3.0-alpha.1', '>=0.2.1-rc.2 <0.3.0', { includePrerelease: true })).toBe(true)
+    const refused = ['0.2.0-rc.2', '0.2.1-rc.1', '0.3.0-alpha.1', '0.3.0']
+    expect(refused.filter((version) => hostAdmits(version))).toEqual([])
   })
 })
 
