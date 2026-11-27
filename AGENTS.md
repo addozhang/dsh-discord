@@ -505,7 +505,7 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   整体 bump，cordis 4.1.0 / schemastery 3.19.0 不变；sessionController host 面
   10 个方法签名逐字相同、事件帧计数一致；`client.js` 是内部 module-loader 重构
   （src 零引用，插件只经 host-face 服务面）。门禁只查 `engines.dsh` /
-  `@deepseek-ai/dsh-*` peer，插件两者皆无（peer 仅 cordis ^4.0.3）
+  `@deepseek-ai/dsh-*` peer，插件 0.6.11 起自带 `engines.dsh`（peer 仅 cordis ^4.0.3）
 - 本地 typecheck / lint / build / **841 测试**全绿；rc.2 CLI + web-test 0.6.8
   实跑：零门禁/零 pending、`adapter.status` RPC 200（`token: configured,
   connection: connected`）、REST smoke 9/9、`real-machine-full.sh` **6 passed /
@@ -569,31 +569,32 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
   `this.ctx` 绑到**调用方**，未 inject 即抛 `cannot get property
   "connection.authentication" without inject`。症状：已鉴权请求一律 **400 空体**
   （webServer 兜底 catch，warn 不出 stderr）。**别拿 admit 替代**
-- **发版 0.6.11-rc.1（16.115，2026-11-23；npm `next`，`latest` 仍 0.6.10）**：探针改
-  `connection: ['rpc']`；围栏 `connection.requestRejection?.(request)`；路由显式
-  `auth: 'required'`。RED→GREEN 两条测试，93 files / 893 tests。发布版复验：alpha.2
-  web-test 套件 5/6 + 设置卡片 Connected，rc.5 空 home 冒烟一致；审计补围栏项
+- **发版 0.6.11 stable + 0.6.12-rc.1（16.115/16.116，2026-11-27；同一构建，分居
+  `latest` / `next`）**：探针改 `connection: ['rpc']`；围栏
+  `connection.requestRejection?.(request)`；路由显式 `auth: 'required'`；
+  `engines.dsh: ^0.2.1-rc.2`（宿主按 `includePrerelease` 求值，`<0.3.0` 挡不住 0.3
+  alpha，须用 caret；不满足时 `dsh plugin add` 直接拒绝并回滚）。93 files / 896
+  tests。复验：rc.5 真机 bind/mention/ask PASS，alpha.2 套件 5/6 + 设置卡片；门禁
+  正反对照双线通过
 - **真机（2026-11-23，alpha.2 CLI + `web-test` 装补丁构建，测后已还原）**：
   `real-machine-full.sh` **5/6**，与 rc.5 基线一致（REST 9/9、ack ~300ms、mention
   全链 + trace 零失败；bind 段仍是 `abctab-internal` 已绑定的环境幂等）。补测均
   PASS：开放题、多选 + Other（合并语义成立）、单选普通选项、**审批**（Allow
-  once → `allowed-once` → 命令执行 → 按钮退休）。未验：图片附件（设置卡片在发版
-  复验时已补：Settings → Discord 显示 Connected）
+  once → `allowed-once` → 命令执行 → 按钮退休）。未验：图片附件
 - **真机判例**：① 指向线程 `1574016375746199585` 的 `50001` 是**正式 bot** 的
   绑定（三表跨 profile 共享），非回归；②「Waiting for approval…」状态行在提问
-  挂起时也会出现（`setApprovalWait` 共用）；③ `ask.mjs --pre` 只适用
-  多选、`--entry` 须完整标签、`--expect silent` 不按提交行，`ack.mjs` 输入会吃
-  `.`；④ `web-test` 的 `dsh-subagent-acp@0.2.2-rc.5` 被 alpha 版本门拒载，非本插件
+  挂起时也会出现（`setApprovalWait` 共用）；③ `ask.mjs --pre` 只适用多选、
+  `--entry` 须完整标签、`--expect silent` 不按提交行，`ack.mjs` 吃 `.`；④ `web-test` 的 `dsh-subagent-acp@0.2.2-rc.5` 被 alpha 版本门拒载，非本插件
 - **构建期钉版**：跟随 alpha 线时 schemastery 须 `3.19.0` → `3.20.0-alpha.1`，
   否则 `pnpm build` 报 TS2742（typecheck 过、build 才暴露）；devDeps 7 包 → `0.2.3-alpha.2`、cordis → `4.2.0-alpha.1` 后 typecheck / lint / **93
-  files / 891 tests** 全绿，`zod 4.6.6` 不变；运行时双实例不咬人
+  files / 891 tests** 全绿，`zod 4.6.6` 不变
 - **桌面 App 已 auto-update 到 0.2.3-alpha.2（2026-11-23）**：desktop profile 曾是
   发布版 0.6.10（同代码必撞同一探针）；经用户授权用 `plugin_manager
   install_bundle` 热装本地包，发布后换回 npm `0.6.11-rc.1`，fiber active、无需重启。
   **依赖别留 /tmp**（重启即清）
 - **Node**：alpha 起 `engines.node = ^24.22.3 || >=26.13.1`；本机 v26.0.0 偏低，
-  仅 EBADENGINE 警告、宿主能启动，官方要求升级 Node（未执行）
-- upgrade guide（`v0.2.2-rc.5` + `v0.2.3-alpha.1`）各项：插件零引用
+  仅 EBADENGINE 警告、宿主能启动；Node 未升级
+- upgrade guide（rc.5 → alpha.2）各项：插件零引用
 - **插件列表显示名/描述/图标（`locale/` meta 约定）**：宿主 `dsh-app-boot` 的
   `readPluginMeta`（`pluginPackages.metaOf`）不执行插件代码、只读静态资源——
   标题回退链 = `locale/<lang>.json` 的 `meta.title` → package.json `name` →
@@ -624,7 +625,7 @@ thread binding + intent 落盘）。设置卡片（Settings→Discord）：guild
 - **CLI = latest 稳定**：`npm view @deepseek-ai/dsh dist-tags` 的 `latest` 对齐
   `dsh --version`；不追 alpha/next（除非明确要求）
 - **当前例外（2026-11-23，用户要求）**：为验证 `0.2.3-alpha.2`，CLI **在
-  alpha.2**，不与 `latest`（rc.5）对齐。alpha 上须用 0.6.11-rc.1（0.6.10 拒活）；
+  alpha.2**，不与 `latest`（rc.5）对齐。alpha 上须用 0.6.11+（0.6.10 拒活）；
   node v26.0.0 低于 alpha engines（仅警告）。回基线：`/opt/homebrew/bin/npm i -g
   @deepseek-ai/dsh@0.2.2-rc.5`
 - **环境三件套**：CLI 宿主 + `web-test` profile + 调试 Chrome（9222）；测试
